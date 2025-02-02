@@ -5,15 +5,17 @@ Flask==3.1.0
 gunicorn
 
 # Bot Framework Core SDK (using consistent versions)
-botbuilder-core
-botbuilder-dialogs
-botbuilder-integration-flask    
-botbuilder-schema
-botframework-connector
-botframework-streaming
+botbuilder-core==4.7.2
+botbuilder-dialogs==4.7.2
+# Install botbuilder-integration-flask from GitHub
+botbuilder-integration-flask @ git+https://github.com/microsoft/botbuilder-python.git@main#egg=botbuilder-integration-flask&subdirectory=libraries/botbuilder-integration-flask
+botbuilder-schema==4.7.2
+botframework-connector==4.7.2
+botframework-streaming==4.7.2
 
 # Optional AI Modules (using consistent versions)
-botbuilder-ai
+botbuilder-ai==4.7.2
+botbuilder-ai-qna==4.7.2
 
 # Additional Dependencies
 python-dotenv
