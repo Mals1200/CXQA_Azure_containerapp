@@ -7,12 +7,12 @@ gunicorn==20.1.0
 # Bot Framework Core SDK (using consistent versions)
 botbuilder-core==4.7.2
 botbuilder-dialogs==4.7.2
-botbuilder-integration-flask==4.7.0
+botbuilder-integration-flask    # no version constraint
 botbuilder-schema==4.7.2
 botframework-connector==4.7.2
 botframework-streaming==4.7.2
 
-# Optional AI Modules
+# Optional AI Modules (using consistent versions)
 botbuilder-ai==4.7.2
 botbuilder-ai-qna==4.7.2
 
