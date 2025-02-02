@@ -10,29 +10,29 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout the repository
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # Step 2: Log in to Azure using the Service Principal credentials stored in the AZURE_CREDENTIALS secret
       - name: Log in to Azure
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # Step 3: (Optional) List Azure subscriptions for debugging purposes
-      - name: List Azure Subscriptions
+      - name: List Azure Subscriptions (for debugging)
         run: |
           az account list --output table
 
-      # Step 4: Build and push the Docker image to Azure Container Registry without using cache
       - name: Build and push Docker image
         run: |
-          az acr build --no-cache --registry cxqacontaineracr --image cxqacontainerapp:${{ github.sha }} .
+          # Replace 'cxqacontaineracr' with your actual Azure Container Registry name
+          # Replace 'cxqacontainerapp' with your desired image name
+          az acr build --registry cxqacontaineracr --image cxqacontainerapp:${{ github.sha }} .
 
-      # Step 5: Deploy the new image to Azure Container Apps
       - name: Deploy to Azure Container Apps
         run: |
+          # Replace 'cxqacontainerapp' with your Azure Container App name
+          # Replace 'cxqa_resource_group' with your Azure Resource Group name
+          # Replace 'cxqacontaineracr' with your Azure Container Registry name if needed
           az containerapp update \
             --name cxqacontainerapp \
             --resource-group cxqa_resource_group \
