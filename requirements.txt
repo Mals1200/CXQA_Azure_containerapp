@@ -4,17 +4,17 @@ Flask==3.1.0
 # WSGI HTTP Server
 gunicorn==20.1.0
 
-# Bot Framework Core SDK (aligned to version 4.16.2)
-botbuilder-core==4.16.2
-botbuilder-dialogs==4.16.2
-botbuilder-integration-flask==4.16.2
-botbuilder-schema==4.16.2
-botframework-connector==4.16.2
-botframework-streaming==4.16.2
+# Bot Framework Core SDK (using consistent versions)
+botbuilder-core==4.7.2
+botbuilder-dialogs==4.7.2
+botbuilder-integration-flask==4.7.0
+botbuilder-schema==4.7.2
+botframework-connector==4.7.2
+botframework-streaming==4.7.2
 
-# Optional AI Modules (aligned to version 4.16.2)
-botbuilder-ai==4.16.2
-botbuilder-ai-qna==4.16.2
+# Optional AI Modules
+botbuilder-ai==4.7.2
+botbuilder-ai-qna==4.7.2
 
 # Additional Dependencies
 python-dotenv==1.0.1
