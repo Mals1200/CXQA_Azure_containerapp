@@ -3,28 +3,37 @@ name: Build and Deploy to Azure Container Apps
 on:
   push:
     branches:
-      - main  # Change to your default branch if different
+      - main  # Change this if your default branch is different
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
+      # Step 1: Checkout the repository
       - name: Checkout repository
         uses: actions/checkout@v3
 
+      # Step 2: Log in to Azure using the Service Principal credentials stored in the AZURE_CREDENTIALS secret
       - name: Log in to Azure
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      # Step 3: (Optional) List Azure subscriptions for debugging purposes
+      - name: List Azure Subscriptions
+        run: |
+          az account list --output table
+
+      # Step 4: Build and push the Docker image to Azure Container Registry without using cache
       - name: Build and push Docker image
         run: |
-          az acr build --registry cxqacontaineracr --image cxqacontainerapp:${{ github.sha }} .
+          az acr build --no-cache --registry cxqacontaineracr --image cxqacontainerapp:${{ github.sha }} .
 
+      # Step 5: Deploy the new image to Azure Container Apps
       - name: Deploy to Azure Container Apps
         run: |
           az containerapp update \
             --name cxqacontainerapp \
             --resource-group cxqa_resource_group \
-            --image cxqacontaineracr.azurecr.io/cxqacontainerapp:${{ github.sha }} 
+            --image cxqacontaineracr.azurecr.io/cxqacontainerapp:${{ github.sha }}
