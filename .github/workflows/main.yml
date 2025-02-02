@@ -3,34 +3,46 @@ name: Build and Deploy to Azure Container Apps
 on:
   push:
     branches:
-      - main  # Change this if your default branch is different
+      - main  # If your default branch is something else, change this.
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
+      # 1) Check out your code
       - name: Checkout repository
         uses: actions/checkout@v3
 
+      # 2) Log in to Azure
       - name: Log in to Azure
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: List Azure Subscriptions (for debugging)
+      # 3) (Optional) List Azure Subscriptions (debug)
+      - name: List Azure Subscriptions
         run: |
           az account list --output table
 
+      # 4) Build & push Docker image to ACR
       - name: Build and push Docker image
         run: |
-          # Replace these placeholders with your actual resource names if they differ
-          az acr build --registry cxqacontaineracr --image cxqacontainerapp:${{ github.sha }} .
+          # Replace "cxqacontaineracr" with your actual ACR name if it's different.
+          az acr build --registry cxqacontaineracr \
+                       --image cxqacontainerapp:${{ github.sha }} \
+                       .
 
+      # 5) Deploy to Azure Container Apps
       - name: Deploy to Azure Container Apps
         run: |
-          # Replace these placeholders with your actual resource names if they differ
+          # "cxqacontainerapp" = your container app name
+          # "cxqa_resource_group" = your resource group
+          # "cxqacontaineracr.azurecr.io" = your ACR login server
           az containerapp update \
             --name cxqacontainerapp \
             --resource-group cxqa_resource_group \
-            --image cxqacontaineracr.azurecr.io/cxqacontainerapp:${{ github.sha }} 
+            --image cxqacontaineracr.azurecr.io/cxqacontainerapp:${{ github.sha }} \
+            --registry-server cxqacontaineracr.azurecr.io \
+            --registry-username ${{ secrets.ACR_USERNAME }} \
+            --registry-password ${{ secrets.ACR_PASSWORD }}
