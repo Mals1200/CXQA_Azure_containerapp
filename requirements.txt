@@ -1,11 +1,11 @@
 # Essential Web Framework
-Flask 3.1.0
+Flask==2.3.3
 
 # WSGI HTTP Server
 gunicorn==20.1.0
 
 # Bot Framework Core SDK
-botbuilder-core==4.21.1
+botbuilder-core==4.16.2
 botbuilder-dialogs==4.21.1
 botbuilder-integration-flask==4.21.1
 botbuilder-schema==4.21.1
