@@ -2,30 +2,29 @@
 Flask==3.1.0
 
 # WSGI HTTP Server
-gunicorn
+gunicorn==20.1.0
 
-# Bot Framework Core SDK (using consistent versions)
-botbuilder-core==4.7.2
-botbuilder-dialogs==4.7.2
-# Install botbuilder-integration-flask from GitHub
-# botbuilder-integration-flask 
-botbuilder-schema==4.7.2
-botframework-connector==4.7.2
-botframework-streaming==4.7.2
+# Bot Framework Core SDK (using consistent versions, updated to 4.16.2)
+botbuilder-core==4.16.2
+botbuilder-dialogs==4.16.2
+# botbuilder-integration-flask is removed because it is not published on PyPI.
+botbuilder-schema==4.16.2
+botframework-connector==4.16.2
+botframework-streaming==4.16.2
 
-# Optional AI Modules (using consistent versions)
-botbuilder-ai==4.7.2
-botbuilder-ai-qna==4.7.2
+# Optional AI Modules (using consistent versions, updated to 4.16.2)
+botbuilder-ai==4.16.2
+botbuilder-ai-qna==4.16.2
 
 # Additional Dependencies
-python-dotenv
-requests
-openai
+python-dotenv==1.0.1
+requests==2.28.1
+openai==1.58.1
 
 # Azure SDKs
-azure-storage-blob
-azure-search-documents
-azure-core
+azure-storage-blob==12.15.0
+azure-search-documents==11.4.0
+azure-core==1.29.0
 
 # Utility Libraries
-pandas
+pandas==1.5.3
