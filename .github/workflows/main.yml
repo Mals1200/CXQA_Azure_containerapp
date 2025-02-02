@@ -3,7 +3,7 @@ name: Build and Deploy to Azure Container Apps
 on:
   push:
     branches:
-      - main  # If your default branch is something else, change this.
+      - main  # If your default branch is something else, change it here.
 
 jobs:
   build-and-deploy:
@@ -11,7 +11,7 @@ jobs:
 
     steps:
       # 1) Check out your code
-      - name: Checkout repository
+      - name: Check out repository
         uses: actions/checkout@v3
 
       # 2) Log in to Azure
@@ -20,7 +20,7 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # 3) (Optional) List Azure Subscriptions (debug)
+      # 3) (Optional) List Azure Subscriptions (for debug)
       - name: List Azure Subscriptions
         run: |
           az account list --output table
@@ -29,20 +29,25 @@ jobs:
       - name: Build and push Docker image
         run: |
           # Replace "cxqacontaineracr" with your actual ACR name if it's different.
-          az acr build --registry cxqacontaineracr \
-                       --image cxqacontainerapp:${{ github.sha }} \
-                       .
+          az acr build \
+            --registry cxqacontaineracr \
+            --image cxqacontainerapp:${{ github.sha }} \
+            .
 
-      # 5) Deploy to Azure Container Apps
+      # 5) Configure Container App to use the ACR registry
+      - name: Configure Container App registry
+        run: |
+          az containerapp registry set \
+            --resource-group cxqa_resource_group \
+            --name cxqacontainerapp \
+            --server cxqacontaineracr.azurecr.io \
+            --username ${{ secrets.ACR_USERNAME }} \
+            --password ${{ secrets.ACR_PASSWORD }}
+
+      # 6) Deploy the new image to Azure Container Apps
       - name: Deploy to Azure Container Apps
         run: |
-          # "cxqacontainerapp" = your container app name
-          # "cxqa_resource_group" = your resource group
-          # "cxqacontaineracr.azurecr.io" = your ACR login server
           az containerapp update \
-            --name cxqacontainerapp \
             --resource-group cxqa_resource_group \
-            --image cxqacontaineracr.azurecr.io/cxqacontainerapp:${{ github.sha }} \
-            --registry-server cxqacontaineracr.azurecr.io \
-            --registry-username ${{ secrets.ACR_USERNAME }} \
-            --registry-password ${{ secrets.ACR_PASSWORD }}
+            --name cxqacontainerapp \
+            --image cxqacontaineracr.azurecr.io/cxqacontainerapp:${{ github.sha }}
