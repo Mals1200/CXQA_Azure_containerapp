@@ -24,15 +24,12 @@ jobs:
 
       - name: Build and push Docker image
         run: |
-          # Replace 'cxqacontaineracr' with your actual Azure Container Registry name
-          # Replace 'cxqacontainerapp' with your desired image name
+          # Replace these placeholders with your actual resource names if they differ
           az acr build --registry cxqacontaineracr --image cxqacontainerapp:${{ github.sha }} .
 
       - name: Deploy to Azure Container Apps
         run: |
-          # Replace 'cxqacontainerapp' with your Azure Container App name
-          # Replace 'cxqa_resource_group' with your Azure Resource Group name
-          # Replace 'cxqacontaineracr' with your Azure Container Registry name if needed
+          # Replace these placeholders with your actual resource names if they differ
           az containerapp update \
             --name cxqacontainerapp \
             --resource-group cxqa_resource_group \
