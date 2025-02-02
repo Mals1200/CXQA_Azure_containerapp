@@ -73,27 +73,33 @@ def Path_LLM(question):
     LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
 
     Tables = """
-1. Al-Bujairy Footfalls.xlsx
-   - Columns: {"Date": "datetime64[ns]", "Footfalls": "int64"}
-2. Al-Turaif Footfalls.xlsx
-   - Columns: {"Date": "datetime64[ns]", "Footfalls": "int64"}
-3. Food and Beverage (F&B) Sales.xlsx
-   - Columns: {"Restaurant name": "object", "Category": "object", "Date": "datetime64[ns]", "Covers": "float64", "Gross Sales": "float64"}
-4. PE Observations.xlsx
-   - Columns: {"Assessor Category": "object", "Assessor name": "object", "Date": "datetime64[ns]", "Week": "object", "checklist type": "object", "Area of assessment": "object", "Colleague name": "object", "Location": "object", "Number of Compliance": "int64", "Number of Non Compliance": "int64", "Total # of cases": "int64", "total compliance score": "float64", "Position": "object"}
-5. Parking.xlsx
-   - Columns: {"Date": "datetime64[ns]", "Valet Volume": "int64", "Valet Revenue": "int64", "Valet Utilization": "float64", "BCP Revenue": "object", "BCP Volume": "int64", "BCP Utilization": "float64", "SCP Volume": "int64", "SCP Revenue": "int64", "SCP Utilization": "float64"}
-6. Qualitative Comments.xlsx
-   - Columns: {"Open Ended": "object"}
-7. Tickets.xlsx
-   - Columns: {"Date": "datetime64[ns]", "Number of tickets": "int64", "revenue": "int64", "attendance": "int64", "Reservation Attendance": "int64", "Pass Attendance": "int64", "Male attendance": "int64", "Female attendance": "int64", "Rebate value": "float64", "AM Tickets": "int64", "PM Tickets": "int64", "Free tickets": "int64", "Paid tickets": "int64", "Free tickets %": "float64", "Paid tickets %": "float64", "AM Tickets %": "float64", "PM Tickets %": "float64"}
-8. Top2Box Summary.xlsx
-   - Columns: {"Month": "object", "Type": "object", "Top2Box": "float64"}
-9. Total Landscape areas and quantities.xlsx
-   - Columns: {"Assets": "object", "Unnamed: 1": "object", "Unnamed: 2": "object", "Unnamed: 3": "object"}
-10. Violations.xlsx
-    - Columns: {"Tenant": "object", "Department": "object", "Owner": "object", "Occurrence": "int64", "Status": "object", "Recent Date": "datetime64[ns]", "Issue": "object", "More Than 60 Days Period": "object"}
-    """
+1) "Al-Bujairy Terrace Footfalls.xlsx", with the following tables:
+   -Date: datetime64[ns], Footfalls: int64
+2) "Al-Turaif Footfalls.xlsx", with the following tables:
+   -Date: datetime64[ns], Footfalls: int64
+3) "Complaints.xlsx", with the following tables:
+   -Created On: datetime64[ns], Incident Category: object, Status: object, Resolved On Date(Local): object, Incident Description: object, Resolution: object
+4) "Duty manager log.xlsx", with the following tables:
+   -DM NAME: object, Date: datetime64[ns], Shift: object, Issue: object, Department: object, Team: object, Incident: object, Remark: object, Status: object, ETA: object, Days: float64
+5) "Food and Beverages (F&b) Sales.xlsx", with the following tables:
+   -Restaurant name: object, Category: object, Date: datetime64[ns], Covers: float64, Gross Sales: float64
+6) "Meta-Data.xlsx", with the following tables:
+   -Visitation: object, Attendance: object, Visitors: object, Guests: object, Footfalls: object, Unnamed: 5: object
+7) "PE Observations.xlsx", with the following tables:
+   -Unnamed: 0: object, Unnamed: 1: object
+8) "Parking.xlsx", with the following tables:
+   -Date: datetime64[ns], Valet Volume: int64, Valet Revenue: int64, Valet Utilization: float64, BCP Revenue: object, BCP Volume: int64, BCP Utilization: float64, SCP Volume: int64, SCP Revenue: int64, SCP Utilization: float64
+9) "Qualitative Comments.xlsx", with the following tables:
+   -Open Ended: object
+10) "Tenants Violations.xlsx", with the following tables:
+   -Unnamed: 0: object, Unnamed: 1: object
+11) "Tickets.xlsx", with the following tables:
+   -Date: datetime64[ns], Number of tickets: int64, revenue: int64, attendnace: int64, Reservation Attendnace: int64, Pass Attendance: int64, Male attendance: int64, Female attendance: int64, Rebate value: float64, AM Tickets: int64, PM Tickets: int64, Free tickets: int64, Paid tickets: int64, Free tickets %: float64, Paid tickets %: float64, AM Tickets %: float64, PM Tickets %: float64, Rebate Rate V 55: float64, Revenue  v2: int64
+12) "Top2Box Summary.xlsx", with the following tables:
+   -Month: datetime64[ns], Type: object, Top2Box scores/ rating: float64
+13) "Total Landscape areas and quantities.xlsx", with the following tables:
+   -Assets: object, Unnamed: 1: object, Unnamed: 2: object, Unnamed: 3: object
+   """
     prompt = f"""
 You are a decision-making assistant. You have access to a list of datafiles (with their columns) below.
 
@@ -244,7 +250,7 @@ self:
         top_k = 4
         SEARCH_SERVICE_NAME = "cxqa-azureai-search"
         SEARCH_ENDPOINT = f"https://{SEARCH_SERVICE_NAME}.search.windows.net"
-        INDEX_NAME = "cxqa-ind-v2"
+        INDEX_NAME = "cxqa-ind-v6"
         ADMIN_API_KEY = "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv"
         try:
             if not all([SEARCH_SERVICE_NAME, INDEX_NAME, ADMIN_API_KEY]):
@@ -300,18 +306,35 @@ self:
             )
             LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
             schema = """
-Al-Bujairy Footfalls.xlsx: {'Date': dtype('<M8[ns]'), 'Footfalls': dtype('int64')}, 
-Al-Turaif Footfalls.xlsx: {'Date': dtype('<M8[ns]'), 'Footfalls': dtype('int64')}, 
-Food and Beverage (F&B) Sales.xlsx: {'Restaurant name': dtype('O'), 'Category': dtype('O'), 'Date': dtype('<M8[ns]'), 'Covers': dtype('float64'), 'Gross Sales': dtype('float64')}, 
-PE Observations.xlsx: {'Assessor Category': dtype('O'), 'Assessor name ': dtype('O'), 'Date': dtype('<M8[ns]'), 'Week': dtype('O'), 'checklist type ': dtype('O'), 'Area of assessment ': dtype('O'), 'Colleague name': dtype('O'), 'Location ': dtype('O'), 'Number of Compliance': dtype('int64'), 'Number of Non Compliance': dtype('O'), 'Total # of cases': dtype('int64'), 'total compliance score': dtype('float64'), 'Position': dtype('O')}, 
-Parking.xlsx: {'Date': dtype('<M8[ns]'), 'Valet Volume': dtype('int64'), 'Valet Revenue': dtype('int64'), 'Valet Utlization': dtype('float64'), 'BCP Revenue': dtype('O'), 'BCP Volume': dtype('int64'), 'BCP Utlization': dtype('float64'), 'SCP Volume': dtype('int64'), 'SCP Revenue': dtype('int64'), 'SCP Utlization': dtype('float64')}, 
-Qualitative Comments.xlsx: {'Open Ended': dtype('O')}, 
-Tickets.xlsx: {'Date': dtype('<M8[ns]'), 'Number of tickets': dtype('int64'), 'revenue': dtype('int64'), 'attendnace': dtype('int64'), 'Reservation Attendnace': dtype('int64'), 'Pass Attendance': dtype('int64'), 'Male attendance': dtype('int64'), 'Female attendance': dtype('int64'), 'Rebate value': dtype('float64'), 'AM Tickets': dtype('int64'), 'PM Tickets': dtype('int64'), 'Free tickets': dtype('int64'), 'Paid tickets': dtype('int64'), 'Free tickets %': dtype('float64'), 'Paid tickets %': dtype('float64'), 'AM Tickets %': dtype('float64'), 'PM Tickets %': dtype('float64')}
+Al-Bujairy Terrace Footfalls.xlsx: {'Date': 'datetime64[ns]', 'Footfalls': 'int64'},
+Al-Turaif Footfalls.xlsx: {'Date': 'datetime64[ns]', 'Footfalls': 'int64'},
+Complaints.xlsx: {'Created On': 'datetime64[ns]', 'Incident Category': 'object', 'Status': 'object', 'Resolved On Date(Local)': 'object', 'Incident Description': 'object', 'Resolution': 'object'},
+Duty manager log.xlsx: {'DM NAME': 'object', 'Date': 'datetime64[ns]', 'Shift': 'object', 'Issue': 'object', 'Department': 'object', 'Team': 'object', 'Incident': 'object', 'Remark': 'object', 'Status': 'object', 'ETA': 'object', 'Days': 'float64'},
+Food and Beverages (F&b) Sales.xlsx: {'Restaurant name': 'object', 'Category': 'object', 'Date': 'datetime64[ns]', 'Covers': 'float64', 'Gross Sales': 'float64'},
+Meta-Data.xlsx: {'Visitation': 'object', 'Attendance': 'object', 'Visitors': 'object', 'Guests': 'object', 'Footfalls': 'object', 'Unnamed: 5': 'object'},
+PE Observations.xlsx: {'Unnamed: 0': 'object', 'Unnamed: 1': 'object'},
+Parking.xlsx: {'Date': 'datetime64[ns]', 'Valet Volume': 'int64', 'Valet Revenue': 'int64', 'Valet Utilization': 'float64', 'BCP Revenue': 'object', 'BCP Volume': 'int64', 'BCP Utilization': 'float64', 'SCP Volume': 'int64', 'SCP Revenue': 'int64', 'SCP Utilization': 'float64'},
+Qualitative Comments.xlsx: {'Open Ended': 'object'},
+Tenants Violations.xlsx: {'Unnamed: 0': 'object', 'Unnamed: 1': 'object'},
+Tickets.xlsx: {'Date': 'datetime64[ns]', 'Number of tickets': 'int64', 'revenue': 'int64', 'attendnace': 'int64', 'Reservation Attendnace': 'int64', 'Pass Attendance': 'int64', 'Male attendance': 'int64', 'Female attendance': 'int64', 'Rebate value': 'float64', 'AM Tickets': 'int64', 'PM Tickets': 'int64', 'Free tickets': 'int64', 'Paid tickets': 'int64', 'Free tickets %': 'float64', 'Paid tickets %': 'float64', 'AM Tickets %': 'float64', 'PM Tickets %': 'float64', 'Rebate Rate V 55': 'float64', 'Revenue  v2': 'int64'},
+Top2Box Summary.xlsx: {'Month': 'datetime64[ns]', 'Type': 'object', 'Top2Box scores/ rating': 'float64'},
+Total Landscape areas and quantities.xlsx: {'Assets': 'object', 'Unnamed: 1': 'object', 'Unnamed: 2': 'object', 'Unnamed: 3': 'object'},
 """
+
             sample = """
-Al-Bujairy Footfalls.xlsx: [{'Date': Timestamp('2023-01-01 00:00:00'), 'Footfalls': 2950}, {'Date': Timestamp('2023-01-02 00:00:00'), 'Footfalls': 2864}, {'Date': Timestamp('2023-01-03 00:00:00'), 'Footfalls': 4366}], 
-Al-Turaif Footfalls.xlsx: [{'Date': Timestamp('2023-06-01 00:00:00'), 'Footfalls': 694}, {'Date': Timestamp('2023-06-02 00:00:00'), 'Footfalls': 1862}, {'Date': Timestamp('2023-06-03 00:00:00'), 'Footfalls': 1801}], 
-Food and Beverage (F&B) Sales.xlsx: [{'Restaurant name': 'Angelina', 'Category': 'Casual Dining', 'Date': Timestamp('2023-08-01 00:00:00'), 'Covers': 195.0, 'Gross Sales': 12536.65383}, {'Restaurant name': 'Angelina', 'Category': 'Casual Dining', 'Date': Timestamp('2023-08-02 00:00:00'), 'Covers': 169.0, 'Gross Sales': 11309.05671}, {'Restaurant name': 'Angelina', 'Category': 'Casual Dining', 'Date': Timestamp('2023-08-03 00:00:00'), 'Covers': 243.0, 'Gross Sales': 17058.61479}]
+Al-Bujairy Terrace Footfalls.xlsx: [{'Date': "Timestamp('2023-01-01 00:00:00')", 'Footfalls': 2950}, {'Date': "Timestamp('2023-01-02 00:00:00')", 'Footfalls': 2864}, {'Date': "Timestamp('2023-01-03 00:00:00')", 'Footfalls': 4366}],
+Al-Turaif Footfalls.xlsx: [{'Date': "Timestamp('2023-06-01 00:00:00')", 'Footfalls': 694}, {'Date': "Timestamp('2023-06-02 00:00:00')", 'Footfalls': 1862}, {'Date': "Timestamp('2023-06-03 00:00:00')", 'Footfalls': 1801}],
+Complaints.xlsx: [{'Created On': "Timestamp('2024-01-01 00:00:00')", 'Incident Category': 'Contact Center Operation', 'Status': 'Resolved', 'Resolved On Date(Local)': datetime.datetime(2024, 1, 1, 0, 0), 'Incident Description': 'Message: السلام عليكم ورحمة الله وبركاته، مساء الخير م', 'Resolution': 'ضيفنا العزيز،نشكر لكم تواصلكم معنافيما يخص طلبكم في فرص التدريب التعاوني يرجى رفع طلبكم عبر موقع هيئة تطوير بوابة الدرعية Career | Diriyah Gate Development Authority (dgda.gov.sa)نتشرف بخدمتكم'}, {'Created On': "Timestamp('2024-01-01 00:00:00')", 'Incident Category': 'Roads and Infrastructure', 'Status': 'Resolved', 'Resolved On Date(Local)': datetime.datetime(2024, 1, 8, 0, 0), 'Incident Description': 'test', 'Resolution': 'test'}, {'Created On': "Timestamp('2024-01-01 00:00:00')", 'Incident Category': 'Security and Safety', 'Status': 'Resolved', 'Resolved On Date(Local)': datetime.datetime(2024, 1, 1, 0, 0), 'Incident Description': 'Test', 'Resolution': 'Test'}],
+Duty manager log.xlsx: [{'DM NAME': 'Abdulrahman Alkanhal', 'Date': "Timestamp('2024-06-01 00:00:00')", 'Shift': 'Morning Shift', 'Issue': 'Hakkassan and WC5', 'Department': 'Operation', 'Team': 'Operation', 'Incident': ' Electricity box in WC5 have water and its under maintenance, its effected hakkasan and WC5 (WC5 closed)', 'Remark': 'FM has been informed ', 'Status': 'Pending', 'ETA': 'Please FM update the ETA', 'Days': nan}, {'DM NAME': 'Abdulrahman Alkanhal', 'Date': "Timestamp('2024-06-01 00:00:00')", 'Shift': 'Morning Shift', 'Issue': 'flamingo', 'Department': 'Operation', 'Team': 'Operation', 'Incident': '\nWe received a massage from flamingo manager regarding to some points needs to be fixed in the restaurant, painting,doors,ropes,canopys,scratch and cracks,varnishing, some of the points been shared to FM before.', 'Remark': 'The pictures been sent to FM', 'Status': 'Pending', 'ETA': 'Please FM update the ETA', 'Days': 7.0}, {'DM NAME': 'Abdulrahman Alkanhal', 'Date': "Timestamp('2024-06-01 00:00:00')", 'Shift': 'Morning Shift', 'Issue': 'Al Habib Hospital', 'Department': 'Operation', 'Team': 'Operation', 'Incident': '7 Minor incidents  ', 'Remark': nan, 'Status': 'Done', 'ETA': nan, 'Days': nan}],
+Food and Beverages (F&b) Sales.xlsx: [{'Restaurant name': 'Angelina', 'Category': 'Casual Dining', 'Date': "Timestamp('2023-08-01 00:00:00')", 'Covers': 195.0, 'Gross Sales': 12536.65383}, {'Restaurant name': 'Angelina', 'Category': 'Casual Dining', 'Date': "Timestamp('2023-08-02 00:00:00')", 'Covers': 169.0, 'Gross Sales': 11309.05671}, {'Restaurant name': 'Angelina', 'Category': 'Casual Dining', 'Date': "Timestamp('2023-08-03 00:00:00')", 'Covers': 243.0, 'Gross Sales': 17058.61479}],
+Meta-Data.xlsx: [{'Visitation': 'Revenue', 'Attendance': 'Income', 'Visitors': 'Sales', 'Guests': 'Gross Sales', 'Footfalls': nan, 'Unnamed: 5': nan}, {'Visitation': 'Utilization', 'Attendance': 'Occupancy', 'Visitors': 'Usage Rate', 'Guests': 'Capacity', 'Footfalls': 'Efficiency', 'Unnamed: 5': nan}, {'Visitation': 'Penetration', 'Attendance': 'Covers rate', 'Visitors': 'Restaurants rate', 'Guests': nan, 'Footfalls': nan, 'Unnamed: 5': nan}],
+PE Observations.xlsx: [{'Unnamed: 0': nan, 'Unnamed: 1': nan}, {'Unnamed: 0': 'Row Labels', 'Unnamed: 1': 'Count of Colleague name'}, {'Unnamed: 0': 'Guest Greetings ', 'Unnamed: 1': 2154}],
+Parking.xlsx: [{'Date': "Timestamp('2023-01-01 00:00:00')", 'Valet Volume': 194, 'Valet Revenue': 29100, 'Valet Utilization': 0.23, 'BCP Revenue': '               -  ', 'BCP Volume': 1951, 'BCP Utilization': 0.29, 'SCP Volume': 0, 'SCP Revenue': 0, 'SCP Utilization': 0.0}, {'Date': "Timestamp('2023-01-02 00:00:00')", 'Valet Volume': 223, 'Valet Revenue': 33450, 'Valet Utilization': 0.27, 'BCP Revenue': '               -  ', 'BCP Volume': 1954, 'BCP Utilization': 0.29, 'SCP Volume': 0, 'SCP Revenue': 0, 'SCP Utilization': 0.0}, {'Date': "Timestamp('2023-01-03 00:00:00')", 'Valet Volume': 243, 'Valet Revenue': 36450, 'Valet Utilization': 0.29, 'BCP Revenue': '               -  ', 'BCP Volume': 2330, 'BCP Utilization': 0.35, 'SCP Volume': 0, 'SCP Revenue': 0, 'SCP Utilization': 0.0}],
+Qualitative Comments.xlsx: [{'Open Ended': 'يفوقو توقعاتي كل شيء رائع'}, {'Open Ended': 'وقليل اسعار التذاكر اجعل الجميع يستمتع بهذه التجربة الرائعة'}, {'Open Ended': 'إضافة كراسي هامة اكثر من المتوفر'}],
+Tenants Violations.xlsx: [{'Unnamed: 0': nan, 'Unnamed: 1': nan}, {'Unnamed: 0': 'Row Labels', 'Unnamed: 1': 'Count of Department\u200b'}, {'Unnamed: 0': 'Lab Test', 'Unnamed: 1': 38}],
+Tickets.xlsx: [{'Date': "Timestamp('2023-01-01 00:00:00')", 'Number of tickets': 4644, 'revenue': 288050, 'attendnace': 2950, 'Reservation Attendnace': 0, 'Pass Attendance': 0, 'Male attendance': 1290, 'Female attendance': 1660, 'Rebate value': 131017.96, 'AM Tickets': 287, 'PM Tickets': 2663, 'Free tickets': 287, 'Paid tickets': 2663, 'Free tickets %': 0.09728813559322035, 'Paid tickets %': 0.9027118644067796, 'AM Tickets %': 0.09728813559322035, 'PM Tickets %': 0.9027118644067796, 'Rebate Rate V 55': 131017.96, 'Revenue  v2': 288050}, {'Date': "Timestamp('2023-01-02 00:00:00')", 'Number of tickets': 7276, 'revenue': 205250, 'attendnace': 2864, 'Reservation Attendnace': 0, 'Pass Attendance': 0, 'Male attendance': 1195, 'Female attendance': 1669, 'Rebate value': 123698.68, 'AM Tickets': 978, 'PM Tickets': 1886, 'Free tickets': 978, 'Paid tickets': 1886, 'Free tickets %': 0.3414804469273743, 'Paid tickets %': 0.6585195530726257, 'AM Tickets %': 0.3414804469273743, 'PM Tickets %': 0.6585195530726257, 'Rebate Rate V 55': 123698.68, 'Revenue  v2': 205250}, {'Date': "Timestamp('2023-01-03 00:00:00')", 'Number of tickets': 8354, 'revenue': 308050, 'attendnace': 4366, 'Reservation Attendnace': 0, 'Pass Attendance': 0, 'Male attendance': 1746, 'Female attendance': 2620, 'Rebate value': 206116.58, 'AM Tickets': 1385, 'PM Tickets': 2981, 'Free tickets': 1385, 'Paid tickets': 2981, 'Free tickets %': 0.3172240036646816, 'Paid tickets %': 0.6827759963353184, 'AM Tickets %': 0.3172240036646816, 'PM Tickets %': 0.6827759963353184, 'Rebate Rate V 55': 206116.58, 'Revenue  v2': 308050}],
+Top2Box Summary.xlsx: [{'Month': "Timestamp('2024-01-01 00:00:00')", 'Type': 'Bujairi Terrace/ Diriyah  offering', 'Top2Box scores/ rating': 0.669449081803}, {'Month': "Timestamp('2024-01-01 00:00:00')", 'Type': 'Eating out experience', 'Top2Box scores/ rating': 0.7662337662338}, {'Month': "Timestamp('2024-01-01 00:00:00')", 'Type': 'Entrance to Bujairi Terrace', 'Top2Box scores/ rating': 0.7412353923205}],
+Total Landscape areas and quantities.xlsx: [{'Assets': 'SN', 'Unnamed: 1': 'Location', 'Unnamed: 2': 'Unit', 'Unnamed: 3': 'Quantity'}, {'Assets': 'Bujairi, Turaif Gardens, and Terraces', 'Unnamed: 1': nan, 'Unnamed: 2': nan, 'Unnamed: 3': nan}, {'Assets': '\xa0A', 'Unnamed: 1': 'Turaif Gardens', 'Unnamed: 2': nan, 'Unnamed: 3': nan}],
 """
             system_prompt = f"""
 You are a python expert. Use the user Question along with the Chat_history to generate python code that will answer the question using the provided dataframes schemas and samples.
