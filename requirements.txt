@@ -7,14 +7,13 @@ gunicorn
 # Bot Framework Core SDK (using consistent versions)
 botbuilder-core
 botbuilder-dialogs
-botbuilder-integration-aiohttp  
+botbuilder-integration-flask    
 botbuilder-schema
 botframework-connector
 botframework-streaming
 
 # Optional AI Modules (using consistent versions)
 botbuilder-ai
-botbuilder-ai-qna
 
 # Additional Dependencies
 python-dotenv
