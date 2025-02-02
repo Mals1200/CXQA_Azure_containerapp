@@ -14,7 +14,7 @@ botframework-streaming==4.16.2
 
 # Optional AI Modules (using consistent versions; remove version so pip picks what is available)
 botbuilder-ai==4.16.2
-botbuilder-ai-qna
+# botbuilder-ai-qna
 
 # Additional Dependencies
 python-dotenv==1.0.1
