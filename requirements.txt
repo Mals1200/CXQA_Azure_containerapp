@@ -1,5 +1,5 @@
 # Essential Web Framework
-Flask==2.3.4
+Flask==2.3.3
 
 # WSGI HTTP Server
 gunicorn==20.1.0
