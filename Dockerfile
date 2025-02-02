@@ -5,7 +5,7 @@ FROM python:3.9-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Set work directory
+# Set working directory
 WORKDIR /app
 
 # Install system dependencies
@@ -21,8 +21,8 @@ RUN pip install -r requirements.txt
 # Copy application code
 COPY . .
 
-# Expose the port the app runs on
-EXPOSE 8000
+# Expose port 80 inside the container
+EXPOSE 80
 
-# Define the default command to run the app
+# Start Gunicorn on port 80 with 4 workers
 CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:80", "--workers", "4"]
