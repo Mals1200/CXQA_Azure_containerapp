@@ -13,16 +13,17 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy and install Python dependencies
+# Copy dependency file separately to leverage Docker caching
 COPY requirements.txt .
-RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
+
+# ✅ Install dependencies with no-cache to prevent conflicts
+RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
 
-# Expose port 80 inside the container
+# ✅ Ensure the container exposes the correct port
 EXPOSE 80
 
-# Start Gunicorn on port 80 with 4 workers
+# ✅ Start Gunicorn on port 80
 CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:80", "--workers", "4"]
