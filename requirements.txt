@@ -7,14 +7,12 @@ gunicorn==20.1.0
 # Bot Framework Core SDK (using consistent versions)
 botbuilder-core==4.16.2
 botbuilder-dialogs==4.16.2
-# botbuilder-integration-flask is not published on PyPI, so we omit it.
 botbuilder-schema==4.16.2
 botframework-connector==4.16.2
 botframework-streaming==4.16.2
 
-# Optional AI Modules (using consistent versions; remove version so pip picks what is available)
+# Optional AI Modules
 botbuilder-ai==4.16.2
-# botbuilder-ai-qna
 
 # Additional Dependencies
 python-dotenv==1.0.1
@@ -26,6 +24,6 @@ azure-storage-blob==12.15.0
 azure-search-documents==11.4.0
 azure-core==1.29.0
 
-# Utility Libraries
-numpy==1.23.5
+# Fixed Pandas & NumPy to resolve the dtype issue
+numpy==1.23.3
 pandas==1.5.3
