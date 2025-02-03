@@ -10,6 +10,9 @@ botframework-connector==4.16.2
 botframework-streaming==4.16.2
 botbuilder-ai==4.16.2
 
+# Ensuring Babel Compatibility
+babel==2.9.1  # Required by botbuilder-dialogs
+
 # AI & OpenAI Integration
 openai==1.58.1
 tiktoken==0.8.0
@@ -40,9 +43,8 @@ azure-search-documents==11.5.2
 azure-core==1.32.0
 azure-common==1.1.28
 
-# Jupyter & Development
+# Jupyter & Development (Without `jupyterlab` to avoid Babel conflict)
 jupyter==1.1.1
-jupyterlab==4.3.4
 jupyter-client==8.6.3
 notebook==7.3.2
 ipython==8.18.1
