@@ -3,14 +3,14 @@ name: Build and Deploy to Azure Container Apps
 on:
   push:
     branches:
-      - main  # If your default branch is something else, change it here.
+      - main  # If your default branch is different, update this.
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
-      # 1) Check out your code
+      # 1) Check out repository
       - name: Check out repository
         uses: actions/checkout@v3
 
@@ -20,21 +20,15 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # 3) (Optional) List Azure Subscriptions (for debug)
-      - name: List Azure Subscriptions
-        run: |
-          az account list --output table
-
-      # 4) Build & push Docker image to ACR
+      # 3) Build & push Docker image to ACR
       - name: Build and push Docker image
         run: |
-          # Replace "cxqacontaineracr" with your actual ACR name if it's different.
           az acr build \
             --registry cxqacontaineracr \
             --image cxqacontainerapp:${{ github.sha }} \
             .
 
-      # 5) Configure Container App to use the ACR registry
+      # 4) Configure Container App to use ACR registry
       - name: Configure Container App registry
         run: |
           az containerapp registry set \
@@ -44,7 +38,7 @@ jobs:
             --username ${{ secrets.ACR_USERNAME }} \
             --password ${{ secrets.ACR_PASSWORD }}
 
-      # 6) Deploy the new image to Azure Container Apps
+      # 5) Deploy the new image to Azure Container Apps
       - name: Deploy to Azure Container Apps
         run: |
           az containerapp update \
