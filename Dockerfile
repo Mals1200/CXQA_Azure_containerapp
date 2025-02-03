@@ -16,8 +16,11 @@ RUN apt-get update && apt-get install -y \
 # Copy dependency file separately to leverage Docker caching
 COPY requirements.txt .
 
+# Install Babel separately to avoid conflicts
+RUN pip install --no-cache-dir "babel==2.9.1"
+
 # Install dependencies with no-cache to prevent conflicts
-RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt --no-deps
 
 # Copy application code
 COPY . .
