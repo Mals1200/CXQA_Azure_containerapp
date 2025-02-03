@@ -16,14 +16,14 @@ RUN apt-get update && apt-get install -y \
 # Copy dependency file separately to leverage Docker caching
 COPY requirements.txt .
 
-#  Install dependencies with no-cache to prevent conflicts
+# Install dependencies
 RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
 
-#  Ensure the container exposes the correct port
-EXPOSE 80
+# Expose required ports (Teams Bot = 3978, API = 80)
+EXPOSE 3978 80
 
-#  Start Gunicorn on port 80
+# Start Gunicorn on port 80
 CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:80", "--workers", "4"]
