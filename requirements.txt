@@ -10,18 +10,20 @@ botbuilder-dialogs==4.16.2
 botbuilder-schema==4.16.2
 botframework-connector==4.16.2
 botframework-streaming==4.16.2
-botbuilder-integration-flask==4.16.2
 
-# Azure SDKs
-azure-storage-blob==12.15.0
-azure-search-documents==11.4.0
-azure-core==1.29.0
+# Optional AI Modules
+botbuilder-ai==4.16.2
 
 # Additional Dependencies
 python-dotenv==1.0.1
 requests==2.28.1
 openai==1.58.1
 openpyxl
+
+# Azure SDKs
+azure-storage-blob==12.15.0
+azure-search-documents==11.4.0
+azure-core==1.29.0
 
 # Fixed Pandas & NumPy to resolve the dtype issue
 numpy==1.23.3
