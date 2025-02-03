@@ -27,4 +27,5 @@ azure-search-documents==11.4.0
 azure-core==1.29.0
 
 # Utility Libraries
+numpy==1.23.5
 pandas==1.5.3
