@@ -6,3 +6,13 @@ This application hosts a Flask API that exposes an endpoint to process questions
 
 ## Repository Structure
 
+
+
+
+
+
+
+
+
+curl command on windows:
+curl -X POST "https://cxqacontainerapp.bluesmoke-a2e4a52c.germanywestcentral.azurecontainerapps.io/ask" -H "Content-Type: application/json" -d "{\"question\": \"<Question>\"}"
