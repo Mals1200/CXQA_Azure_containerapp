@@ -22,8 +22,8 @@ RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Expose required ports (Teams Bot = 3978, API = 80)
+# Expose the necessary ports (80 for Flask app and 3978 for Teams bot communication)
 EXPOSE 3978 80
 
-# Start Gunicorn on port 80
-CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:80", "--workers", "4"]
+# Start Gunicorn with debug level logging
+CMD ["gunicorn", "--log-level", "debug", "app:app", "--bind", "0.0.0.0:80", "--workers", "4"]
