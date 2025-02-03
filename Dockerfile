@@ -13,20 +13,16 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy dependency file separately to leverage Docker caching
+# Copy and install Python dependencies
 COPY requirements.txt .
-
-# Install Babel separately to avoid conflicts
-RUN pip install --no-cache-dir "babel==2.9.1"
-
-# Install dependencies with no-cache to prevent conflicts
-RUN pip install --no-cache-dir -r requirements.txt --no-deps
+RUN pip install --upgrade pip
+RUN pip install -r requirements.txt
 
 # Copy application code
 COPY . .
 
-# Ensure the container exposes the correct port
+# Expose port 80 inside the container
 EXPOSE 80
 
-# Start Gunicorn on port 80
+# Start Gunicorn on port 80 with 4 workers
 CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:80", "--workers", "4"]
