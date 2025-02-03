@@ -19,8 +19,13 @@ RUN pip install --upgrade pip
 # Copy dependency file separately to leverage Docker caching
 COPY requirements.txt .
 
-# Install dependencies properly
-RUN pip install --no-cache-dir -r requirements.txt
+# Fix package conflict issues by installing critical dependencies first
+RUN pip install --no-cache-dir "babel==2.9.1"
+RUN pip install --no-cache-dir "botbuilder-core==4.16.2" "botbuilder-dialogs==4.16.2" "botbuilder-schema==4.16.2" \
+    "botframework-connector==4.16.2" "botframework-streaming==4.16.2" "botbuilder-ai==4.16.2"
+
+# Install all other dependencies
+RUN pip install --no-cache-dir -r requirements.txt --no-deps
 
 # Copy application code
 COPY . .
