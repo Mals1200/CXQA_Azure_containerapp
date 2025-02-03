@@ -10,6 +10,9 @@ werkzeug==3.1.3
 itsdangerous==2.2.0
 jinja2==3.1.5
 
+# Fix Babel conflict for botbuilder-dialogs and jupyterlab-server
+babel==2.9.1  # Ensures botbuilder-dialogs works
+
 # Bot Framework Core SDK
 botbuilder-core==4.16.2
 botbuilder-dialogs==4.16.2
@@ -74,6 +77,3 @@ beautifulsoup4==4.12.3
 soupsieve==2.6
 python-json-logger==3.2.1
 cryptography==44.0.0
-
-# Babel Fix (For `botbuilder-dialogs` & `jupyterlab-server`)
-babel>=2.9.1,<2.11
