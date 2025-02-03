@@ -18,6 +18,7 @@ botbuilder-ai==4.16.2
 python-dotenv==1.0.1
 requests==2.28.1
 openai==1.58.1
+openpyxl
 
 # Azure SDKs
 azure-storage-blob==12.15.0
