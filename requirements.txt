@@ -28,3 +28,6 @@ azure-core==1.29.0
 # Fixed Pandas & NumPy to resolve the dtype issue
 numpy==1.23.3
 pandas==1.5.3
+
+# Azure Identity for OAuth2 Authentication
+azure-identity==1.7.0
