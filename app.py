@@ -31,7 +31,7 @@ def messages():
 def home():
     return jsonify({'message': 'API is running!'}), 200
 
-# Route for your Flask API to handle questions (already exists)
+# Route for your Flask API to handle questions
 @app.route('/ask', methods=['POST'])
 def ask():
     data = request.get_json()
@@ -39,8 +39,10 @@ def ask():
         return jsonify({'error': 'Invalid request, "question" field is required.'}), 400
 
     question = data['question']
-    # This will call your bot logic and get the answer
-    answer = Ask_Question(question)
+
+    # Use the bot logic directly here
+    answer = bot.on_message_activity(Activity(text=question, type="message"))
+    
     return jsonify({'answer': answer})
 
 if __name__ == '__main__':
