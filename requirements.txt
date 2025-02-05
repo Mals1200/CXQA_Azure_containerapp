@@ -4,7 +4,7 @@ Flask==3.1.0
 # WSGI HTTP Server
 gunicorn==20.1.0
 
-# Bot Framework SDK
+# Bot Framework Core SDK (using consistent versions)
 botbuilder-core==4.16.2
 botbuilder-dialogs==4.16.2
 botbuilder-schema==4.16.2
@@ -28,6 +28,3 @@ azure-core==1.29.0
 # Fixed Pandas & NumPy to resolve the dtype issue
 numpy==1.23.3
 pandas==1.5.3
-
-# Flask CORS - Make sure this version works
-flask-cors==3.0.10  # Update this to a valid version
