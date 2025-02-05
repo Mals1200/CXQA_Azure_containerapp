@@ -1,25 +1,27 @@
-from flask import Flask
-from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings
-from botbuilder.schema import Activity
-from bot import CXQABot
+from botbuilder.core import ActivityHandler, MessageFactory, TurnContext
+import requests
 
-app = Flask(__name__)
+class CXQABot(ActivityHandler):
+    def __init__(self):
+        super().__init__()
 
-# Set up Bot Framework adapter
-settings = BotFrameworkAdapterSettings(
-    app_id="your-bot-app-id", 
-    app_password="your-bot-app-password"
-)
-adapter = BotFrameworkAdapter(settings)
-bot = CXQABot()
+    async def on_message_activity(self, turn_context: TurnContext):
+        # Get the message from the user
+        user_message = turn_context.activity.text.strip()
 
-@app.route("/api/messages", methods=["POST"])
-def messages():
-    # Process incoming requests and pass them to the Bot Framework adapter
-    activity = Activity().deserialize(request.json)
-    response = adapter.process_activity(activity, "", bot.on_turn)
-    return response
+        # Send the user message to your Flask app's /ask endpoint
+        flask_api_url = "https://cxqacontainerapp.bluesmoke-a2e4a52c.germanywestcentral.azurecontainerapps.io/ask"
+        response = requests.post(
+            flask_api_url,
+            json={"question": user_message}
+        )
 
+        # If the response is successful, get the answer and send it back to Web Chat
+        if response.status_code == 200:
+            data = response.json()
+            answer = data.get("answer", "Sorry, I didn't understand your question.")
+        else:
+            answer = "Sorry, something went wrong."
 
-if __name__ == "__main__":
-    app.run(port=3978)
+        # Send the response to the user in the Web Chat
+        await turn_context.send_activity(MessageFactory.text(answer))
