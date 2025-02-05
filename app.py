@@ -1,49 +1,23 @@
 from flask import Flask, request, jsonify
-from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings
-from botbuilder.schema import Activity
-from bot import CXQABot  # Import your bot class
+from ask_fun import Ask_Question  # Ensure this points to the correct logic
 
 app = Flask(__name__)
 
-# Set up Bot Framework Adapter
-adapter_settings = BotFrameworkAdapterSettings(
-    app_id="your-bot-app-id",  # This is still required
-    app_password=None  # No need for the app password since we’re using OAuth2
-)
-adapter = BotFrameworkAdapter(adapter_settings)
-
-# Initialize the bot
-bot = CXQABot()
-
-@app.route("/api/messages", methods=["POST"])
-def messages():
-    # Deserialize the incoming activity (message from Web Chat)
-    activity = Activity().deserialize(request.json)
-    
-    # Process the activity using the adapter and bot
-    response = adapter.process_activity(activity, "", bot.on_turn)
-    
-    # Return the response
-    return response
-
-# Home route to check if the Flask API is running
+# Route for health check
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({'message': 'API is running!'}), 200
 
-# Route for your Flask API to handle questions
+# Route to ask questions to the bot
 @app.route('/ask', methods=['POST'])
 def ask():
     data = request.get_json()
     if not data or 'question' not in data:
         return jsonify({'error': 'Invalid request, "question" field is required.'}), 400
-
-    question = data['question']
-
-    # Use the bot logic directly here
-    answer = bot.on_message_activity(Activity(text=question, type="message"))
     
+    question = data['question']
+    answer = Ask_Question(question)  # Calls your function for getting a response
     return jsonify({'answer': answer})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=80)  # Ensure Flask app runs on port 80
+    app.run(host='0.0.0.0', port=80)  # Ensure the container exposes port 80
