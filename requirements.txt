@@ -1,39 +1,33 @@
 # Essential Web Framework
-Flask==3.1.0          # Web framework for handling HTTP requests
+Flask==3.1.0
 
 # WSGI HTTP Server
-gunicorn==20.1.0      # WSGI server for production deployment
+gunicorn==20.1.0
 
-# Bot Framework SDK (for bot functionality)
+# Bot Framework SDK
 botbuilder-core==4.16.2
 botbuilder-dialogs==4.16.2
 botbuilder-schema==4.16.2
 botframework-connector==4.16.2
 botframework-streaming==4.16.2
 
-# Optional AI Modules (if you're using AI capabilities)
+# Optional AI Modules
 botbuilder-ai==4.16.2
 
-# Environment Variable Management
-python-dotenv==1.0.1   # To manage environment variables
+# Additional Dependencies
+python-dotenv==1.0.1
+requests==2.28.1
+openai==1.58.1
+openpyxl
 
-# HTTP Requests (for making API requests)
-requests==2.28.1       # For sending HTTP requests
-
-# OpenAI (if using OpenAI API for any tasks)
-openai==1.58.1         # For integrating OpenAI models
-
-# Excel File Handling
-openpyxl==3.0.10       # To read/write Excel files (.xlsx)
-pandas==1.5.3          # Data manipulation and analysis
-
-# Azure SDKs (if interacting with Azure services like Blob Storage or Search)
+# Azure SDKs
 azure-storage-blob==12.15.0
 azure-search-documents==11.4.0
 azure-core==1.29.0
 
-# NumPy (for numerical computations, e.g., pandas dependencies)
+# Fixed Pandas & NumPy to resolve the dtype issue
 numpy==1.23.3
+pandas==1.5.3
 
-# CORS Support
-flask-cors==3.1.1      # Make sure you add this to support CORS
+# Flask CORS - Make sure this version works
+flask-cors==3.0.10  # Update this to a valid version
