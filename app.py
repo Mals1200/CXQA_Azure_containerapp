@@ -1,5 +1,5 @@
-import logging
 from flask import Flask, request, jsonify
+import logging
 from ask_func import Ask_Question
 
 # Enable logging for Flask to capture detailed logs
@@ -24,12 +24,14 @@ def ask():
         return jsonify({"error": "Request body is empty"}), 400
 
     app.logger.debug(f"Received data: {data}")
-
-    if "question" not in data:
-        app.logger.error('Invalid request: Missing "question" field.')
-        return jsonify({"error": 'Invalid request, "question" field is required.'}), 400
+    
+    # Check if 'text' field exists in the incoming Web Chat data
+    question = data.get("text", None)
+    
+    if not question:
+        app.logger.error('Invalid request: Missing "text" field.')
+        return jsonify({"error": 'Invalid request, "text" field is required.'}), 400
         
-    question = data["question"]
     answer = Ask_Question(question)
     app.logger.debug(f"Answer: {answer}")
     
