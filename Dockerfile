@@ -25,5 +25,5 @@ COPY . .
 # Expose the necessary ports (80 for Flask app and 3978 for Teams bot communication)
 EXPOSE 3978 80
 
-# Start Gunicorn with debug level logging
-CMD ["gunicorn", "--log-level", "debug", "app:app", "--bind", "0.0.0.0:80", "--workers", "4"]
+# Start Gunicorn with increased timeout and debug level logging
+CMD ["gunicorn", "--log-level", "debug", "--timeout", "120", "app:app", "--bind", "0.0.0.0:80", "--workers", "4"]
