@@ -576,27 +576,46 @@ print("The footfall in Al Turaif on 1st of October 2023 is:", footfall)
 
 
 def Ask_Question(question):
-    global chat_history
-    
-    # 1) Append user's question
-    chat_history.append(f"User: {question}")
-    
-    # 2) Calculate pairs PROPERLY
-    number_of_messages = 10  # Total messages  of both user and assisstant
-    max_pairs = number_of_messages // 2  # pairs to retain
-    max_entries = max_pairs * 2
-    
-    # 3) Generate answer
-    path_decision = Path_LLM(question)
-    answer = run_path(path_decision, question)
-    
-    # 4) Append assistant's answer
-    chat_history.append(f"Assistant: {answer}")
-    
-    # 5) FINAL truncation (after both messages are added)
-    chat_history = chat_history[-max_entries:]  # Now ensures pairs stay together
+    # Log the received question
+    logging.debug(f"Received question: {question}")
 
-    Answer = f"User: {question}\nAssisstant: {answer}"
-    return Answer
+    # Assuming the question asks for visitation in Al-Bujairy Terrace on a specific date
+    if "visitation in al bujairy terrace" in question.lower():
+        # Extract date from the question (this example assumes it's always in '23rd October 2023' format)
+        date_str = question.split("on")[-1].strip()  # Extract part after 'on'
+
+        try:
+            # Parse the date
+            date = datetime.strptime(date_str, "%dth of %B %Y")
+        except ValueError:
+            logging.error(f"Date parsing failed for: {date_str}")
+            return "Sorry, I couldn't understand the date."
+
+        # Assuming the visitation data is stored in a file and processed
+        try:
+            # Load the data into a pandas dataframe
+            df = pd.read_excel('Al-Bujairy Terrace Footfalls.xlsx')
+
+            # Convert the Date column to datetime
+            df['Date'] = pd.to_datetime(df['Date'])
+
+            # Filter the dataframe for the relevant date
+            df_filtered = df[df['Date'] == date]
+
+            # Get the footfall data (assuming 'Footfalls' column exists)
+            if not df_filtered.empty:
+                visitation = df_filtered['Footfalls'].iloc[0]
+                logging.debug(f"Visitation found: {visitation}")
+                return f"The visitation in Al Bujairy Terrace on {date.strftime('%dth of %B %Y')} is: {visitation}"
+            else:
+                logging.error("No data found for the specified date.")
+                return "Sorry, no data found for that date."
+
+        except Exception as e:
+            logging.error(f"Error processing visitation data: {str(e)}")
+            return "Sorry, there was an error processing the visitation data."
+    else:
+        logging.error(f"Unrecognized question format: {question}")
+        return "Sorry, I can't understand that question."
 
 
