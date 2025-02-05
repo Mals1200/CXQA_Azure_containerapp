@@ -19,15 +19,22 @@ def ask():
     app.logger.debug("POST /ask request received")
     
     data = request.get_json()
-    if not data or "question" not in data:
-        app.logger.debug('Invalid request: Missing "question"')
+    if not data:
+        app.logger.error("Received empty data.")
+        return jsonify({"error": "Request body is empty"}), 400
+
+    app.logger.debug(f"Received data: {data}")
+
+    if "question" not in data:
+        app.logger.error('Invalid request: Missing "question" field.')
         return jsonify({"error": 'Invalid request, "question" field is required.'}), 400
         
     question = data["question"]
     answer = Ask_Question(question)
     app.logger.debug(f"Answer: {answer}")
+    
     return jsonify({"answer": answer})
 
 # Ensure the app is exposed for Gunicorn to start
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=80)  # This is for development, Gunicorn will use it in production
+    app.run(host="0.0.0.0", port=80)
