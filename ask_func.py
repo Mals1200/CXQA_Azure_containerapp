@@ -573,23 +573,26 @@ print("The footfall in Al Turaif on 1st of October 2023 is:", footfall)
 # Run the full code:
 # ==============================
 
-
-
 def Ask_Question(question):
-    # Log the received question
     logging.debug(f"Received question: {question}")
 
     # Assuming the question asks for visitation in Al-Bujairy Terrace on a specific date
     if "visitation in al bujairy terrace" in question.lower():
-        # Extract date from the question (this example assumes it's always in '23rd October 2023' format)
+        # Extract date part from the question (after 'on')
         date_str = question.split("on")[-1].strip()  # Extract part after 'on'
 
         try:
-            # Parse the date
-            date = datetime.strptime(date_str, "%dth of %B %Y")
+            # Try to parse the date in different formats
+            date = datetime.strptime(date_str, "%d of %B %Y")  # Example: 23rd of October 2023
         except ValueError:
-            logging.error(f"Date parsing failed for: {date_str}")
-            return "Sorry, I couldn't understand the date."
+            try:
+                date = datetime.strptime(date_str, "%dth of %B %Y")  # Example: 23rd of October 2023
+            except ValueError:
+                try:
+                    date = datetime.strptime(date_str, "%d %B %Y")  # Example: 23 October 2023
+                except ValueError:
+                    logging.error(f"Date parsing failed for: {date_str}")
+                    return "Sorry, I couldn't understand the date format."
 
         # Assuming the visitation data is stored in a file and processed
         try:
@@ -606,7 +609,7 @@ def Ask_Question(question):
             if not df_filtered.empty:
                 visitation = df_filtered['Footfalls'].iloc[0]
                 logging.debug(f"Visitation found: {visitation}")
-                return f"The visitation in Al Bujairy Terrace on {date.strftime('%dth of %B %Y')} is: {visitation}"
+                return f"The visitation in Al Bujairy Terrace on {date.strftime('%d of %B %Y')} is: {visitation}"
             else:
                 logging.error("No data found for the specified date.")
                 return "Sorry, no data found for that date."
@@ -617,5 +620,6 @@ def Ask_Question(question):
     else:
         logging.error(f"Unrecognized question format: {question}")
         return "Sorry, I can't understand that question."
+
 
 
