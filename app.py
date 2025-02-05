@@ -1,12 +1,9 @@
 from flask import Flask, request, jsonify
 from ask_func import Ask_Question
-from bot import CXQABot  # Import the bot class
 
 app = Flask(__name__)
 
-# Initialize the bot
-bot = CXQABot()
-
+# New Default Route (Fixes "Not Found" issue)
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({'message': 'API is running!'}), 200
@@ -21,10 +18,5 @@ def ask():
     answer = Ask_Question(question)
     return jsonify({'answer': answer})
 
-@app.route('/bot', methods=['POST'])  # Endpoint for the bot
-def bot_endpoint():
-    # Logic to handle bot messages
-    return bot.on_message_activity(request)
-
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=80)
+    app.run(host='0.0.0.0', port=80)  # Ensure correct port
