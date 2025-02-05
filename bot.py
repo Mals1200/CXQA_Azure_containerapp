@@ -1,27 +1,24 @@
-from botbuilder.core import ActivityHandler, MessageFactory, TurnContext
 import requests
+from botbuilder.core import ActivityHandler, MessageFactory
+from botbuilder.dialogs import DialogSet, DialogTurnStatus
+from botbuilder.dialogs import WaterfallDialog, WaterfallStepContext
 
 class CXQABot(ActivityHandler):
     def __init__(self):
-        super().__init__()
+        self.dialogs = DialogSet()
 
-    async def on_message_activity(self, turn_context: TurnContext):
-        # Get the user's message
-        user_message = turn_context.activity.text.strip()
-
-        # Send the user message to your Flask app's /ask endpoint
-        flask_api_url = "https://cxqacontainerapp.bluesmoke-a2e4a52c.germanywestcentral.azurecontainerapps.io/ask"
-        response = requests.post(
-            flask_api_url,
-            json={"question": user_message}
-        )
-
-        # If the response is successful, get the answer and send it back to Web Chat
-        if response.status_code == 200:
-            data = response.json()
-            answer = data.get("answer", "Sorry, I didn't understand your question.")
-        else:
-            answer = "Sorry, something went wrong."
-
-        # Send the response back to the Web Chat interface
+    async def on_message_activity(self, turn_context):
+        question = turn_context.activity.text
+        answer = await self.ask_container_app(question)
         await turn_context.send_activity(MessageFactory.text(answer))
+
+    async def ask_container_app(self, question):
+        url = "https://cxqacontainerapp.bluesmoke-a2e4a52c.germanywestcentral.azurecontainerapps.io/ask"
+        headers = {"Content-Type": "application/json"}
+        data = {"question": question}
+        
+        response = requests.post(url, json=data, headers=headers)
+        if response.status_code == 200:
+            return response.json().get('answer')
+        else:
+            return "Error: Unable to get a response from the container app."
