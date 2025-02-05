@@ -6,7 +6,7 @@ class CXQABot(ActivityHandler):
         super().__init__()
 
     async def on_message_activity(self, turn_context: TurnContext):
-        # Get the message from the user
+        # Get the user's message
         user_message = turn_context.activity.text.strip()
 
         # Send the user message to your Flask app's /ask endpoint
@@ -23,5 +23,5 @@ class CXQABot(ActivityHandler):
         else:
             answer = "Sorry, something went wrong."
 
-        # Send the response to the user in the Web Chat
+        # Send the response back to the Web Chat interface
         await turn_context.send_activity(MessageFactory.text(answer))
