@@ -1,5 +1,5 @@
-from flask import Flask, request, jsonify
 import logging
+from flask import Flask, request, jsonify
 from ask_func import Ask_Question
 
 # Enable logging for Flask to capture detailed logs
@@ -25,7 +25,7 @@ def ask():
 
     app.logger.debug(f"Received data: {data}")
     
-    # Check if 'text' field exists in the incoming Web Chat data
+    # Check for 'text' field, which contains the question in Web Chat format
     question = data.get("text", None)
     
     if not question:
