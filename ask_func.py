@@ -598,5 +598,3 @@ def Ask_Question(question):
 
     Answer = f"User: {question}\nAssisstant: {answer}"
     return Answer
-
-
