@@ -129,6 +129,7 @@ You are a decision-making assistant. You have access to a list of datafiles (wit
 4. Output strictly **"Python"** or **"Index"** with no other text.
 5. If you were greeted return **Hello! How may I assist you?**
 6. If you were asked somthing outside your scope say **This is outside of my scope, may I help you with anything else?**.
+7. If you Recieve any empty user question and empty Chat_history just reply with **Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?**
 
 User question:
 {question}
@@ -190,7 +191,8 @@ Chat_history:
             "Python",
             "Index",
             "Hello! How may I assist you?",
-            "This is outside of my scope, may I help you with anything else?"
+            "This is outside of my scope, may I help you with anything else?",
+            "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"
         ]
         return answer if answer in valid_responses else "Error"
     except Exception as e:
@@ -596,5 +598,5 @@ def Ask_Question(question):
     # 5) FINAL truncation (after both messages are added)
     chat_history = chat_history[-max_entries:]  # Now ensures pairs stay together
 
-    Answer = f"User: {question}\nAssisstant: {answer}"
+    Answer = f"{answer}"
     return Answer
