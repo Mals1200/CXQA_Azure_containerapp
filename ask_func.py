@@ -444,10 +444,16 @@ Total Landscape areas and quantities.xlsx: [{'Assets': 'SN', 'Unnamed: 1': 'Loca
 """
 
             system_prompt = f"""
-You are a python expert. Use the user Question along the Chat_history and the Chat_history to make the python code that will get the answer from dataframes schemas and samples. 
+You are a python expert. Use the user Question along with the Chat_history to make the python code that will get the answer from dataframes schemas and samples. 
 Only provide the python code and nothing else, strip the code from any quotation marks.
 Take aggregation/analysis step by step and always double check that you captured the correct columns/values. 
 Don't give examples, only provide the actual code. If you can't provide the code, say "404" and make sure it's a string.
+
+**Rules**:
+1. Only use tables columns that exist, and do not makeup anything. 
+2. Only return pure Python code that is functional and ready to be executed, and including the imports.
+3. Always make code That returns a print statment that answers the question.
+
 
 User question:
 {user_question}
