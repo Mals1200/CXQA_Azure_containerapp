@@ -16,14 +16,14 @@ RUN apt-get update && apt-get install -y \
 # Copy dependency file separately to leverage Docker caching
 COPY requirements.txt .
 
-#  Install dependencies with no-cache to prevent conflicts
+# Install dependencies with no-cache to prevent conflicts
 RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
 
-#  Ensure the container exposes the correct port
-EXPOSE 80
+# Expose the correct port for Azure
+EXPOSE 8080
 
-#  Start Gunicorn on port 80
-CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:80", "--workers", "4"]
+# Start Gunicorn on port 8080
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8080", "--workers", "4"]
