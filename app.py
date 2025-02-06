@@ -1,14 +1,15 @@
 from flask import Flask, request, jsonify
 from ask_fun import Ask_Question
+import os
 
 app = Flask(__name__)
 
-# Default Route
+# Default Route (for health checks)
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({'message': 'API is running!'}), 200
 
-# Existing Ask Route (for cURL & REST API)
+# Existing Ask Route
 @app.route('/ask', methods=['POST'])
 def ask():
     data = request.get_json()
@@ -19,7 +20,7 @@ def ask():
     answer = Ask_Question(question)
     return jsonify({'answer': answer})
 
-# NEW ROUTE FOR AZURE BOT FRAMEWORK
+# Azure Bot Framework Integration
 @app.route('/api/messages', methods=['POST'])
 def messages():
     data = request.get_json()
@@ -27,7 +28,7 @@ def messages():
     if not data or 'type' not in data:
         return jsonify({'error': 'Invalid request'}), 400
 
-    # Ignore event messages, only respond to messages
+    # Process only message type
     if data['type'] == 'message' and 'text' in data:
         user_message = data['text']
         bot_response = Ask_Question(user_message)
@@ -40,4 +41,6 @@ def messages():
     return jsonify({}), 200
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=80)  # Ensure correct port
+    # Use Azure's default port 8080
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)
