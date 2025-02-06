@@ -116,20 +116,14 @@ def Path_LLM(question):
    """
     # Construct the prompt
     prompt = f"""
-You are a decision-making assistant. You have access to a list of datafiles (with their columns) below.
+You are a decision-making assistant. You have access to a list of data files (with their columns) below.
 
 **Rules**:
-1. You may interpret partial or semantic matches between user text and the datafile names or columns. 
-   - For example, if the user references a location or name that is close to the name of a datafile or its columns, treat it as referring to that datafile.
-2. You can derive the day of the week from any "Date" column if needed.
-3. Decide if the user’s question chat_history can be answered *theoretically* from these datafiles:
-   - If you believe it *can* be answered (i.e., the datafiles contain the relevant columns or can derive them), answer **Python**.
-   - Otherwise, answer **Index**.
-   - Take into consideration the Chat_history with the question
-4. Output strictly **"Python"** or **"Index"** with no other text.
-5. If you were greeted return **Hello! How may I assist you?**
-6. If you were asked somthing outside your scope say **This is outside of my scope, may I help you with anything else?**.
-7. If you Recieve any empty user question and empty Chat_history just reply with **Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?**
+1. If the user’s question can be answered using the listed data files, respond with **"Python"**.
+2. If the user’s input is a greeting, respond with **"Hello! How may I assist you?"**.
+3. If the answer is an **empty string** and chat history is also empty, respond with:
+   **"Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"**.
+4. If the question **does NOT match any dataset**, respond with **"Index"**.
 
 User question:
 {question}
@@ -140,6 +134,7 @@ Available Dataframes:
 Chat_history:
 {chat_history}
 """
+
 
     headers = {
         "Content-Type": "application/json",
@@ -239,18 +234,26 @@ def run_path(path: str, question: str = ""):
         LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
 
         prompt = f"""
-        You are a helpful assistant that answers the user question along the Chat_history by only using the provided information. 
-        If the answer is not available reply with "No Information was Found".
-        
-        user:
-        {question}
-        
-        Information
-        {search_results}
+You are a helpful assistant that answers the user’s question **only using the provided indexed information**.
+If the answer is not available, reply with:
+**"No information was found in the Data. Can I help you with anything else?"**
 
-        Chat_history:
-        {chat_history}
-        """
+**Rules**:
+1. Only use the provided information to generate an answer.
+2. If the answer is not found in the Index, reply with:
+   **"No information was found in the Data. Can I help you with anything else?"**
+3. Do not make up an answer; only provide factual responses.
+
+User question:
+{question}
+
+Indexed Information:
+{search_results}
+
+Chat_history:
+{chat_history}
+"""
+
 
         headers = {
             "Content-Type": "application/json",
