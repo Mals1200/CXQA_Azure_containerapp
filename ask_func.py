@@ -191,7 +191,7 @@ Chat_history:
             "Python",
             "Index",
             "Hello! How may I assist you?",
-            "This is outside of my scope, may I help you with anything else?",
+            "This is outside of my scope, may I help you with anything else regarding CXQA files?",
             "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"
         ]
         return answer if answer in valid_responses else "Error"
