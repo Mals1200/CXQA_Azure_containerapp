@@ -40,7 +40,7 @@ def ask():
     question = data['question']
     answer = Ask_Question(question)
 
-    # Creating HTML for collapsible sections
+    # Create HTML with collapsible sections
     answer_html = f"""
     <!DOCTYPE html>
     <html lang="en">
