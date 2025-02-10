@@ -3,10 +3,10 @@ import asyncio
 from flask import Flask, request, jsonify, Response
 import requests
 
-# Import the Ask_Question function from your unchanged ask_func.py
-from ask_func import Ask_Question
+# Import Ask_Question and its global chat_history from your unchanged ask_func.py
+from ask_func import Ask_Question, chat_history
 
-# BotBuilder imports
+# Bot Framework imports
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
 from botbuilder.schema import Activity
 
@@ -20,9 +20,10 @@ MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
 
-# =========================
-# API Endpoints
-# =========================
+# Global dictionary to maintain conversation-specific chat histories.
+# Keys will be conversation IDs and values will be lists of chat history messages.
+conversation_histories = {}
+
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({'message': 'API is running!'}), 200
@@ -33,6 +34,7 @@ def ask():
     if not data or 'question' not in data:
         return jsonify({'error': 'Invalid request, "question" field is required.'}), 400
     question = data['question']
+    # For non-bot messages, we simply use the global chat_history.
     answer = Ask_Question(question)
     return jsonify({'answer': answer})
 
@@ -43,7 +45,7 @@ def messages():
     # Deserialize incoming Activity
     body = request.json
     activity = Activity().deserialize(body)
-    # Grab the Authorization header (for Bot Framework auth)
+    # Get the Authorization header (for Bot Framework auth)
     auth_header = request.headers.get("Authorization", "")
     loop = asyncio.new_event_loop()
     try:
@@ -53,61 +55,51 @@ def messages():
     return Response(status=200)
 
 async def _bot_logic(turn_context: TurnContext):
-    """
-    Processes the incoming user message and sends back an Adaptive Card if the answer contains a source section.
-    If the answer from Ask_Question contains "\n\nSource:" (as produced by your ask_func.py),
-    the Adaptive Card will show the main answer and include a "Show Source" button to reveal the details.
-    """
+    # Retrieve the conversation ID from the incoming activity.
+    conversation_id = turn_context.activity.conversation.id
+
+    # Initialize conversation history for this conversation if it doesn't exist.
+    if conversation_id not in conversation_histories:
+        conversation_histories[conversation_id] = []
+
+    # Before processing, override the chat_history in ask_func.py with this conversation's history.
+    import ask_func
+    ask_func.chat_history = conversation_histories[conversation_id]
+
     user_message = turn_context.activity.text or ""
     answer = Ask_Question(user_message)
-    
-    # Check if the answer contains a source section (assuming it is appended with "\n\nSource:" followed by extra info)
+
+    # After processing, update the conversation-specific history.
+    conversation_histories[conversation_id] = ask_func.chat_history
+
+    # Check if the answer contains a source section (using "\n\nSource:" as a marker)
     if "\n\nSource:" in answer:
-        # Split the answer into the main part and the source details.
+        # Split into main answer and source details
         parts = answer.split("\n\nSource:", 1)
         main_answer = parts[0].strip()
-        # You can re-add the marker if you wish or simply show the details.
+        # Optionally, prepend "Source:" to the details
         source_details = "Source:" + parts[1].strip()
-        
-        # Build an Adaptive Card with the main answer and a hidden TextBlock for the source details.
+
+        # Build an Adaptive Card with the main answer and a hidden block for the source details.
         adaptive_card = {
             "type": "AdaptiveCard",
             "body": [
-                {
-                    "type": "TextBlock",
-                    "text": main_answer,
-                    "wrap": True
-                },
-                {
-                    "type": "TextBlock",
-                    "text": source_details,
-                    "wrap": True,
-                    "id": "sourceBlock",
-                    "isVisible": False
-                }
+                {"type": "TextBlock", "text": main_answer, "wrap": True},
+                {"type": "TextBlock", "text": source_details, "wrap": True, "id": "sourceBlock", "isVisible": False}
             ],
             "actions": [
-                {
-                    "type": "Action.ToggleVisibility",
-                    "title": "Show Source",
-                    "targetElements": ["sourceBlock"]
-                }
+                {"type": "Action.ToggleVisibility", "title": "Show Source", "targetElements": ["sourceBlock"]}
             ],
             "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
             "version": "1.2"
         }
         message = Activity(
             type="message",
-            attachments=[
-                {
-                    "contentType": "application/vnd.microsoft.card.adaptive",
-                    "content": adaptive_card
-                }
-            ]
+            attachments=[{"contentType": "application/vnd.microsoft.card.adaptive", "content": adaptive_card}]
         )
         await turn_context.send_activity(message)
     else:
-        # If no source details are found, just send the plain text answer.
+        # Send plain text answer if no source section is detected.
         await turn_context.send_activity(Activity(type="message", text=answer))
 
 if __name__ == '__main__':
