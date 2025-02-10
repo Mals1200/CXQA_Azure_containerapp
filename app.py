@@ -3,24 +3,20 @@ import asyncio
 from flask import Flask, request, jsonify, Response
 import requests
 
-# Import the Ask_Question function from ask_func.py
+# Import Ask_Question from ask_func.py
 from ask_func import Ask_Question
 
-# BotBuilder imports
-from botbuilder.core import (
-    BotFrameworkAdapter,
-    BotFrameworkAdapterSettings,
-    TurnContext
-)
+# Bot Framework imports
+from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
 from botbuilder.schema import Activity
 
 app = Flask(__name__)
 
-# Read Bot credentials from environment variables
+# Read bot credentials from environment variables
 MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
 MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 
-# Create settings & adapter for the Bot
+# Create Bot Framework adapter
 adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
 
@@ -47,72 +43,44 @@ def messages():
     # Deserialize incoming Activity
     body = request.json
     activity = Activity().deserialize(body)
-    # Grab the Authorization header for Bot Framework auth
     auth_header = request.headers.get("Authorization", "")
     loop = asyncio.new_event_loop()
     try:
-        loop.run_until_complete(
-            adapter.process_activity(activity, auth_header, _bot_logic)
-        )
+        loop.run_until_complete(adapter.process_activity(activity, auth_header, _bot_logic))
     finally:
         loop.close()
     return Response(status=200)
 
 async def _bot_logic(turn_context: TurnContext):
     """
-    Processes the incoming user message and sends back an Adaptive Card if the answer includes a source.
+    Processes the incoming user message and, if the answer includes a source, sends an Adaptive Card with a toggle button.
     """
     user_message = turn_context.activity.text or ""
     answer = Ask_Question(user_message)
     
     if "\n\nSource:" in answer:
-        # Split the answer into the main text and the source details.
         parts = answer.split("\n\nSource:", 1)
         main_answer = parts[0].strip()
         source_details = parts[1].strip()
-        
-        # Build an Adaptive Card with a hidden TextBlock for source details.
         adaptive_card = {
             "type": "AdaptiveCard",
             "body": [
-                {
-                    "type": "TextBlock",
-                    "text": main_answer,
-                    "wrap": True
-                },
-                {
-                    "type": "TextBlock",
-                    "text": source_details,
-                    "wrap": True,
-                    "id": "sourceBlock",
-                    "isVisible": False
-                }
+                {"type": "TextBlock", "text": main_answer, "wrap": True},
+                {"type": "TextBlock", "text": source_details, "wrap": True, "id": "sourceBlock", "isVisible": False}
             ],
             "actions": [
-                {
-                    "type": "Action.ToggleVisibility",
-                    "title": "Show Source",
-                    "targetElements": ["sourceBlock"]
-                }
+                {"type": "Action.ToggleVisibility", "title": "Show Source", "targetElements": ["sourceBlock"]}
             ],
             "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
             "version": "1.2"
         }
         message = Activity(
             type="message",
-            attachments=[
-                {
-                    "contentType": "application/vnd.microsoft.card.adaptive",
-                    "content": adaptive_card
-                }
-            ]
+            attachments=[{"contentType": "application/vnd.microsoft.card.adaptive", "content": adaptive_card}]
         )
         await turn_context.send_activity(message)
     else:
         await turn_context.send_activity(Activity(type="message", text=answer))
 
-# =========================
-# Gunicorn entry point
-# =========================
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=80)
