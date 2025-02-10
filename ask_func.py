@@ -15,14 +15,11 @@ from azure.core.credentials import AzureKeyCredential
 from dotenv import load_dotenv
 from functools import lru_cache
 
-
 # Suppress Azure SDK's http_logging_policy logs:
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
-
-# Optionally, suppress all Azure logs at once:
 logging.getLogger("azure").setLevel(logging.WARNING)
 
-chat_history = [] # Define the global variable
+chat_history = []  # Global chat history
 
 # =====================================
 # Streaming Helper Function
@@ -30,8 +27,7 @@ chat_history = [] # Define the global variable
 def stream_azure_chat_completion(endpoint, headers, payload, print_stream=False):
     """
     A helper function to stream the Azure OpenAI response token by token
-    and return the concatenated text. It can optionally print tokens as they come in
-    (when print_stream=True).
+    and return the concatenated text.
     """
     with requests.post(endpoint, headers=headers, json=payload, stream=True) as response:
         response.raise_for_status()
@@ -49,35 +45,27 @@ def stream_azure_chat_completion(endpoint, headers, payload, print_stream=False)
                                 and data_json["choices"]
                                 and "delta" in data_json["choices"][0]):
                             content_piece = data_json["choices"][0]["delta"].get("content", "")
-                            # Only print if print_stream=True
                             if print_stream:
                                 print(content_piece, end="", flush=True)
                             final_text += content_piece
                     except json.JSONDecodeError:
                         pass
-        # Print a final newline only if print_stream=True
         if print_stream:
             print()
     return final_text
 
-
-
 # =====================================
-# check question path (Index or Python)
+# Check question path (Index or Python)
 # =====================================
 def Path_LLM(question):
     """
     Decides whether the user’s question can be answered using the datafiles
     (answer = "Python") or the knowledge base (answer = "Index").
-    If greeted, returns "Hello! How may I assist you?".
-    If out of scope, returns "This is outside of my scope, may I help you with anything else?".
-    Uses streaming, but does not print to console, returning the final text.
     """
-
     import requests
     import json
 
-    # Azure OpenAI Configuration - using your fake credentials:
+    # Azure OpenAI configuration
     LLM_DEPLOYMENT_NAME = "gpt-4o"
     LLM_ENDPOINT = (
         "https://cxqaazureaihub2358016269.openai.azure.com/"
@@ -113,7 +101,7 @@ def Path_LLM(question):
    -Month: datetime64[ns], Type: object, Top2Box scores/ rating: float64
 13) "Total Landscape areas and quantities.xlsx", with the following tables:
    -Assets: object, Unnamed: 1: object, Unnamed: 2: object, Unnamed: 3: object
-   """
+    """
     # Construct the prompt
     prompt = f"""
 You are a decision-making assistant. You have access to a list of data files (with their columns) below.
@@ -135,7 +123,6 @@ Chat_history:
 {chat_history}
 """
 
-
     headers = {
         "Content-Type": "application/json",
         "api-key": LLM_API_KEY
@@ -152,10 +139,6 @@ Chat_history:
     }
 
     def stream_azure_chat_completion(endpoint, headers, payload):
-        """
-        Streams the Azure OpenAI response tokens, returns them as a single string,
-        and does not print them to console.
-        """
         with requests.post(endpoint, headers=headers, json=payload, stream=True) as response:
             response.raise_for_status()
             final_text = ""
@@ -193,39 +176,18 @@ Chat_history:
     except Exception as e:
         return f"Error: {str(e)}"
 
-
-
 # ==============================================
 # Run path:
-# 1) if index: retrieve info, use llm to answer
-# 2) if python: llm generates code, execute
 # ==============================================
-
-# Global variable that will store the final content or answer
-
 Content = None
 
 def run_path(path: str, question: str = ""):
     """
-    A single function that, based on the 'path' argument,
-    runs either the "Index" code or the "Python" code.
-    It stores the final result in a global variable called 'Content'.
+    Runs either the "Index" or "Python" path and stores the result in the global 'Content'.
     """
-    global Content  # Declare that we want to modify the module-level 'Content'
+    global Content
 
-    # -------------------------------------------------------------------------
-    # Define the LLM function used *only* in the Index path:
-    # -------------------------------------------------------------------------
     def Index_LLM(question, search_results):
-        """
-        Takes the user question and the search results from Azure Cognitive Search,
-        and uses Azure OpenAI to provide a final answer.
-
-        Prompt:
-        You are a helpful assistant that answers the user question only using the provided information.
-        If the answer is not available reply with "No Information was Found".
-        If a greeting is received, reply back with a greeting and "How may I assist you?".
-        """
         LLM_DEPLOYMENT_NAME = "gpt-4o"
         LLM_ENDPOINT = (
             "https://cxqaazureaihub2358016269.openai.azure.com/"
@@ -239,10 +201,10 @@ If the answer is not available, reply with:
 **"No information was found in the Data. Can I help you with anything else?"**
 
 **Rules**:
-1. Only use the provided information to generate an answer.
-2. If the answer is not found in the Index, reply with:
+1. Only use the provided information.
+2. If not found, reply with:
    **"No information was found in the Data. Can I help you with anything else?"**
-3. Do not make up an answer; only provide factual responses.
+3. Do not make up an answer.
 
 User question:
 {question}
@@ -253,7 +215,6 @@ Indexed Information:
 Chat_history:
 {chat_history}
 """
-
 
         headers = {
             "Content-Type": "application/json",
@@ -267,25 +228,18 @@ Chat_history:
             ],
             "max_tokens": 1000,
             "temperature": 0.7,
-            "stream": True  # enable streaming
+            "stream": True
         }
 
         try:
-            # Stream the answer:
             streamed_answer = stream_azure_chat_completion(LLM_ENDPOINT, headers, payload)
             return streamed_answer
-        except requests.exceptions.HTTPError as http_err:
+        except requests.exceptions.HTTPError:
             return "An error occurred while processing your request."
         except Exception:
             return "An unexpected error occurred."
 
-    # -------------------------------------------------------------------------
-    # INDEX PATH
-    # -------------------------------------------------------------------------
     if path == "Index":
-        # ==============================
-        # Embeddings and Indexing Configuration (mlindex_content)
-        # ==============================
         mlindex_content = """
 embeddings:
   api_base: https://cxqaazureaihub2358016269.openai.azure.com
@@ -324,16 +278,9 @@ self:
   asset_id:
     azureml://locations/eastus/workspaces/5d74a98c-1fc6-4567-8545-2632b489bd0b/data/cxqa-ind-v2/versions/1
 """
-
-        # ==============================
-        # Additional Parameters
-        # ==============================
-        query_type = "Hybrid (vector + keyword)"  # Could be "Vector" or "Keyword"
+        query_type = "Hybrid (vector + keyword)"
         top_k = 4
 
-        # ==============================
-        # Azure Cognitive Search Client Setup
-        # ==============================
         SEARCH_SERVICE_NAME = "cxqa-azureai-search"
         SEARCH_ENDPOINT = f"https://{SEARCH_SERVICE_NAME}.search.windows.net"
         INDEX_NAME = "cxqa-ind-v6"
@@ -350,6 +297,7 @@ self:
                     missing.append("ADMIN_API_KEY")
                 raise ValueError(f"Missing environment variables: {', '.join(missing)}")
 
+            from azure.search.documents import SearchClient
             search_client = SearchClient(
                 endpoint=SEARCH_ENDPOINT,
                 index_name=INDEX_NAME,
@@ -359,9 +307,6 @@ self:
             raise
 
         def perform_search(query: str, top: int = 5):
-            """
-            Performs a semantic search query against the Azure Cognitive Search index.
-            """
             try:
                 results = search_client.search(
                     search_text=query,
@@ -380,30 +325,17 @@ self:
                 return []
 
         results = perform_search(question, top=top_k)
-
-        # Separate metadata and data
         ind_data = []
-        ind_meta = []
         for result in results:
             ind_data.append(result["content"])
-            ind_meta.append(result["metadata"])
-
         Content = ind_data
-
         retrieved_info_str = "\n\n---\n\n".join(str(item) for item in ind_data)
         final_answer = Index_LLM(question, retrieved_info_str)
         Content = final_answer
-        return  f"{Content}\n\nSource: Index.\nThe Documents:\n\n{retrieved_info_str}"
+        return f"{Content}\n\nSource: Index.\nThe Documents:\n\n{retrieved_info_str}"
 
-    # -------------------------------------------------------------------------
-    # PYTHON PATH
-    # -------------------------------------------------------------------------
     elif path == "Python":
         def Generate_Code(user_question):
-            """
-            Generates Python code to answer the user's question based on provided data schemas and samples
-            using Azure OpenAI.
-            """
             LLM_DEPLOYMENT_NAME = "gpt-4o"
             LLM_ENDPOINT = (
                 "https://cxqaazureaihub2358016269.openai.azure.com/"
@@ -426,7 +358,6 @@ Tickets.xlsx: {'Date': 'datetime64[ns]', 'Number of tickets': 'int64', 'revenue'
 Top2Box Summary.xlsx: {'Month': 'datetime64[ns]', 'Type': 'object', 'Top2Box scores/ rating': 'float64'},
 Total Landscape areas and quantities.xlsx: {'Assets': 'object', 'Unnamed: 1': 'object', 'Unnamed: 2': 'object', 'Unnamed: 3': 'object'},
 """
-
             sample = """
 Al-Bujairy Terrace Footfalls.xlsx: [{'Date': "Timestamp('2023-01-01 00:00:00')", 'Footfalls': 2950}, {'Date': "Timestamp('2023-01-02 00:00:00')", 'Footfalls': 2864}, {'Date': "Timestamp('2023-01-03 00:00:00')", 'Footfalls': 4366}],
 Al-Turaif Footfalls.xlsx: [{'Date': "Timestamp('2023-06-01 00:00:00')", 'Footfalls': 694}, {'Date': "Timestamp('2023-06-02 00:00:00')", 'Footfalls': 1862}, {'Date': "Timestamp('2023-06-03 00:00:00')", 'Footfalls': 1801}],
@@ -442,54 +373,6 @@ Tickets.xlsx: [{'Date': "Timestamp('2023-01-01 00:00:00')", 'Number of tickets':
 Top2Box Summary.xlsx: [{'Month': "Timestamp('2024-01-01 00:00:00')", 'Type': 'Bujairi Terrace/ Diriyah  offering', 'Top2Box scores/ rating': 0.669449081803}, {'Month': "Timestamp('2024-01-01 00:00:00')", 'Type': 'Eating out experience', 'Top2Box scores/ rating': 0.7662337662338}, {'Month': "Timestamp('2024-01-01 00:00:00')", 'Type': 'Entrance to Bujairi Terrace', 'Top2Box scores/ rating': 0.7412353923205}],
 Total Landscape areas and quantities.xlsx: [{'Assets': 'SN', 'Unnamed: 1': 'Location', 'Unnamed: 2': 'Unit', 'Unnamed: 3': 'Quantity'}, {'Assets': 'Bujairi, Turaif Gardens, and Terraces', 'Unnamed: 1': nan, 'Unnamed: 2': nan, 'Unnamed: 3': nan}, {'Assets': '\xa0A', 'Unnamed: 1': 'Turaif Gardens', 'Unnamed: 2': nan, 'Unnamed: 3': nan}],
 """
-
-            system_prompt = f"""
-You are a python expert. Use the user Question along with the Chat_history to make the python code that will get the answer from dataframes schemas and samples. 
-Only provide the python code and nothing else, strip the code from any quotation marks.
-Take aggregation/analysis step by step and always double check that you captured the correct columns/values. 
-Don't give examples, only provide the actual code. If you can't provide the code, say "404" and make sure it's a string.
-
-**Rules**:
-1. Only use tables columns that exist, and do not makeup anything. 
-2. Only return pure Python code that is functional and ready to be executed, and including the imports.
-3. Always make code That returns a print statment that answers the question.
-
-
-User question:
-{user_question}
-
-Dataframes schemas:
-{schema}
-
-Dataframes samples:
-{sample}
-
-Chat_history:
-{chat_history}
-
-Example code you should write for questions like "What is the total footfall in Al Turaif on 1st October 2023?":
-
-from datetime import datetime
-
-# Find the file with the relevant data
-filename = 'At-Turaif Footfalls.xlsx'
-
-# Load the data into a pandas dataframe
-df = pd.read_excel(filename)
-
-# Convert the Date column to a datetime object
-df['Date'] = pd.to_datetime(df['Date'])
-
-# Filter the dataframe to only include the relevant date
-date_filter = df['Date'] == datetime(2023, 10, 1)
-df_filtered = df[date_filter]
-
-# Get the footfall for the relevant date
-footfall = df_filtered['Footfalls'].iloc[0]
-
-print("The footfall in Al Turaif on 1st of October 2023 is:", footfall)
-"""
-
             headers = {
                 "Content-Type": "application/json",
                 "api-key": LLM_API_KEY
@@ -501,9 +384,8 @@ print("The footfall in Al Turaif on 1st of October 2023 is:", footfall)
                 ],
                 "max_tokens": 1000,
                 "temperature": 0.7,
-                "stream": True  # enable streaming
+                "stream": True
             }
-
             try:
                 code_streamed = stream_azure_chat_completion(LLM_ENDPOINT, headers, payload)
                 code_result = code_streamed.strip()
@@ -526,28 +408,21 @@ print("The footfall in Al Turaif on 1st of October 2023 is:", footfall)
             try:
                 blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
                 container_client = blob_service_client.get_container_client(container_name)
-
                 dataframes = {}
                 blobs = container_client.list_blobs(name_starts_with=target_folder_path)
-
                 for blob in blobs:
                     file_name = blob.name.split('/')[-1]
                     blob_client = container_client.get_blob_client(blob.name)
                     blob_data = blob_client.download_blob().readall()
-
                     if file_name.endswith('.xlsx') or file_name.endswith('.xls'):
                         df = pd.read_excel(io.BytesIO(blob_data))
                     elif file_name.endswith('.csv'):
                         df = pd.read_csv(io.BytesIO(blob_data))
                     else:
                         continue
-
                     dataframes[file_name] = df
-
-                # Replace file reading in the code with usage of dataframes
                 code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
                 code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
-
                 output_buffer = io.StringIO()
                 with contextlib.redirect_stdout(output_buffer):
                     local_vars = {
@@ -556,10 +431,8 @@ print("The footfall in Al Turaif on 1st of October 2023 is:", footfall)
                         "datetime": datetime
                     }
                     exec(code_modified, {}, local_vars)
-
                 output = output_buffer.getvalue().strip()
                 return output if output else "Execution completed with no output."
-
             except Exception as e:
                 return f"An error occurred during code execution: {e}"
 
@@ -570,42 +443,22 @@ print("The footfall in Al Turaif on 1st of October 2023 is:", footfall)
         else:
             exec_result = Execute(The_Code)
             Content = exec_result
-
         return f"{Content}\n\nSource: Python.\nThe code:\n\n{The_Code}"
-
-    # -------------------------------------------------------------------------
-    # Invalid Path
-    # -------------------------------------------------------------------------
     else:
         return path
-
 
 # ==============================
 # Run the full code:
 # ==============================
-
-
-
 def Ask_Question(question):
     global chat_history
-    
-    # 1) Append user's question
     chat_history.append(f"User: {question}")
-    
-    # 2) Calculate pairs PROPERLY
-    number_of_messages = 10  # Total messages  of both user and assisstant
-    max_pairs = number_of_messages // 2  # pairs to retain
+    number_of_messages = 10
+    max_pairs = number_of_messages // 2
     max_entries = max_pairs * 2
-    
-    # 3) Generate answer
     path_decision = Path_LLM(question)
     answer = run_path(path_decision, question)
-    
-    # 4) Append assistant's answer
     chat_history.append(f"Assistant: {answer}")
-    
-    # 5) FINAL truncation (after both messages are added)
-    chat_history = chat_history[-max_entries:]  # Now ensures pairs stay together
-
+    chat_history = chat_history[-max_entries:]
     Answer = f"{answer}"
     return Answer
