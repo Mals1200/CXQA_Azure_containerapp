@@ -39,56 +39,66 @@ def ask():
     
     question = data['question']
     answer = Ask_Question(question)
-    
+
     # Creating HTML for collapsible sections
     answer_html = f"""
-    <div>
-        <p>{answer}</p>
-        <button type="button" class="collapsible">Show Source</button>
-        <div class="content">
-            <p><strong>Source:</strong> {answer.split('Source:')[0]}</p>
-            <p><strong>Top 5 Results:</strong> {answer.split('Source:')[1]}</p>
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Response</title>
+        <style>
+            .collapsible {{
+                background-color: #777;
+                color: white;
+                cursor: pointer;
+                padding: 10px;
+                width: 100%;
+                border: none;
+                text-align: left;
+                outline: none;
+                font-size: 15px;
+            }}
+
+            .active, .collapsible:hover {{
+                background-color: #555;
+            }}
+
+            .content {{
+                padding: 0 18px;
+                display: none;
+                overflow: hidden;
+                background-color: #f1f1f1;
+            }}
+        </style>
+    </head>
+    <body>
+        <div>
+            <p>{answer}</p>
+            <button type="button" class="collapsible">Show Source</button>
+            <div class="content">
+                <p><strong>Source:</strong> {answer.split('Source:')[0]}</p>
+                <p><strong>Top 5 Results:</strong> {answer.split('Source:')[1]}</p>
+            </div>
         </div>
-    </div>
 
-    <script>
-        var coll = document.getElementsByClassName("collapsible");
-        for (var i = 0; i < coll.length; i++) {{
-            coll[i].addEventListener("click", function() {{
-                this.classList.toggle("active");
-                var content = this.nextElementSibling;
-                if (content.style.display === "block") {{
-                    content.style.display = "none";
-                }} else {{
-                    content.style.display = "block";
-                }}
-            }});
-        }}
-    </script>
-    <style>
-        .collapsible {{
-            background-color: #777;
-            color: white;
-            cursor: pointer;
-            padding: 10px;
-            width: 100%;
-            border: none;
-            text-align: left;
-            outline: none;
-            font-size: 15px;
-        }}
-
-        .active, .collapsible:hover {{
-            background-color: #555;
-        }}
-
-        .content {{
-            padding: 0 18px;
-            display: none;
-            overflow: hidden;
-            background-color: #f1f1f1;
-        }}
-    </style>
+        <script>
+            var coll = document.getElementsByClassName("collapsible");
+            for (var i = 0; i < coll.length; i++) {{
+                coll[i].addEventListener("click", function() {{
+                    this.classList.toggle("active");
+                    var content = this.nextElementSibling;
+                    if (content.style.display === "block") {{
+                        content.style.display = "none";
+                    }} else {{
+                        content.style.display = "block";
+                    }}
+                }});
+            }}
+        </script>
+    </body>
+    </html>
     """
     return render_template_string(answer_html)
 
