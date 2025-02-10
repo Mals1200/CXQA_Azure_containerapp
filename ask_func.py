@@ -15,13 +15,14 @@ from azure.core.credentials import AzureKeyCredential
 from dotenv import load_dotenv
 from functools import lru_cache
 
+
 # Suppress Azure SDK's http_logging_policy logs:
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
 
 # Optionally, suppress all Azure logs at once:
 logging.getLogger("azure").setLevel(logging.WARNING)
 
-chat_history = []  # Define the global variable
+chat_history = [] # Define the global variable
 
 # =====================================
 # Streaming Helper Function
@@ -59,6 +60,8 @@ def stream_azure_chat_completion(endpoint, headers, payload, print_stream=False)
             print()
     return final_text
 
+
+
 # =====================================
 # check question path (Index or Python)
 # =====================================
@@ -70,6 +73,7 @@ def Path_LLM(question):
     If out of scope, returns "This is outside of my scope, may I help you with anything else?".
     Uses streaming, but does not print to console, returning the final text.
     """
+
     import requests
     import json
 
@@ -131,6 +135,7 @@ Chat_history:
 {chat_history}
 """
 
+
     headers = {
         "Content-Type": "application/json",
         "api-key": LLM_API_KEY
@@ -188,6 +193,8 @@ Chat_history:
     except Exception as e:
         return f"Error: {str(e)}"
 
+
+
 # ==============================================
 # Run path:
 # 1) if index: retrieve info, use llm to answer
@@ -195,6 +202,7 @@ Chat_history:
 # ==============================================
 
 # Global variable that will store the final content or answer
+
 Content = None
 
 def run_path(path: str, question: str = ""):
@@ -245,6 +253,7 @@ Indexed Information:
 Chat_history:
 {chat_history}
 """
+
 
         headers = {
             "Content-Type": "application/json",
@@ -315,6 +324,7 @@ self:
   asset_id:
     azureml://locations/eastus/workspaces/5d74a98c-1fc6-4567-8545-2632b489bd0b/data/cxqa-ind-v2/versions/1
 """
+
         # ==============================
         # Additional Parameters
         # ==============================
@@ -383,7 +393,7 @@ self:
         retrieved_info_str = "\n\n---\n\n".join(str(item) for item in ind_data)
         final_answer = Index_LLM(question, retrieved_info_str)
         Content = final_answer
-        return f"{Content}\n\nSource: Index.\nThe Documents:\n\n{retrieved_info_str}"
+        return  f"{Content}\n\nSource: Index.\nThe Documents:\n\n{retrieved_info_str}"
 
     # -------------------------------------------------------------------------
     # PYTHON PATH
@@ -416,6 +426,7 @@ Tickets.xlsx: {'Date': 'datetime64[ns]', 'Number of tickets': 'int64', 'revenue'
 Top2Box Summary.xlsx: {'Month': 'datetime64[ns]', 'Type': 'object', 'Top2Box scores/ rating': 'float64'},
 Total Landscape areas and quantities.xlsx: {'Assets': 'object', 'Unnamed: 1': 'object', 'Unnamed: 2': 'object', 'Unnamed: 3': 'object'},
 """
+
             sample = """
 Al-Bujairy Terrace Footfalls.xlsx: [{'Date': "Timestamp('2023-01-01 00:00:00')", 'Footfalls': 2950}, {'Date': "Timestamp('2023-01-02 00:00:00')", 'Footfalls': 2864}, {'Date': "Timestamp('2023-01-03 00:00:00')", 'Footfalls': 4366}],
 Al-Turaif Footfalls.xlsx: [{'Date': "Timestamp('2023-06-01 00:00:00')", 'Footfalls': 694}, {'Date': "Timestamp('2023-06-02 00:00:00')", 'Footfalls': 1862}, {'Date': "Timestamp('2023-06-03 00:00:00')", 'Footfalls': 1801}],
@@ -431,6 +442,7 @@ Tickets.xlsx: [{'Date': "Timestamp('2023-01-01 00:00:00')", 'Number of tickets':
 Top2Box Summary.xlsx: [{'Month': "Timestamp('2024-01-01 00:00:00')", 'Type': 'Bujairi Terrace/ Diriyah  offering', 'Top2Box scores/ rating': 0.669449081803}, {'Month': "Timestamp('2024-01-01 00:00:00')", 'Type': 'Eating out experience', 'Top2Box scores/ rating': 0.7662337662338}, {'Month': "Timestamp('2024-01-01 00:00:00')", 'Type': 'Entrance to Bujairi Terrace', 'Top2Box scores/ rating': 0.7412353923205}],
 Total Landscape areas and quantities.xlsx: [{'Assets': 'SN', 'Unnamed: 1': 'Location', 'Unnamed: 2': 'Unit', 'Unnamed: 3': 'Quantity'}, {'Assets': 'Bujairi, Turaif Gardens, and Terraces', 'Unnamed: 1': nan, 'Unnamed: 2': nan, 'Unnamed: 3': nan}, {'Assets': '\xa0A', 'Unnamed: 1': 'Turaif Gardens', 'Unnamed: 2': nan, 'Unnamed: 3': nan}],
 """
+
             system_prompt = f"""
 You are a python expert. Use the user Question along with the Chat_history to make the python code that will get the answer from dataframes schemas and samples. 
 Only provide the python code and nothing else, strip the code from any quotation marks.
@@ -477,6 +489,7 @@ footfall = df_filtered['Footfalls'].iloc[0]
 
 print("The footfall in Al Turaif on 1st of October 2023 is:", footfall)
 """
+
             headers = {
                 "Content-Type": "application/json",
                 "api-key": LLM_API_KEY
@@ -490,6 +503,7 @@ print("The footfall in Al Turaif on 1st of October 2023 is:", footfall)
                 "temperature": 0.7,
                 "stream": True  # enable streaming
             }
+
             try:
                 code_streamed = stream_azure_chat_completion(LLM_ENDPOINT, headers, payload)
                 code_result = code_streamed.strip()
@@ -565,6 +579,13 @@ print("The footfall in Al Turaif on 1st of October 2023 is:", footfall)
     else:
         return path
 
+
+# ==============================
+# Run the full code:
+# ==============================
+
+
+
 def Ask_Question(question):
     global chat_history
     
@@ -585,6 +606,6 @@ def Ask_Question(question):
     
     # 5) FINAL truncation (after both messages are added)
     chat_history = chat_history[-max_entries:]  # Now ensures pairs stay together
-    
+
     Answer = f"{answer}"
     return Answer
