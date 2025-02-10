@@ -16,16 +16,16 @@ from botbuilder.schema import Activity
 
 app = Flask(__name__)
 
-# Read Bot credentials from ENV
+# Read Bot credentials from environment variables
 MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
 MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 
-# Create settings & adapter for Bot
+# Create settings & adapter for the Bot
 adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
 
 # =========================
-# Endpoints
+# API Endpoints
 # =========================
 @app.route('/', methods=['GET'])
 def home():
@@ -47,7 +47,7 @@ def messages():
     # Deserialize incoming Activity
     body = request.json
     activity = Activity().deserialize(body)
-    # Grab the Authorization header (for Bot Framework auth)
+    # Grab the Authorization header for Bot Framework auth
     auth_header = request.headers.get("Authorization", "")
     loop = asyncio.new_event_loop()
     try:
@@ -60,9 +60,7 @@ def messages():
 
 async def _bot_logic(turn_context: TurnContext):
     """
-    This async function handles the incoming user message and sends back a reply.
-    If the answer contains a source section (delimited by "\n\nSource:"), it sends an Adaptive Card
-    with a "Show Source" button to toggle the display of the extra details.
+    Processes the incoming user message and sends back an Adaptive Card if the answer includes a source.
     """
     user_message = turn_context.activity.text or ""
     answer = Ask_Question(user_message)
@@ -73,7 +71,7 @@ async def _bot_logic(turn_context: TurnContext):
         main_answer = parts[0].strip()
         source_details = parts[1].strip()
         
-        # Build an Adaptive Card with a hidden TextBlock for the source details.
+        # Build an Adaptive Card with a hidden TextBlock for source details.
         adaptive_card = {
             "type": "AdaptiveCard",
             "body": [
@@ -111,7 +109,6 @@ async def _bot_logic(turn_context: TurnContext):
         )
         await turn_context.send_activity(message)
     else:
-        # If there is no source section, send a plain text message.
         await turn_context.send_activity(Activity(type="message", text=answer))
 
 # =========================
