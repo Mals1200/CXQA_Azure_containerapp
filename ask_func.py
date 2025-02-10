@@ -77,11 +77,11 @@ def Path_LLM(question):
     import requests
     import json
 
-    # Azure OpenAI Configuration - using your fake credentials:
-    LLM_DEPLOYMENT_NAME = "gpt-4o"
+    # Azure OpenAI Configuration - using your specified credentials:
+    LLM_DEPLOYMENT_NAME = "gpt-4o-3"
     LLM_ENDPOINT = (
         "https://cxqaazureaihub2358016269.openai.azure.com/"
-        "openai/deployments/gpt-4o/chat/completions?api-version=2024-08-01-preview"
+        "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
     )
     LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
 
@@ -226,10 +226,10 @@ def run_path(path: str, question: str = ""):
         If the answer is not available reply with "No Information was Found".
         If a greeting is received, reply back with a greeting and "How may I assist you?".
         """
-        LLM_DEPLOYMENT_NAME = "gpt-4o"
+        LLM_DEPLOYMENT_NAME = "gpt-4o-3"
         LLM_ENDPOINT = (
             "https://cxqaazureaihub2358016269.openai.azure.com/"
-            "openai/deployments/gpt-4o/chat/completions?api-version=2024-08-01-preview"
+            "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
         )
         LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
 
@@ -404,10 +404,10 @@ self:
             Generates Python code to answer the user's question based on provided data schemas and samples
             using Azure OpenAI.
             """
-            LLM_DEPLOYMENT_NAME = "gpt-4o"
+            LLM_DEPLOYMENT_NAME = "gpt-4o-3"
             LLM_ENDPOINT = (
                 "https://cxqaazureaihub2358016269.openai.azure.com/"
-                "openai/deployments/gpt-4o/chat/completions?api-version=2024-08-01-preview"
+                "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
             )
             LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
 
@@ -423,8 +423,6 @@ Parking.xlsx: {'Date': 'datetime64[ns]', 'Valet Volume': 'int64', 'Valet Revenue
 Qualitative Comments.xlsx: {'Open Ended': 'object'},
 Tenants Violations.xlsx: {'Unnamed: 0': 'object', 'Unnamed: 1': 'object'},
 Tickets.xlsx: {'Date': 'datetime64[ns]', 'Number of tickets': 'int64', 'revenue': 'int64', 'attendnace': 'int64', 'Reservation Attendnace': 'int64', 'Pass Attendance': 'int64', 'Male attendance': 'int64', 'Female attendance': 'int64', 'Rebate value': 'float64', 'AM Tickets': 'int64', 'PM Tickets': 'int64', 'Free tickets': 'int64', 'Paid tickets': 'int64', 'Free tickets %': 'float64', 'Paid tickets %': 'float64', 'AM Tickets %': 'float64', 'PM Tickets %': 'float64', 'Rebate Rate V 55': 'float64', 'Revenue  v2': 'int64'},
-Top2Box Summary.xlsx: {'Month': 'datetime64[ns]', 'Type': 'object', 'Top2Box scores/ rating': 'float64'},
-Total Landscape areas and quantities.xlsx: {'Assets': 'object', 'Unnamed: 1': 'object', 'Unnamed: 2': 'object', 'Unnamed: 3': 'object'},
 """
 
             sample = """
