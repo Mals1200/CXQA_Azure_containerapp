@@ -1,6 +1,6 @@
 import os
 import asyncio
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, Response
 import requests
 
 # Your existing Ask_Question function (imported from ask_func.py)
@@ -40,67 +40,61 @@ def ask():
     question = data['question']
     answer = Ask_Question(question)
 
-    # Create HTML with collapsible sections
-    answer_html = f"""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Response</title>
-        <style>
-            .collapsible {{
-                background-color: #777;
-                color: white;
-                cursor: pointer;
-                padding: 10px;
-                width: 100%;
-                border: none;
-                text-align: left;
-                outline: none;
-                font-size: 15px;
-            }}
-
-            .active, .collapsible:hover {{
-                background-color: #555;
-            }}
-
-            .content {{
-                padding: 0 18px;
-                display: none;
-                overflow: hidden;
-                background-color: #f1f1f1;
-            }}
-        </style>
-    </head>
-    <body>
-        <div>
-            <p>{answer}</p>
-            <button type="button" class="collapsible">Show Source</button>
-            <div class="content">
-                <p><strong>Source:</strong> {answer.split('Source:')[0]}</p>
-                <p><strong>Top 5 Results:</strong> {answer.split('Source:')[1]}</p>
-            </div>
+    # Modify the answer to include collapsible sections
+    html_answer = f"""
+    <div>
+        <p>{answer}</p>
+        <br>
+        <button class="collapsible">Source (Python/Index)</button>
+        <div class="content">
+            <pre>{answer.split('Source: ')[-1].split('.\nThe code:')[0]}</pre>
         </div>
-
-        <script>
-            var coll = document.getElementsByClassName("collapsible");
-            for (var i = 0; i < coll.length; i++) {{
-                coll[i].addEventListener("click", function() {{
-                    this.classList.toggle("active");
-                    var content = this.nextElementSibling;
-                    if (content.style.display === "block") {{
-                        content.style.display = "none";
-                    }} else {{
-                        content.style.display = "block";
-                    }}
-                }});
-            }}
-        </script>
-    </body>
-    </html>
+        
+        <br>
+        <button class="collapsible">Content</button>
+        <div class="content">
+            <pre>{answer.split('.\nThe code:')[-1]}</pre>
+        </div>
+    </div>
+    <style>
+        .collapsible {{
+            background-color: #777;
+            color: white;
+            cursor: pointer;
+            padding: 10px;
+            width: 100%;
+            border: none;
+            text-align: left;
+            outline: none;
+            font-size: 15px;
+        }}
+        .active, .collapsible:hover {{
+            background-color: #555;
+        }}
+        .content {{
+            padding: 0 18px;
+            display: none;
+            overflow: hidden;
+            background-color: #f1f1f1;
+        }}
+    </style>
+    <script>
+        var coll = document.getElementsByClassName("collapsible");
+        for (var i = 0; i < coll.length; i++) {{
+            coll[i].addEventListener("click", function() {{
+                this.classList.toggle("active");
+                var content = this.nextElementSibling;
+                if (content.style.display === "block") {{
+                    content.style.display = "none";
+                }} else {{
+                    content.style.display = "block";
+                }}
+            }});
+        }}
+    </script>
     """
-    return render_template_string(answer_html)
+    
+    return jsonify({'answer': html_answer})
 
 # =========================
 # Bot Framework endpoint
