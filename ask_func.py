@@ -15,7 +15,7 @@ from azure.core.credentials import AzureKeyCredential
 from dotenv import load_dotenv
 from functools import lru_cache
 
-# Suppress Azure SDK's http_logging_policy logs:
+# Suppress Azure SDK logs:
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
 logging.getLogger("azure").setLevel(logging.WARNING)
 
@@ -26,8 +26,7 @@ chat_history = []  # Global chat history
 # =====================================
 def stream_azure_chat_completion(endpoint, headers, payload, print_stream=False):
     """
-    A helper function to stream the Azure OpenAI response token by token
-    and return the concatenated text.
+    Streams the Azure OpenAI response token by token and returns the concatenated text.
     """
     with requests.post(endpoint, headers=headers, json=payload, stream=True) as response:
         response.raise_for_status()
@@ -41,9 +40,7 @@ def stream_azure_chat_completion(endpoint, headers, payload, print_stream=False)
                         break
                     try:
                         data_json = json.loads(data_str)
-                        if ("choices" in data_json 
-                                and data_json["choices"]
-                                and "delta" in data_json["choices"][0]):
+                        if ("choices" in data_json and data_json["choices"] and "delta" in data_json["choices"][0]):
                             content_piece = data_json["choices"][0]["delta"].get("content", "")
                             if print_stream:
                                 print(content_piece, end="", flush=True)
@@ -59,13 +56,16 @@ def stream_azure_chat_completion(endpoint, headers, payload, print_stream=False)
 # =====================================
 def Path_LLM(question):
     """
-    Decides whether the user’s question can be answered using the datafiles
-    (answer = "Python") or the knowledge base (answer = "Index").
+    Uses Azure OpenAI to decide which processing path to take.
+    It will return exactly one of the following strings:
+      - "Python" (if the question should be answered using the data files)
+      - "Index" (if the question does not match any dataset)
+      - "Hello! How may I assist you?" (if the user greets)
+      - "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?" (if the question is empty and chat history is empty)
     """
     import requests
     import json
 
-    # Azure OpenAI configuration
     LLM_DEPLOYMENT_NAME = "gpt-4o"
     LLM_ENDPOINT = (
         "https://cxqaazureaihub2358016269.openai.azure.com/"
@@ -73,45 +73,45 @@ def Path_LLM(question):
     )
     LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
 
-    # Hardcoded tables
     Tables = """
 1) "Al-Bujairy Terrace Footfalls.xlsx", with the following tables:
-   -Date: datetime64[ns], Footfalls: int64
+   - Date: datetime64[ns], Footfalls: int64
 2) "Al-Turaif Footfalls.xlsx", with the following tables:
-   -Date: datetime64[ns], Footfalls: int64
+   - Date: datetime64[ns], Footfalls: int64
 3) "Complaints.xlsx", with the following tables:
-   -Created On: datetime64[ns], Incident Category: object, Status: object, Resolved On Date(Local): object, Incident Description: object, Resolution: object
+   - Created On: datetime64[ns], Incident Category: object, Status: object, Resolved On Date(Local): object, Incident Description: object, Resolution: object
 4) "Duty manager log.xlsx", with the following tables:
-   -DM NAME: object, Date: datetime64[ns], Shift: object, Issue: object, Department: object, Team: object, Incident: object, Remark: object, Status: object, ETA: object, Days: float64
+   - DM NAME: object, Date: datetime64[ns], Shift: object, Issue: object, Department: object, Team: object, Incident: object, Remark: object, Status: object, ETA: object, Days: float64
 5) "Food and Beverages (F&b) Sales.xlsx", with the following tables:
-   -Restaurant name: object, Category: object, Date: datetime64[ns], Covers: float64, Gross Sales: float64
+   - Restaurant name: object, Category: object, Date: datetime64[ns], Covers: float64, Gross Sales: float64
 6) "Meta-Data.xlsx", with the following tables:
-   -Visitation: object, Attendance: object, Visitors: object, Guests: object, Footfalls: object, Unnamed: 5: object
+   - Visitation: object, Attendance: object, Visitors: object, Guests: object, Footfalls: object, Unnamed: 5: object
 7) "PE Observations.xlsx", with the following tables:
-   -Unnamed: 0: object, Unnamed: 1: object
+   - Unnamed: 0: object, Unnamed: 1: object
 8) "Parking.xlsx", with the following tables:
-   -Date: datetime64[ns], Valet Volume: int64, Valet Revenue: int64, Valet Utilization: float64, BCP Revenue: object, BCP Volume: int64, BCP Utilization: float64, SCP Volume: int64, SCP Revenue: int64, SCP Utilization: float64
+   - Date: datetime64[ns], Valet Volume: int64, Valet Revenue: int64, Valet Utilization: float64, BCP Revenue: object, BCP Volume: int64, BCP Utilization: float64, SCP Volume: int64, SCP Revenue: int64, SCP Utilization: float64
 9) "Qualitative Comments.xlsx", with the following tables:
-   -Open Ended: object
+   - Open Ended: object
 10) "Tenants Violations.xlsx", with the following tables:
-   -Unnamed: 0: object, Unnamed: 1: object
+   - Unnamed: 0: object, Unnamed: 1: object
 11) "Tickets.xlsx", with the following tables:
-   -Date: datetime64[ns], Number of tickets: int64, revenue: int64, attendnace: int64, Reservation Attendnace: int64, Pass Attendance: int64, Male attendance: int64, Female attendance: int64, Rebate value: float64, AM Tickets: int64, PM Tickets: int64, Free tickets: int64, Paid tickets: int64, Free tickets %: float64, Paid tickets %: float64, AM Tickets %: float64, PM Tickets %: float64, Rebate Rate V 55: float64, Revenue  v2: int64
+   - Date: datetime64[ns], Number of tickets: int64, revenue: int64, attendnace: int64, Reservation Attendnace: int64, Pass Attendance: int64, Male attendance: int64, Female attendance: int64, Rebate value: float64, AM Tickets: int64, PM Tickets: int64, Free tickets: int64, Paid tickets: int64, Free tickets %: float64, Paid tickets %: float64, AM Tickets %: float64, PM Tickets %: float64, Rebate Rate V 55: float64, Revenue  v2: int64
 12) "Top2Box Summary.xlsx", with the following tables:
-   -Month: datetime64[ns], Type: object, Top2Box scores/ rating: float64
+   - Month: datetime64[ns], Type: object, Top2Box scores/ rating: float64
 13) "Total Landscape areas and quantities.xlsx", with the following tables:
-   -Assets: object, Unnamed: 1: object, Unnamed: 2: object, Unnamed: 3: object
+   - Assets: object, Unnamed: 1: object, Unnamed: 2: object, Unnamed: 3: object
     """
-    # Construct the prompt
+
+    # --- Modified prompt ---
     prompt = f"""
 You are a decision-making assistant. You have access to a list of data files (with their columns) below.
 
-**Rules**:
-1. If the user’s question can be answered using the listed data files, respond with **"Python"**.
-2. If the user’s input is a greeting, respond with **"Hello! How may I assist you?"**.
-3. If the answer is an **empty string** and chat history is also empty, respond with:
-   **"Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"**.
-4. If the question **does NOT match any dataset**, respond with **"Index"**.
+**Instructions**:
+Return exactly one of the following responses (and nothing else):
+  - "Python" if the user's question can be answered using the provided data files.
+  - "Index" if the user's question does not match any dataset.
+  - "Hello! How may I assist you?" if the user's input is a greeting.
+  - "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?" if the question is empty and chat history is empty.
 
 User question:
 {question}
@@ -127,63 +127,44 @@ Chat_history:
         "Content-Type": "application/json",
         "api-key": LLM_API_KEY
     }
-
     payload = {
         "messages": [
             {"role": "system", "content": prompt},
             {"role": "user", "content": question}
         ],
-        "max_tokens": 100,
+        "max_tokens": 20,
         "temperature": 0.0,
         "stream": True
     }
 
-    def stream_azure_chat_completion(endpoint, headers, payload):
-        with requests.post(endpoint, headers=headers, json=payload, stream=True) as response:
-            response.raise_for_status()
-            final_text = ""
-            for line in response.iter_lines():
-                if line:
-                    line_str = line.decode("utf-8", errors="ignore").strip()
-                    if line_str.startswith("data: "):
-                        data_str = line_str[len("data: "):]
-                        if data_str == "[DONE]":
-                            break
-                        try:
-                            data_json = json.loads(data_str)
-                            if (
-                                "choices" in data_json
-                                and data_json["choices"]
-                                and "delta" in data_json["choices"][0]
-                            ):
-                                content_piece = data_json["choices"][0]["delta"].get("content", "")
-                                final_text += content_piece
-                        except json.JSONDecodeError:
-                            pass
-            return final_text
-
     try:
         streamed_answer = stream_azure_chat_completion(LLM_ENDPOINT, headers, payload)
         answer = streamed_answer.strip()
-        valid_responses = [
-            "Python",
-            "Index",
-            "Hello! How may I assist you?",
-            "This is outside of my scope, may I help you with anything else regarding CXQA files?",
-            "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"
-        ]
-        return answer if answer in valid_responses else "Error"
+        print("DEBUG - LLM response:", repr(answer))
+        # Normalize the response (case-insensitive)
+        answer_lower = answer.lower()
+        if answer_lower == "python".lower():
+            answer = "Python"
+        elif answer_lower == "index".lower():
+            answer = "Index"
+        elif answer_lower == "hello! how may i assist you?".lower():
+            answer = "Hello! How may I assist you?"
+        elif answer_lower == "hello! i'm the cxqa ai assistant. i'm here to help you. what would you like to know today?".lower():
+            answer = "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"
+        else:
+            answer = "Error"
+        return answer
     except Exception as e:
         return f"Error: {str(e)}"
 
 # ==============================================
-# Run path:
+# Run path (Index or Python)
 # ==============================================
 Content = None
 
 def run_path(path: str, question: str = ""):
     """
-    Runs either the "Index" or "Python" path and stores the result in the global 'Content'.
+    Based on the decision in Path_LLM, runs either the "Index" or "Python" path.
     """
     global Content
 
@@ -215,12 +196,10 @@ Indexed Information:
 Chat_history:
 {chat_history}
 """
-
         headers = {
             "Content-Type": "application/json",
             "api-key": LLM_API_KEY
         }
-
         payload = {
             "messages": [
                 {"role": "system", "content": prompt},
@@ -230,7 +209,6 @@ Chat_history:
             "temperature": 0.7,
             "stream": True
         }
-
         try:
             streamed_answer = stream_azure_chat_completion(LLM_ENDPOINT, headers, payload)
             return streamed_answer
@@ -280,7 +258,6 @@ self:
 """
         query_type = "Hybrid (vector + keyword)"
         top_k = 4
-
         SEARCH_SERVICE_NAME = "cxqa-azureai-search"
         SEARCH_ENDPOINT = f"https://{SEARCH_SERVICE_NAME}.search.windows.net"
         INDEX_NAME = "cxqa-ind-v6"
@@ -325,9 +302,7 @@ self:
                 return []
 
         results = perform_search(question, top=top_k)
-        ind_data = []
-        for result in results:
-            ind_data.append(result["content"])
+        ind_data = [result["content"] for result in results]
         Content = ind_data
         retrieved_info_str = "\n\n---\n\n".join(str(item) for item in ind_data)
         final_answer = Index_LLM(question, retrieved_info_str)
@@ -404,7 +379,6 @@ Total Landscape areas and quantities.xlsx: [{'Assets': 'SN', 'Unnamed: 1': 'Loca
             )
             container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
             target_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
-
             try:
                 blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
                 container_client = blob_service_client.get_container_client(container_name)
@@ -447,9 +421,9 @@ Total Landscape areas and quantities.xlsx: [{'Assets': 'SN', 'Unnamed: 1': 'Loca
     else:
         return path
 
-# ==============================
-# Run the full code:
-# ==============================
+# =====================================
+# Run full code (Ask_Question)
+# =====================================
 def Ask_Question(question):
     global chat_history
     chat_history.append(f"User: {question}")
