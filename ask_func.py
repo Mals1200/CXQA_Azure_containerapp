@@ -120,9 +120,8 @@ You are a decision-making assistant. You have access to a list of data files (wi
 **Rules**:
 1. If the user’s question along with the Chat_history can be answered using the listed data files, respond with **"Python"**.
 2. If the user’s input is a greeting, respond with **"Hello! How may I assist you?"**.
-3. If the answer is a a greeting while the chat_history is empty, respond with: **"Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"** otherwise respond with **"Hello! How may I assist you?"**.
+3. If the answer is an **empty string** and chat history is also empty, respond with: **"Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"**.
 4. If the question **does NOT match any dataset**, respond with **"Index"**.
-5. If you get an empy string respond with **""**.
 
 User question:
 {question}
@@ -184,8 +183,8 @@ Chat_history:
         valid_responses = [
             "Python",
             "Index",
-            "Hello! How may I assist you?",
-            "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"
+            "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?",
+            "Hello! How may I assist you?"
         ]
         return answer if answer in valid_responses else "Error(L1)"
     except Exception as e:
