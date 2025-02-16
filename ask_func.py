@@ -14,7 +14,7 @@ from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
 from dotenv import load_dotenv
 from functools import lru_cache
-
+import csv  # for potential CSV-related handling in memory if needed
 
 # Suppress Azure SDK's http_logging_policy logs:
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
@@ -59,7 +59,6 @@ def stream_azure_chat_completion(endpoint, headers, payload, print_stream=False)
         if print_stream:
             print()
     return final_text
-
 
 
 # =====================================
@@ -119,7 +118,7 @@ def Path_LLM(question):
 You are a decision-making assistant. You have access to a list of data files (with their columns) below.
 
 **Rules**:
-1. If the user’s question can be answered using the listed data files, respond with **"Python"**.
+1. If the user’s question along with the Chat_history can be answered using the listed data files, respond with **"Python"**.
 2. If the user’s input is a greeting, respond with **"Hello! How may I assist you?"**.
 3. If the answer is an **empty string** and chat history is also empty, respond with:
    **"Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"**.
@@ -186,13 +185,11 @@ Chat_history:
             "Python",
             "Index",
             "Hello! How may I assist you?",
-            "This is outside of my scope, may I help you with anything else regarding CXQA files?",
             "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"
         ]
-        return answer if answer in valid_responses else "Error"
+        return answer if answer in valid_responses else "Error(L1)"
     except Exception as e:
         return f"Error: {str(e)}"
-
 
 
 # ==============================================
@@ -200,10 +197,7 @@ Chat_history:
 # 1) if index: retrieve info, use llm to answer
 # 2) if python: llm generates code, execute
 # ==============================================
-
-# Global variable that will store the final content or answer
-
-Content = None
+Content = None  # Global variable that will store the final content or answer
 
 def run_path(path: str, question: str = ""):
     """
@@ -211,7 +205,7 @@ def run_path(path: str, question: str = ""):
     runs either the "Index" code or the "Python" code.
     It stores the final result in a global variable called 'Content'.
     """
-    global Content  # Declare that we want to modify the module-level 'Content'
+    global Content  # declare that we want to modify the module-level 'Content'
 
     # -------------------------------------------------------------------------
     # Define the LLM function used *only* in the Index path:
@@ -254,7 +248,6 @@ Chat_history:
 {chat_history}
 """
 
-
         headers = {
             "Content-Type": "application/json",
             "api-key": LLM_API_KEY
@@ -274,7 +267,7 @@ Chat_history:
             # Stream the answer:
             streamed_answer = stream_azure_chat_completion(LLM_ENDPOINT, headers, payload)
             return streamed_answer
-        except requests.exceptions.HTTPError as http_err:
+        except requests.exceptions.HTTPError:
             return "An error occurred while processing your request."
         except Exception:
             return "An unexpected error occurred."
@@ -283,57 +276,10 @@ Chat_history:
     # INDEX PATH
     # -------------------------------------------------------------------------
     if path == "Index":
-        # ==============================
-        # Embeddings and Indexing Configuration (mlindex_content)
-        # ==============================
-        mlindex_content = """
-embeddings:
-  api_base: https://cxqaazureaihub2358016269.openai.azure.com
-  api_type: azure
-  api_version: 2023-07-01-preview
-  batch_size: '16'
-  connection:
-    id: /subscriptions/f7102a7d-f032-4b41-b58c-4aae6daf6146/resourceGroups/cxqa_resource_group/providers/Microsoft.MachineLearningServices/workspaces/cxqa_genai_project/connections/cxqaazureaihub2358016269_aoai
-    connection_type: workspace_connection
-    deployment: text-embedding-ada-002
-    dimension: 1536
-    file_format_version: '2'
-    kind: open_ai
-    model: text-embedding-ada-002
-    schema_version: '2'
-index:
-  api_version: 2024-05-01-preview
-  connection:
-    id: /subscriptions/f7102a7d-f032-4b41-b58c-4aae6daf6146/resourceGroups/cxqa_resource_group/providers/Microsoft.MachineLearningServices/workspaces/cxqa_genai_project/connections/cxqaazureaisearch
-    connection_type: workspace_connection
-    endpoint: https://cxqa-azureai-search.search.windows.net/
-    engine: azure-sdk
-  field_mapping:
-    content: content
-    embedding: contentVector
-    filename: filepath
-    metadata: meta_json_string
-    title: title
-    url: url
-  index: cxqa-ind-v2
-  kind: acs
-  semantic_configuration_name: azureml-default
-self:
-  path:
-    azureml://subscriptions/f7102a7d-f032-4b41-b58c-4aae6daf6146/resourcegroups/cxqa_resource_group/workspaces/cxqa_genai_project/datastores/workspaceblobstore/paths/azureml/63a0f8ea-2624-471d-a19b-27c568fdf096/index/
-  asset_id:
-    azureml://locations/eastus/workspaces/5d74a98c-1fc6-4567-8545-2632b489bd0b/data/cxqa-ind-v2/versions/1
-"""
+        # Additional parameters
+        top_k = 4  # for the search below
 
-        # ==============================
-        # Additional Parameters
-        # ==============================
-        query_type = "Hybrid (vector + keyword)"  # Could be "Vector" or "Keyword"
-        top_k = 4
-
-        # ==============================
         # Azure Cognitive Search Client Setup
-        # ==============================
         SEARCH_SERVICE_NAME = "cxqa-azureai-search"
         SEARCH_ENDPOINT = f"https://{SEARCH_SERVICE_NAME}.search.windows.net"
         INDEX_NAME = "cxqa-ind-v6"
@@ -356,7 +302,7 @@ self:
                 credential=AzureKeyCredential(ADMIN_API_KEY)
             )
         except Exception as e:
-            raise
+            raise e
 
         def perform_search(query: str, top: int = 5):
             """
@@ -383,13 +329,10 @@ self:
 
         # Separate metadata and data
         ind_data = []
-        ind_meta = []
         for result in results:
             ind_data.append(result["content"])
-            ind_meta.append(result["metadata"])
 
-        Content = ind_data
-
+        # The final content is the joined index results
         retrieved_info_str = "\n\n---\n\n".join(str(item) for item in ind_data)
         final_answer = Index_LLM(question, retrieved_info_str)
         Content = final_answer
@@ -431,16 +374,16 @@ Total Landscape areas and quantities.xlsx: {'Assets': 'object', 'Unnamed: 1': 'o
 Al-Bujairy Terrace Footfalls.xlsx: [{'Date': "Timestamp('2023-01-01 00:00:00')", 'Footfalls': 2950}, {'Date': "Timestamp('2023-01-02 00:00:00')", 'Footfalls': 2864}, {'Date': "Timestamp('2023-01-03 00:00:00')", 'Footfalls': 4366}],
 Al-Turaif Footfalls.xlsx: [{'Date': "Timestamp('2023-06-01 00:00:00')", 'Footfalls': 694}, {'Date': "Timestamp('2023-06-02 00:00:00')", 'Footfalls': 1862}, {'Date': "Timestamp('2023-06-03 00:00:00')", 'Footfalls': 1801}],
 Complaints.xlsx: [{'Created On': "Timestamp('2024-01-01 00:00:00')", 'Incident Category': 'Contact Center Operation', 'Status': 'Resolved', 'Resolved On Date(Local)': datetime.datetime(2024, 1, 1, 0, 0), 'Incident Description': 'Message: السلام عليكم ورحمة الله وبركاته، مساء الخير م', 'Resolution': 'ضيفنا العزيز،نشكر لكم تواصلكم معنافيما يخص طلبكم في فرص التدريب التعاوني يرجى رفع طلبكم عبر موقع هيئة تطوير بوابة الدرعية Career | Diriyah Gate Development Authority (dgda.gov.sa)نتشرف بخدمتكم'}, {'Created On': "Timestamp('2024-01-01 00:00:00')", 'Incident Category': 'Roads and Infrastructure', 'Status': 'Resolved', 'Resolved On Date(Local)': datetime.datetime(2024, 1, 8, 0, 0), 'Incident Description': 'test', 'Resolution': 'test'}, {'Created On': "Timestamp('2024-01-01 00:00:00')", 'Incident Category': 'Security and Safety', 'Status': 'Resolved', 'Resolved On Date(Local)': datetime.datetime(2024, 1, 1, 0, 0), 'Incident Description': 'Test', 'Resolution': 'Test'}],
-Duty manager log.xlsx: [{'DM NAME': 'Abdulrahman Alkanhal', 'Date': "Timestamp('2024-06-01 00:00:00')", 'Shift': 'Morning Shift', 'Issue': 'Hakkassan and WC5', 'Department': 'Operation', 'Team': 'Operation', 'Incident': ' Electricity box in WC5 have water and its under maintenance, its effected hakkasan and WC5 (WC5 closed)', 'Remark': 'FM has been informed ', 'Status': 'Pending', 'ETA': 'Please FM update the ETA', 'Days': nan}, {'DM NAME': 'Abdulrahman Alkanhal', 'Date': "Timestamp('2024-06-01 00:00:00')", 'Shift': 'Morning Shift', 'Issue': 'flamingo', 'Department': 'Operation', 'Team': 'Operation', 'Incident': '\nWe received a massage from flamingo manager regarding to some points needs to be fixed in the restaurant, painting,doors,ropes,canopys,scratch and cracks,varnishing, some of the points been shared to FM before.', 'Remark': 'The pictures been sent to FM', 'Status': 'Pending', 'ETA': 'Please FM update the ETA', 'Days': 7.0}, {'DM NAME': 'Abdulrahman Alkanhal', 'Date': "Timestamp('2024-06-01 00:00:00')", 'Shift': 'Morning Shift', 'Issue': 'Al Habib Hospital', 'Department': 'Operation', 'Team': 'Operation', 'Incident': '7 Minor incidents  ', 'Remark': nan, 'Status': 'Done', 'ETA': nan, 'Days': nan}],
+Duty manager log.xlsx: [{'DM NAME': 'Abdulrahman Alkanhal', 'Date': "Timestamp('2024-06-01 00:00:00')", 'Shift': 'Morning Shift', 'Issue': 'Hakkassan and WC5', 'Department': 'Operation', 'Team': 'Operation', 'Incident': ' Electricity box in WC5 have water and its under maintenance, its effected hakkasan and WC5 (WC5 closed)', 'Remark': 'FM has been informed ', 'Status': 'Pending', 'ETA': 'Please FM update the ETA', 'Days': nan}, {'DM NAME': 'Abdulrahman Alkanhal', 'Date': "Timestamp('2024-06-01 00:00:00')", 'Shift': 'Morning Shift', 'Issue': 'flamingo', 'Department': 'Operation', 'Team': 'Operation', 'Incident': '\\nWe received a massage from flamingo manager regarding to some points needs to be fixed in the restaurant, painting,doors,ropes,canopys,scratch and cracks,varnishing, some of the points been shared to FM before.', 'Remark': 'The pictures been sent to FM', 'Status': 'Pending', 'ETA': 'Please FM update the ETA', 'Days': 7.0}, {'DM NAME': 'Abdulrahman Alkanhal', 'Date': "Timestamp('2024-06-01 00:00:00')", 'Shift': 'Morning Shift', 'Issue': 'Al Habib Hospital', 'Department': 'Operation', 'Team': 'Operation', 'Incident': '7 Minor incidents  ', 'Remark': nan, 'Status': 'Done', 'ETA': nan, 'Days': nan}],
 Food and Beverages (F&b) Sales.xlsx: [{'Restaurant name': 'Angelina', 'Category': 'Casual Dining', 'Date': "Timestamp('2023-08-01 00:00:00')", 'Covers': 195.0, 'Gross Sales': 12536.65383}, {'Restaurant name': 'Angelina', 'Category': 'Casual Dining', 'Date': "Timestamp('2023-08-02 00:00:00')", 'Covers': 169.0, 'Gross Sales': 11309.05671}, {'Restaurant name': 'Angelina', 'Category': 'Casual Dining', 'Date': "Timestamp('2023-08-03 00:00:00')", 'Covers': 243.0, 'Gross Sales': 17058.61479}],
 Meta-Data.xlsx: [{'Visitation': 'Revenue', 'Attendance': 'Income', 'Visitors': 'Sales', 'Guests': 'Gross Sales', 'Footfalls': nan, 'Unnamed: 5': nan}, {'Visitation': 'Utilization', 'Attendance': 'Occupancy', 'Visitors': 'Usage Rate', 'Guests': 'Capacity', 'Footfalls': 'Efficiency', 'Unnamed: 5': nan}, {'Visitation': 'Penetration', 'Attendance': 'Covers rate', 'Visitors': 'Restaurants rate', 'Guests': nan, 'Footfalls': nan, 'Unnamed: 5': nan}],
 PE Observations.xlsx: [{'Unnamed: 0': nan, 'Unnamed: 1': nan}, {'Unnamed: 0': 'Row Labels', 'Unnamed: 1': 'Count of Colleague name'}, {'Unnamed: 0': 'Guest Greetings ', 'Unnamed: 1': 2154}],
 Parking.xlsx: [{'Date': "Timestamp('2023-01-01 00:00:00')", 'Valet Volume': 194, 'Valet Revenue': 29100, 'Valet Utilization': 0.23, 'BCP Revenue': '               -  ', 'BCP Volume': 1951, 'BCP Utilization': 0.29, 'SCP Volume': 0, 'SCP Revenue': 0, 'SCP Utilization': 0.0}, {'Date': "Timestamp('2023-01-02 00:00:00')", 'Valet Volume': 223, 'Valet Revenue': 33450, 'Valet Utilization': 0.27, 'BCP Revenue': '               -  ', 'BCP Volume': 1954, 'BCP Utilization': 0.29, 'SCP Volume': 0, 'SCP Revenue': 0, 'SCP Utilization': 0.0}, {'Date': "Timestamp('2023-01-03 00:00:00')", 'Valet Volume': 243, 'Valet Revenue': 36450, 'Valet Utilization': 0.29, 'BCP Revenue': '               -  ', 'BCP Volume': 2330, 'BCP Utilization': 0.35, 'SCP Volume': 0, 'SCP Revenue': 0, 'SCP Utilization': 0.0}],
 Qualitative Comments.xlsx: [{'Open Ended': 'يفوقو توقعاتي كل شيء رائع'}, {'Open Ended': 'وقليل اسعار التذاكر اجعل الجميع يستمتع بهذه التجربة الرائعة'}, {'Open Ended': 'إضافة كراسي هامة اكثر من المتوفر'}],
-Tenants Violations.xlsx: [{'Unnamed: 0': nan, 'Unnamed: 1': nan}, {'Unnamed: 0': 'Row Labels', 'Unnamed: 1': 'Count of Department\u200b'}, {'Unnamed: 0': 'Lab Test', 'Unnamed: 1': 38}],
+Tenants Violations.xlsx: [{'Unnamed: 0': nan, 'Unnamed: 1': nan}, {'Unnamed: 0': 'Row Labels', 'Unnamed: 1': 'Count of Department\\u200b'}, {'Unnamed: 0': 'Lab Test', 'Unnamed: 1': 38}],
 Tickets.xlsx: [{'Date': "Timestamp('2023-01-01 00:00:00')", 'Number of tickets': 4644, 'revenue': 288050, 'attendnace': 2950, 'Reservation Attendnace': 0, 'Pass Attendance': 0, 'Male attendance': 1290, 'Female attendance': 1660, 'Rebate value': 131017.96, 'AM Tickets': 287, 'PM Tickets': 2663, 'Free tickets': 287, 'Paid tickets': 2663, 'Free tickets %': 0.09728813559322035, 'Paid tickets %': 0.9027118644067796, 'AM Tickets %': 0.09728813559322035, 'PM Tickets %': 0.9027118644067796, 'Rebate Rate V 55': 131017.96, 'Revenue  v2': 288050}, {'Date': "Timestamp('2023-01-02 00:00:00')", 'Number of tickets': 7276, 'revenue': 205250, 'attendnace': 2864, 'Reservation Attendnace': 0, 'Pass Attendance': 0, 'Male attendance': 1195, 'Female attendance': 1669, 'Rebate value': 123698.68, 'AM Tickets': 978, 'PM Tickets': 1886, 'Free tickets': 978, 'Paid tickets': 1886, 'Free tickets %': 0.3414804469273743, 'Paid tickets %': 0.6585195530726257, 'AM Tickets %': 0.3414804469273743, 'PM Tickets %': 0.6585195530726257, 'Rebate Rate V 55': 123698.68, 'Revenue  v2': 205250}, {'Date': "Timestamp('2023-01-03 00:00:00')", 'Number of tickets': 8354, 'revenue': 308050, 'attendnace': 4366, 'Reservation Attendnace': 0, 'Pass Attendance': 0, 'Male attendance': 1746, 'Female attendance': 2620, 'Rebate value': 206116.58, 'AM Tickets': 1385, 'PM Tickets': 2981, 'Free tickets': 1385, 'Paid tickets': 2981, 'Free tickets %': 0.3172240036646816, 'Paid tickets %': 0.6827759963353184, 'AM Tickets %': 0.3172240036646816, 'PM Tickets %': 0.6827759963353184, 'Rebate Rate V 55': 206116.58, 'Revenue  v2': 308050}],
 Top2Box Summary.xlsx: [{'Month': "Timestamp('2024-01-01 00:00:00')", 'Type': 'Bujairi Terrace/ Diriyah  offering', 'Top2Box scores/ rating': 0.669449081803}, {'Month': "Timestamp('2024-01-01 00:00:00')", 'Type': 'Eating out experience', 'Top2Box scores/ rating': 0.7662337662338}, {'Month': "Timestamp('2024-01-01 00:00:00')", 'Type': 'Entrance to Bujairi Terrace', 'Top2Box scores/ rating': 0.7412353923205}],
-Total Landscape areas and quantities.xlsx: [{'Assets': 'SN', 'Unnamed: 1': 'Location', 'Unnamed: 2': 'Unit', 'Unnamed: 3': 'Quantity'}, {'Assets': 'Bujairi, Turaif Gardens, and Terraces', 'Unnamed: 1': nan, 'Unnamed: 2': nan, 'Unnamed: 3': nan}, {'Assets': '\xa0A', 'Unnamed: 1': 'Turaif Gardens', 'Unnamed: 2': nan, 'Unnamed: 3': nan}],
+Total Landscape areas and quantities.xlsx: [{'Assets': 'SN', 'Unnamed: 1': 'Location', 'Unnamed: 2': 'Unit', 'Unnamed: 3': 'Quantity'}, {'Assets': 'Bujairi, Turaif Gardens, and Terraces', 'Unnamed: 1': nan, 'Unnamed: 2': nan, 'Unnamed: 3': nan}, {'Assets': '\\xa0A', 'Unnamed: 1': 'Turaif Gardens', 'Unnamed: 2': nan, 'Unnamed: 3': nan}],
 """
 
             system_prompt = f"""
@@ -452,8 +395,7 @@ Don't give examples, only provide the actual code. If you can't provide the code
 **Rules**:
 1. Only use tables columns that exist, and do not makeup anything. 
 2. Only return pure Python code that is functional and ready to be executed, and including the imports.
-3. Always make code That returns a print statment that answers the question.
-
+3. Always make code That returns a print statement that answers the question.
 
 User question:
 {user_question}
@@ -466,28 +408,6 @@ Dataframes samples:
 
 Chat_history:
 {chat_history}
-
-Example code you should write for questions like "What is the total footfall in Al Turaif on 1st October 2023?":
-
-from datetime import datetime
-
-# Find the file with the relevant data
-filename = 'At-Turaif Footfalls.xlsx'
-
-# Load the data into a pandas dataframe
-df = pd.read_excel(filename)
-
-# Convert the Date column to a datetime object
-df['Date'] = pd.to_datetime(df['Date'])
-
-# Filter the dataframe to only include the relevant date
-date_filter = df['Date'] == datetime(2023, 10, 1)
-df_filtered = df[date_filter]
-
-# Get the footfall for the relevant date
-footfall = df_filtered['Footfalls'].iloc[0]
-
-print("The footfall in Al Turaif on 1st of October 2023 is:", footfall)
 """
 
             headers = {
@@ -564,7 +484,7 @@ print("The footfall in Al Turaif on 1st of October 2023 is:", footfall)
                 return f"An error occurred during code execution: {e}"
 
         The_Code = Generate_Code(question)
-        if The_Code == "404" or The_Code.startswith("Error"):
+        if The_Code == "404" or The_Code.startswith("Error(L1)"):
             Content = "404"
             print("404")
         else:
@@ -583,29 +503,84 @@ print("The footfall in Al Turaif on 1st of October 2023 is:", footfall)
 # ==============================
 # Run the full code:
 # ==============================
-
-
-
 def Ask_Question(question):
     global chat_history
-    
+
     # 1) Append user's question
     chat_history.append(f"User: {question}")
-    
+
     # 2) Calculate pairs PROPERLY
-    number_of_messages = 10  # Total messages  of both user and assisstant
+    number_of_messages = 10  # total messages (user & assistant)
     max_pairs = number_of_messages // 2  # pairs to retain
     max_entries = max_pairs * 2
-    
+
     # 3) Generate answer
     path_decision = Path_LLM(question)
     answer = run_path(path_decision, question)
-    
+
     # 4) Append assistant's answer
     chat_history.append(f"Assistant: {answer}")
-    
-    # 5) FINAL truncation (after both messages are added)
-    chat_history = chat_history[-max_entries:]  # Now ensures pairs stay together
 
+    # 5) FINAL truncation (after both messages are added)
+    chat_history = chat_history[-max_entries:]
+
+    # Prepare final answer for return
     Answer = f"{answer}"
+
+    # -------------------------------------------------------------------------
+    # LOGGING: Save question & answer in a CSV file in Azure Blob (daily file)
+    # -------------------------------------------------------------------------
+
+    # Set up the Blob Service Client for the same container used for data
+    account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
+    sas_token = (
+        "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
+        "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
+        "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
+    )
+    container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
+    blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
+    container_client = blob_service_client.get_container_client(container_name)
+
+    # We'll store logs in the same folder as tabular data (you can adjust as needed)
+    target_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/logs/"
+
+    # Create a daily filename
+    date_str = datetime.now().strftime("%Y_%m_%d")
+    log_filename = f"logs_{date_str}.csv"
+    blob_name = target_folder_path + log_filename
+    blob_client = container_client.get_blob_client(blob_name)
+
+    # 1) Download the existing CSV if it exists
+    try:
+        existing_blob_data = blob_client.download_blob().readall()
+        existing_csv = existing_blob_data.decode("utf-8")
+        lines = existing_csv.strip().split("\n")
+
+        # If the file is empty or missing a header, add one
+        if len(lines) == 0 or not lines[0].startswith("time,question,answer,user_id"):
+            lines = ["time,question,answer,user_id"] 
+    except:
+        # If not existing, create a new list with a header row
+        lines = ["time,question,answer,user_id"] 
+
+    # 2) Append the new record
+    current_time = datetime.now().strftime("%H:%M:%S")
+
+    # Safely handle commas or quotes by wrapping fields in quotes if needed
+    # For simplicity, we just do a naive CSV approach here:
+    row = [
+        current_time,
+        question.replace('"','""'),
+        answer.replace('"','""'),
+        "anonymous"  # or any user ID logic
+    ]
+    # Convert to a CSV line
+    lines.append(",".join(f'"{item}"' for item in row))
+
+    # 3) Re-upload the updated CSV back to blob
+    new_csv_content = "\n".join(lines) + "\n"
+    blob_client.upload_blob(new_csv_content, overwrite=True)
+
+    # -------------------------------------------------------------------------
     return Answer
