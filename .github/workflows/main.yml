@@ -38,7 +38,7 @@ jobs:
             --username ${{ secrets.ACR_USERNAME }} \
             --password ${{ secrets.ACR_PASSWORD }}
 
-      # 5) Deploy the new image to Azure Container Apps
+      # 5) Deploy the new image to Azure Container Apps..
       - name: Deploy to Azure Container Apps
         run: |
           az containerapp update \
