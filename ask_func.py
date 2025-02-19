@@ -50,7 +50,6 @@ TABLES =  """
 13) "Total Landscape areas and quantities.xlsx", with the following tables:
    -Assets: object, Unnamed: 1: object, Unnamed: 2: object, Unnamed: 3: object
 """
-
 SAMPLE_TEXT = """
 Al-Bujairy Terrace Footfalls.xlsx: [{'Date': "Timestamp('2023-01-01 00:00:00')", 'Footfalls': 2950}, {'Date': "Timestamp('2023-01-02 00:00:00')", 'Footfalls': 2864}, {'Date': "Timestamp('2023-01-03 00:00:00')", 'Footfalls': 4366}],
 Al-Turaif Footfalls.xlsx: [{'Date': "Timestamp('2023-06-01 00:00:00')", 'Footfalls': 694}, {'Date': "Timestamp('2023-06-02 00:00:00')", 'Footfalls': 1862}, {'Date': "Timestamp('2023-06-03 00:00:00')", 'Footfalls': 1801}],
@@ -66,7 +65,6 @@ Tickets.xlsx: [{'Date': "Timestamp('2023-01-01 00:00:00')", 'Number of tickets':
 Top2Box Summary.xlsx: [{'Month': "Timestamp('2024-01-01 00:00:00')", 'Type': 'Bujairi Terrace/ Diriyah  offering', 'Top2Box scores/ rating': 0.669449081803}, {'Month': "Timestamp('2024-01-01 00:00:00')", 'Type': 'Eating out experience', 'Top2Box scores/ rating': 0.7662337662338}, {'Month': "Timestamp('2024-01-01 00:00:00')", 'Type': 'Entrance to Bujairi Terrace', 'Top2Box scores/ rating': 0.7412353923205}],
 Total Landscape areas and quantities.xlsx: [{'Assets': 'SN', 'Unnamed: 1': 'Location', 'Unnamed: 2': 'Unit', 'Unnamed: 3': 'Quantity'}, {'Assets': 'Bujairi, Turaif Gardens, and Terraces', 'Unnamed: 1': nan, 'Unnamed: 2': nan, 'Unnamed: 3': nan}, {'Assets': '\\xa0A', 'Unnamed: 1': 'Turaif Gardens', 'Unnamed: 2': nan, 'Unnamed: 3': nan}],
 """
-
 SCHEMA_TEXT = """
 Al-Bujairy Terrace Footfalls.xlsx: {'Date': 'datetime64[ns]', 'Footfalls': 'int64'},
 Al-Turaif Footfalls.xlsx: {'Date': 'datetime64[ns]', 'Footfalls': 'int64'},
@@ -82,10 +80,6 @@ Tickets.xlsx: {'Date': 'datetime64[ns]', 'Number of tickets': 'int64', 'revenue'
 Top2Box Summary.xlsx: {'Month': 'datetime64[ns]', 'Type': 'object', 'Top2Box scores/ rating': 'float64'},
 Total Landscape areas and quantities.xlsx: {'Assets': 'object', 'Unnamed: 1': 'object', 'Unnamed: 2': 'object', 'Unnamed: 3': 'object'},
 """
-
-
-
-
 # -------------------------------------------------------------------
 # Helper: Stream OpenAI from Azure
 # -------------------------------------------------------------------
@@ -116,8 +110,6 @@ def stream_azure_chat_completion(endpoint, headers, payload, print_stream=False)
         if print_stream:
             print()
     return final_text
-
-
 # -------------------------------------------------------------------
 # References
 # -------------------------------------------------------------------
@@ -163,7 +155,6 @@ def tool_1_index_search(user_question, top_k=5):
         return {"top_k": combined}
     except Exception as e:
         return {"top_k": f"Error in Tool1 (Index Search): {str(e)}"}
-
 # -------------------------------------------------------------------
 # Tool 2 (Python)
 # -------------------------------------------------------------------
@@ -409,7 +400,6 @@ Chat_history:
         return "No information was found in the Data. Can I help you with anything else?"
 
     return final_text
-
 # -------------------------------------------------------------------
 # POST-PROCESS: Attach code or top_k if needed
 # -------------------------------------------------------------------
@@ -452,7 +442,6 @@ The Files:
     else:
         # No recognized source or it's "No information" fallback
         return final_text
-
 # -------------------------------------------------------------------
 # Agent
 # -------------------------------------------------------------------
@@ -475,7 +464,6 @@ def agent_answer(user_question):
     # post-process to attach code or files
     final_ans_with_src = post_process_source(final_ans, index_dict, python_dict)
     return final_ans_with_src
-
 # -------------------------------------------------------------------
 # Ask_Question
 # -------------------------------------------------------------------
