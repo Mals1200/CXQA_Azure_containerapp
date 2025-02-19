@@ -508,26 +508,43 @@ def is_greeting_fuzzy(user_input: str) -> bool:
             return True
 
     return False
+    
 def agent_answer(user_question):
-    # greet or empty?
-    if user_question.strip() == "" and len(chat_history) == 0:
+    """
+    1. If user_question is empty string AND chat_history is empty -> special greeting
+    2. If user_question is a greeting (exact or fuzzy) -> short greeting
+    3. Otherwise -> proceed with index & python retrieval and final LLM
+    """
+
+    # 1) Empty string + empty history
+    if user_question.strip() == "" and len(chat_history) < 2:
         return "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"
 
-    greet_list = ["hello", "hi", "hey", "good morning", "good evening", "assalam", "hayo", "hola",
-                  "salam", "alsalam", "alsalamualaikum", "al salam"]
+    # 2) Greeting checks
+    #    2a) Fuzzy greeting
+    if is_greeting_fuzzy(user_question):
+        return "Hello! How may I assist you?"
+
+    #    2b) Exact greeting from greet_list
+    greet_list = [
+        "hello", "hi", "hey", "good morning", 
+        "good evening", "assalam", "hayo", "hola",
+        "salam", "alsalam", "alsalamualaikum", "al salam"
+    ]
     if any(g in user_question.lower() for g in greet_list):
         return "Hello! How may I assist you?"
 
-    # get data
+    # 3) Normal index & python retrieval
     index_dict = tool_1_index_search(user_question)
     python_dict = tool_2_code_run(user_question)
 
-    # final llm merges
+    # 4) Merge final answer
     final_ans = final_answer_llm(user_question, index_dict, python_dict)
 
-    # post-process to attach code or files
+    # 5) Post-process to attach code/files if needed
     final_ans_with_src = post_process_source(final_ans, index_dict, python_dict)
     return final_ans_with_src
+
 
 # -------------------------------------------------------------------
 # Ask_Question
