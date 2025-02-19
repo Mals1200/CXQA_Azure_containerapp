@@ -13,7 +13,6 @@ from azure.storage.blob import BlobServiceClient
 from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
 import csv
-import re
 
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
 logging.getLogger("azure").setLevel(logging.WARNING)
@@ -81,6 +80,7 @@ Tickets.xlsx: {'Date': 'datetime64[ns]', 'Number of tickets': 'int64', 'revenue'
 Top2Box Summary.xlsx: {'Month': 'datetime64[ns]', 'Type': 'object', 'Top2Box scores/ rating': 'float64'},
 Total Landscape areas and quantities.xlsx: {'Assets': 'object', 'Unnamed: 1': 'object', 'Unnamed: 2': 'object', 'Unnamed: 3': 'object'},
 """
+
 # -------------------------------------------------------------------
 # Helper: Stream OpenAI from Azure
 # -------------------------------------------------------------------
@@ -111,6 +111,7 @@ def stream_azure_chat_completion(endpoint, headers, payload, print_stream=False)
         if print_stream:
             print()
     return final_text
+
 
 # -------------------------------------------------------------------
 # References
@@ -300,26 +301,6 @@ def execute_generated_code(code_str):
 
     except Exception as e:
         return f"An error occurred during code execution: {e}"
-        
-def agent_answer(user_question):
-    # greet or empty?
-    if not user_question.strip() and not chat_history:
-        return "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"
-
-    # Our new fuzzy greeting check:
-    if is_greeting_fuzzy(user_question):
-        return "Hello! How may I assist you?"
-
-    # get data
-    index_dict = tool_1_index_search(user_question)
-    python_dict = tool_2_code_run(user_question)
-
-    # final llm merges
-    final_ans = final_answer_llm(user_question, index_dict, python_dict)
-
-    # post-process to attach code or files
-    final_ans_with_src = post_process_source(final_ans, index_dict, python_dict)
-    return final_ans_with_src
 
 # -------------------------------------------------------------------
 # Final LLM: The Agent Summation + Source Decision
@@ -470,81 +451,25 @@ The Files:
 # -------------------------------------------------------------------
 # Agent
 # -------------------------------------------------------------------
-
-def is_greeting_fuzzy(user_input: str) -> bool:
-    """
-    Checks if user_input is 'close' to any of the known greetings,
-    by seeing if at least 85% of the characters in the known greeting
-    occur somewhere in user_input.
-
-    This is a simple, naive approach using regex & character-overlap
-    rather than a true edit distance or Levenshtein approach.
-    """
-    # Strip out non-alphabetic chars from user input
-    user_clean = re.sub(r'[^a-z]', '', user_input.lower())
-    if not user_clean:
-        return False
-
-    # List of known greetings:
-    known_greetings = ["hello", "hi", "hey", "good morning", "good evening", "assalam"]
-
-    for greeting in known_greetings:
-        greeting_clean = re.sub(r'[^a-z]', '', greeting.lower())
-        if not greeting_clean:
-            continue
-
-        # Count how many chars from greeting_clean appear in user_clean
-        overlap = 0
-        for ch in greeting_clean:
-            if ch in user_clean:
-                overlap += 1
-
-        # Calculate ratio of overlap
-        ratio = overlap / len(greeting_clean)
-
-        if ratio >= 0.85:
-            # If at least 85% of the greeting's chars are present, 
-            # consider it "fuzzy matched" to that greeting.
-            return True
-
-    return False
-    
 def agent_answer(user_question):
-    """
-    1. If user_question is empty string AND chat_history is empty -> special greeting
-    2. If user_question is a greeting (exact or fuzzy) -> short greeting
-    3. Otherwise -> proceed with index & python retrieval and final LLM
-    """
-
-    # 1) Empty string + empty history
+    # greet or empty?
     if user_question.strip() == "" and len(chat_history) < 2:
         return "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"
 
-    # 2) Greeting checks
-    #    2a) Fuzzy greeting
-    if is_greeting_fuzzy(user_question):
-        return "Hello! How may I assist you?"
-
-    #    2b) Exact greeting from greet_list
-    greet_list = [
-        "hello", "hi", "hey", "good morning", 
-        "good evening", "assalam", "hayo", "hola",
-        "salam", "alsalam", "alsalamualaikum", "al salam"
-    ]
+    greet_list = ["hello", "hi", "hey", "good morning", "good evening", "assalam", "hayo", "hola", "salam", "alsalam", "alsalamualaikum", "al salam"]
     if any(g in user_question.lower() for g in greet_list):
         return "Hello! How may I assist you?"
 
-    # 3) Normal index & python retrieval
+    # get data
     index_dict = tool_1_index_search(user_question)
     python_dict = tool_2_code_run(user_question)
 
-    # 4) Merge final answer
+    # final llm merges
     final_ans = final_answer_llm(user_question, index_dict, python_dict)
 
-    # 5) Post-process to attach code/files if needed
+    # post-process to attach code or files
     final_ans_with_src = post_process_source(final_ans, index_dict, python_dict)
     return final_ans_with_src
-
 
 # -------------------------------------------------------------------
 # Ask_Question
