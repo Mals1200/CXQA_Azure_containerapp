@@ -120,64 +120,64 @@ def stream_azure_chat_completion(endpoint, headers, payload, print_stream=False)
         # ------------------------------------------------------------------------------------------------------------------
         # looks for matching keywords between the question and the table metadata to make the decision to run Tool_2 or not:
         # ------------------------------------------------------------------------------------------------------------------
-# def references_tabular_data(question, tables_text):
-#     q_tokens = set(re.findall(r"\w+", question.lower()))
-#     t_tokens = set(re.findall(r"\w+", tables_text.lower()))
-#     return len(q_tokens.intersection(t_tokens)) > 0
+def references_tabular_data(question, tables_text):
+     q_tokens = set(re.findall(r"\w+", question.lower()))
+     t_tokens = set(re.findall(r"\w+", tables_text.lower()))
+     return len(q_tokens.intersection(t_tokens)) > 0
 
 
         # ----------------------------------------------------------------------------------------------------------
         # Use an Agent to decide by using the question and table metadata to make the decision to run Tool_2 or not:
         # ----------------------------------------------------------------------------------------------------------
-def references_tabular_data(question, tables_text):
-    """
-    Decide if the user question references or requires the tabular data based on an LLM's reasoning.
-    Returns True if the LLM decides the user wants to query or analyze the tabular data,
-    otherwise False.
-    """
+# def references_tabular_data(question, tables_text):
+#     """
+#     Decide if the user question references or requires the tabular data based on an LLM's reasoning.
+#     Returns True if the LLM decides the user wants to query or analyze the tabular data,
+#     otherwise False.
+#     """
 
-    # Craft a small prompt for the LLM:
-    llm_system_message = (
-        "You are a helpful agent. Decide if the user's question references or requires the tabular data.\n"
-        "Return ONLY 'YES' or 'NO' (in all caps)."
-    )
-    llm_user_message = f"""
-    User question: {question}
+#     # Craft a small prompt for the LLM:
+#     llm_system_message = (
+#         "You are a helpful agent. Decide if the user's question references or requires the tabular data.\n"
+#         "Return ONLY 'YES' or 'NO' (in all caps)."
+#     )
+#     llm_user_message = f"""
+#     User question: {question}
 
-    We have these tables: {tables_text}
+#     We have these tables: {tables_text}
 
-    Does the user need the data from these tables to answer their question?
-    Return ONLY 'YES' if it does, or ONLY 'NO' if it does not.
-    """
+#     Does the user need the data from these tables to answer their question?
+#     Return ONLY 'YES' if it does, or ONLY 'NO' if it does not.
+#     """
 
-    # Prepare the request payload to our Azure OpenAI
-    payload = {
-        "messages": [
-            {"role": "system", "content": llm_system_message},
-            {"role": "user", "content": llm_user_message}
-        ],
-        "max_tokens": 50,
-        "temperature": 0.0,  # Keep it deterministic
-        "stream": True
-    }
+#     # Prepare the request payload to our Azure OpenAI
+#     payload = {
+#         "messages": [
+#             {"role": "system", "content": llm_system_message},
+#             {"role": "user", "content": llm_user_message}
+#         ],
+#         "max_tokens": 50,
+#         "temperature": 0.0,  # Keep it deterministic
+#         "stream": True
+#     }
 
-    # We call the same stream_azure_chat_completion function you defined above,
-    # using your "fake" endpoint and "fake" API key for reference.
-    llm_response = stream_azure_chat_completion(
-        endpoint="https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview",
-        headers={
-            "Content-Type": "application/json",
-            "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
-        },
-        payload=payload,
-        print_stream=False
-    )
+#     # We call the same stream_azure_chat_completion function you defined above,
+#     # using your "fake" endpoint and "fake" API key for reference.
+#     llm_response = stream_azure_chat_completion(
+#         endpoint="https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview",
+#         headers={
+#             "Content-Type": "application/json",
+#             "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+#         },
+#         payload=payload,
+#         print_stream=False
+#     )
 
-    # We expect a short response: "YES" or "NO".
-    clean_response = llm_response.strip().upper()
+#     # We expect a short response: "YES" or "NO".
+#     clean_response = llm_response.strip().upper()
 
-    # Return True if "YES" was found, else False.
-    return "YES" in clean_response
+#     # Return True if "YES" was found, else False.
+#     return "YES" in clean_response
 
 
 
