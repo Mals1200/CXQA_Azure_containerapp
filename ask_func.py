@@ -112,31 +112,84 @@ def stream_azure_chat_completion(endpoint, headers, payload, print_stream=False)
             print()
     return final_text
 
+# -------------------------------------------------------------------
+# Splitting multi-part questions
+# -------------------------------------------------------------------
+def split_question_into_subquestions(user_question):
+    """
+    Splits user_question by 'and', '&', or major punctuation 
+    to handle multi-part queries. Returns a list of sub-questions.
+    """
+    # simple approach: replace ' and ' or ' & ' with a delimiter
+    text = re.sub(r"\s+and\s+", " ~SPLIT~ ", user_question, flags=re.IGNORECASE)
+    text = re.sub(r"\s*&\s*", " ~SPLIT~ ", text)
+    # also break on question marks if you'd like
+    # (but we’ll keep it simple here)
+    parts = text.split("~SPLIT~")
+    subqs = []
+    for p in parts:
+        p = p.strip()
+        if p:
+            subqs.append(p)
+    return subqs
 
 # -------------------------------------------------------------------
-# References
+# is_text_relevant
 # -------------------------------------------------------------------
+def is_text_relevant(question, snippet):
+    """
+    Calls a small LLM prompt to decide if 'snippet' is relevant to the user's 'question'.
+    Returns True if the LLM says it's relevant, else False.
+    """
+    if not snippet.strip():
+        return False
 
-        # ------------------------------------------------------------------------------------------------------------------
-        # looks for matching keywords between the question and the table metadata to make the decision to run Tool_2 or not:
-        # ------------------------------------------------------------------------------------------------------------------
-# def references_tabular_data(question, tables_text):
-#      q_tokens = set(re.findall(r"\w+", question.lower()))
-#      t_tokens = set(re.findall(r"\w+", tables_text.lower()))
-#      return len(q_tokens.intersection(t_tokens)) > 0
+    LLM_ENDPOINT = (
+        "https://cxqaazureaihub2358016269.openai.azure.com/"
+        "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
+    )
+    LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
 
+    system_prompt = (
+        "You are a classifier. We have a user question and a snippet of text. "
+        "Decide if the snippet is truly relevant to answering the question. "
+        "Return ONLY 'YES' or 'NO'."
+    )
+    user_prompt = f"Question: {question}\nSnippet: {snippet}\nRelevant? Return 'YES' or 'NO' only."
 
-        # ----------------------------------------------------------------------------------------------------------
-        # Use an Agent to decide by using the question and table metadata to make the decision to run Tool_2 or not:
-        # ----------------------------------------------------------------------------------------------------------
+    payload = {
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "max_tokens": 10,
+        "temperature": 0.0,
+        "stream": False
+    }
+
+    headers = {
+        "Content-Type": "application/json",
+        "api-key": LLM_API_KEY
+    }
+
+    try:
+        response = requests.post(LLM_ENDPOINT, headers=headers, json=payload, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        content = data["choices"][0]["message"]["content"].strip().upper()
+        return content.startswith("YES")
+    except:
+        return False
+
+# -------------------------------------------------------------------
+# references_tabular_data
+# -------------------------------------------------------------------
 def references_tabular_data(question, tables_text):
     """
     Decide if the user question references or requires the tabular data based on an LLM's reasoning.
     Returns True if the LLM decides the user wants to query or analyze the tabular data,
     otherwise False.
     """
-
-    # Craft a small prompt for the LLM:
     llm_system_message = (
         "You are a helpful agent. Decide if the user's question references or requires the tabular data.\n"
         "Return ONLY 'YES' or 'NO' (in all caps)."
@@ -147,22 +200,20 @@ def references_tabular_data(question, tables_text):
     We have these tables: {tables_text}
 
     Does the user need the data from these tables to answer their question?
+    The tables are not exclusive to the data it has, this is just a sample. **dont use the content of the sample table as the complete content. There are other rows the you were not shown**.
     Return ONLY 'YES' if it does, or ONLY 'NO' if it does not.
     """
 
-    # Prepare the request payload to our Azure OpenAI
     payload = {
         "messages": [
             {"role": "system", "content": llm_system_message},
             {"role": "user", "content": llm_user_message}
         ],
         "max_tokens": 50,
-        "temperature": 0.0,  # Keep it deterministic
+        "temperature": 0.0,
         "stream": True
     }
 
-    # We call the same stream_azure_chat_completion function you defined above,
-    # using your "fake" endpoint and "fake" API key for reference.
     llm_response = stream_azure_chat_completion(
         endpoint="https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview",
         headers={
@@ -173,25 +224,25 @@ def references_tabular_data(question, tables_text):
         print_stream=False
     )
 
-    # We expect a short response: "YES" or "NO".
     clean_response = llm_response.strip().upper()
-
-    # Return True if "YES" was found, else False.
     return "YES" in clean_response
 
-
-
 # -------------------------------------------------------------------
-# Tool 1 (Index)
+# Tool 1 (Index) with multi-subquestion relevance check
 # -------------------------------------------------------------------
 def tool_1_index_search(user_question, top_k=5):
     """
-    Returns a dict: {"top_k": <combined search text or "No information">}
+    Returns a dict: {"top_k": <combined relevant text or "No information">}.
+    After retrieving the top_k results from Azure Search, 
+    we filter out irrelevant text for ANY sub-question.
     """
     SEARCH_SERVICE_NAME = "cxqa-azureai-search"
     SEARCH_ENDPOINT = f"https://{SEARCH_SERVICE_NAME}.search.windows.net"
     INDEX_NAME = "cxqa-ind-v6"
     ADMIN_API_KEY = "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv"
+
+    # Split the question for multi-part checks
+    subquestions = split_question_into_subquestions(user_question)
 
     try:
         search_client = SearchClient(
@@ -207,15 +258,27 @@ def tool_1_index_search(user_question, top_k=5):
             top=top_k,
             include_total_count=False
         )
-        contents = []
+
+        relevant_texts = []
         for r in results:
-            c = r.get("content", "").strip()
-            if c:
-                contents.append(c)
-        if not contents:
+            snippet = r.get("content", "").strip()
+
+            # If snippet is relevant to ANY sub-question, we keep it
+            keep_snippet = False
+            for sq in subquestions:
+                if is_text_relevant(sq, snippet):
+                    keep_snippet = True
+                    break
+
+            if keep_snippet:
+                relevant_texts.append(snippet)
+
+        if not relevant_texts:
             return {"top_k": "No information"}
-        combined = "\n\n---\n\n".join(contents)
+
+        combined = "\n\n---\n\n".join(relevant_texts)
         return {"top_k": combined}
+
     except Exception as e:
         return {"top_k": f"Error in Tool1 (Index Search): {str(e)}"}
 
@@ -227,7 +290,6 @@ def tool_2_code_run(user_question):
     Returns a dict: {"result": <execution result>, "code": <the generated code>} 
     or "No information" if question not referencing data or code can't be generated.
     """
-    # If no reference to data, skip
     if not references_tabular_data(user_question, TABLES):
         return {"result": "No information", "code": ""}
 
@@ -245,8 +307,9 @@ Don't give examples, only provide the actual code. If you can't provide the code
 
 **Rules**:
 1. Only use tables columns that exist, and do not makeup anything. 
-2. Only return pure Python code that is functional and ready to be executed, including the imports if needed.
-3. Always make code that returns a print statement that answers the question.
+2. dont use the row samples provided. They are just samples and other rows exist that were not provided to you. all you need to do is check the tables and columns and data types to make the code.
+3. Only return pure Python code that is functional and ready to be executed, including the imports if needed.
+4. Always make code that returns a print statement that answers the question.
 
 User question:
 {user_question}
@@ -302,7 +365,6 @@ Chat_history:
         if not code_str or "404" in code_str:
             return {"result": "No information", "code": ""}
 
-        # Execute
         execution_result = execute_generated_code(code_str)
         return {"result": execution_result, "code": code_str}
 
@@ -311,7 +373,6 @@ Chat_history:
             "result": f"Error in Tool2 (Code Generation/Execution): {str(ex)}",
             "code": ""
         }
-
 
 def execute_generated_code(code_str):
     account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
@@ -344,6 +405,7 @@ def execute_generated_code(code_str):
 
             dataframes[file_name] = df
 
+        # Replace read calls with existing dataframes
         code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
         code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
 
@@ -363,23 +425,82 @@ def execute_generated_code(code_str):
         return f"An error occurred during code execution: {e}"
 
 # -------------------------------------------------------------------
-# Final LLM: The Agent Summation + Source Decision
+# Tool 3 (LLM Fallback)
+# -------------------------------------------------------------------
+def tool_3_llm_fallback(user_question):
+    """
+    If no information is found in Tool1 or Tool2, we use a direct LLM call as a fallback.
+    This returns a general AI-generated answer from the model’s own knowledge.
+    """
+    LLM_ENDPOINT = (
+        "https://cxqaazureaihub2358016269.openai.azure.com/"
+        "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
+    )
+    LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+
+    system_prompt = (
+        "You are a highly knowledgeable large language model. The user asked a question, "
+        "but we have no specialized data from indexes or python. Provide a concise, direct answer "
+        "using your general knowledge. Do not say 'No information was found'; just answer as best you can."
+    )
+
+    payload = {
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_question}
+        ],
+        "max_tokens": 500,
+        "temperature": 0.7,
+        "stream": True
+    }
+
+    headers = {
+        "Content-Type": "application/json",
+        "api-key": LLM_API_KEY
+    }
+
+    fallback_answer = ""
+    try:
+        with requests.post(LLM_ENDPOINT, headers=headers, json=payload, stream=True) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if line:
+                    line_str = line.decode("utf-8", errors="ignore").strip()
+                    if line_str.startswith("data: "):
+                        data_str = line_str[len("data: "):]
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            data_json = json.loads(data_str)
+                            if (
+                                "choices" in data_json
+                                and data_json["choices"]
+                                and "delta" in data_json["choices"][0]
+                            ):
+                                content_piece = data_json["choices"][0]["delta"].get("content", "")
+                                fallback_answer += content_piece
+                        except json.JSONDecodeError:
+                            pass
+    except:
+        fallback_answer = "I'm sorry, but I couldn't retrieve a fallback answer."
+
+    return fallback_answer.strip()
+
+# -------------------------------------------------------------------
+# Final LLM aggregator
 # -------------------------------------------------------------------
 def final_answer_llm(user_question, index_dict, python_dict):
     """
-    We feed the final LLM both sets of data, but only the text 
-    (the top_k from index, and the execution result from python).
-    Then we let it produce a short answer that ends with 
-    `Source: <some label>` or "No information was found..."
-
-    We'll *post-process* that label to attach the code or top_k.
+    Combine Index data + Python data. If both are "No information", fallback.
+    Otherwise, let an LLM produce a cohesive answer. 
     """
     index_top_k = index_dict.get("top_k", "No information").strip()
     python_result = python_dict.get("result", "No information").strip()
 
-    # If both are empty
+    # Fallback if both are no info
     if index_top_k.lower() == "no information" and python_result.lower() == "no information":
-        return "No information was found in the Data. Can I help you with anything else?"
+        fallback_text = tool_3_llm_fallback(user_question)
+        return f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
 
     LLM_ENDPOINT = (
         "https://cxqaazureaihub2358016269.openai.azure.com/"
@@ -387,25 +508,22 @@ def final_answer_llm(user_question, index_dict, python_dict):
     )
     LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
 
-    # This is what the final LLM sees:
     combined_info = f"INDEX_DATA:\n{index_top_k}\n\nPYTHON_DATA:\n{python_result}"
 
     system_prompt = f"""
-You are a helpful assistant. The user asked a question, and you have two possible data sources:
+You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
 1) Index data: (INDEX_DATA)
 2) Python data: (PYTHON_DATA)
 
-Use only the data from those two sources to answer the question. Then decide which source(s) was used:
-- "Source: Index" (if only index data is relevant),
-- "Source: Python" (if only python data is relevant),
-- "Source: Index & Python" (if both data pieces are used),
-- Or if no data truly answers the question, "No information was found in the Data. Can I help you with anything else?"
+Use only these two sources to answer. If you find relevant info from both, answer using both. 
+At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
+- "Index" if only index data was used,
+- "Python" if only python data was used,
+- "Index & Python" if both were used,
+- or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
 
-**Important**:
-- If you do find relevant info in the index text, you must say "Index" is used.
-- If you do find relevant info (like a numeric answer) from the python data, you must say "Python" is used.
-- If both help, say "Index & Python".
-- At the end of your final answer, put "Source: X" on a new line EXACTLY.
+Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
+Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
 
 User question:
 {user_question}
@@ -473,13 +591,9 @@ def post_process_source(final_text, index_dict, python_dict):
     If final_text ends with or contains "Source: Index", "Source: Python", 
     or "Source: Index & Python", we attach the code or top_k accordingly.
     """
-    # We unify to lower for detection
     text_lower = final_text.lower()
 
-    # Attempt to parse the final line with "Source:"
-    # We'll do a simple check:
     if "source: index & python" in text_lower:
-        # Then append the relevant pieces
         top_k_text = index_dict.get("top_k", "No information")
         code_text = python_dict.get("code", "")
         return f"""{final_text}
@@ -505,7 +619,6 @@ The Files:
 {top_k_text}
 """
     else:
-        # No recognized source or it's "No information" fallback
         return final_text
 
 # -------------------------------------------------------------------
@@ -523,19 +636,15 @@ def agent_answer(user_question):
     if any(g in user_question.lower() for g in greet_list):
         return "Hello! How may I assist you?"
 
-    # get data
+    # 1) Index
     index_dict = tool_1_index_search(user_question)
+    # 2) Python
     python_dict = tool_2_code_run(user_question)
 
-    # final llm merges
+    # 3) Combine
     final_ans = final_answer_llm(user_question, index_dict, python_dict)
-
-    # post-process to attach code or files
     final_ans_with_src = post_process_source(final_ans, index_dict, python_dict)
     return final_ans_with_src
-
-
-
 
 # -------------------------------------------------------------------
 # Ask_Question
@@ -550,7 +659,6 @@ def Ask_Question(question):
     max_pairs = number_of_messages // 2
     max_entries = max_pairs * 2
 
-    # run
     answer = agent_answer(question)
 
     chat_history.append(f"Assistant: {answer}")
