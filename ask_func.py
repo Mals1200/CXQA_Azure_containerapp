@@ -80,7 +80,6 @@ Tickets.xlsx: {'Date': 'datetime64[ns]', 'Number of tickets': 'int64', 'revenue'
 Top2Box Summary.xlsx: {'Month': 'datetime64[ns]', 'Type': 'object', 'Top2Box scores/ rating': 'float64'},
 Total Landscape areas and quantities.xlsx: {'Assets': 'object', 'Unnamed: 1': 'object', 'Unnamed: 2': 'object', 'Unnamed: 3': 'object'},
 """
-
 # -------------------------------------------------------------------
 # Helper: Stream OpenAI from Azure
 # -------------------------------------------------------------------
@@ -112,35 +111,14 @@ def stream_azure_chat_completion(endpoint, headers, payload, print_stream=False)
             print()
     return final_text
 
-# -------------------------------------------------------------------
-# Splitting multi-part questions
-# -------------------------------------------------------------------
 def split_question_into_subquestions(user_question):
-    """
-    Splits user_question by 'and', '&', or major punctuation 
-    to handle multi-part queries. Returns a list of sub-questions.
-    """
-    # simple approach: replace ' and ' or ' & ' with a delimiter
     text = re.sub(r"\s+and\s+", " ~SPLIT~ ", user_question, flags=re.IGNORECASE)
     text = re.sub(r"\s*&\s*", " ~SPLIT~ ", text)
-    # also break on question marks if you'd like
-    # (but we’ll keep it simple here)
     parts = text.split("~SPLIT~")
-    subqs = []
-    for p in parts:
-        p = p.strip()
-        if p:
-            subqs.append(p)
+    subqs = [p.strip() for p in parts if p.strip()]
     return subqs
 
-# -------------------------------------------------------------------
-# is_text_relevant
-# -------------------------------------------------------------------
 def is_text_relevant(question, snippet):
-    """
-    Calls a small LLM prompt to decide if 'snippet' is relevant to the user's 'question'.
-    Returns True if the LLM says it's relevant, else False.
-    """
     if not snippet.strip():
         return False
 
@@ -181,15 +159,7 @@ def is_text_relevant(question, snippet):
     except:
         return False
 
-# -------------------------------------------------------------------
-# references_tabular_data
-# -------------------------------------------------------------------
 def references_tabular_data(question, tables_text):
-    """
-    Decide if the user question references or requires the tabular data based on an LLM's reasoning.
-    Returns True if the LLM decides the user wants to query or analyze the tabular data,
-    otherwise False.
-    """
     llm_system_message = (
         "You are a helpful agent. Decide if the user's question references or requires the tabular data.\n"
         "Return ONLY 'YES' or 'NO' (in all caps)."
@@ -227,21 +197,12 @@ def references_tabular_data(question, tables_text):
     clean_response = llm_response.strip().upper()
     return "YES" in clean_response
 
-# -------------------------------------------------------------------
-# Tool 1 (Index) with multi-subquestion relevance check
-# -------------------------------------------------------------------
 def tool_1_index_search(user_question, top_k=5):
-    """
-    Returns a dict: {"top_k": <combined relevant text or "No information">}.
-    After retrieving the top_k results from Azure Search, 
-    we filter out irrelevant text for ANY sub-question.
-    """
     SEARCH_SERVICE_NAME = "cxqa-azureai-search"
     SEARCH_ENDPOINT = f"https://{SEARCH_SERVICE_NAME}.search.windows.net"
     INDEX_NAME = "cxqa-ind-v6"
     ADMIN_API_KEY = "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv"
 
-    # Split the question for multi-part checks
     subquestions = split_question_into_subquestions(user_question)
 
     try:
@@ -263,7 +224,6 @@ def tool_1_index_search(user_question, top_k=5):
         for r in results:
             snippet = r.get("content", "").strip()
 
-            # If snippet is relevant to ANY sub-question, we keep it
             keep_snippet = False
             for sq in subquestions:
                 if is_text_relevant(sq, snippet):
@@ -282,14 +242,7 @@ def tool_1_index_search(user_question, top_k=5):
     except Exception as e:
         return {"top_k": f"Error in Tool1 (Index Search): {str(e)}"}
 
-# -------------------------------------------------------------------
-# Tool 2 (Python)
-# -------------------------------------------------------------------
 def tool_2_code_run(user_question):
-    """
-    Returns a dict: {"result": <execution result>, "code": <the generated code>} 
-    or "No information" if question not referencing data or code can't be generated.
-    """
     if not references_tabular_data(user_question, TABLES):
         return {"result": "No information", "code": ""}
 
@@ -405,7 +358,6 @@ def execute_generated_code(code_str):
 
             dataframes[file_name] = df
 
-        # Replace read calls with existing dataframes
         code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
         code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
 
@@ -424,14 +376,7 @@ def execute_generated_code(code_str):
     except Exception as e:
         return f"An error occurred during code execution: {e}"
 
-# -------------------------------------------------------------------
-# Tool 3 (LLM Fallback)
-# -------------------------------------------------------------------
 def tool_3_llm_fallback(user_question):
-    """
-    If no information is found in Tool1 or Tool2, we use a direct LLM call as a fallback.
-    This returns a general AI-generated answer from the model’s own knowledge.
-    """
     LLM_ENDPOINT = (
         "https://cxqaazureaihub2358016269.openai.azure.com/"
         "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
@@ -486,18 +431,10 @@ def tool_3_llm_fallback(user_question):
 
     return fallback_answer.strip()
 
-# -------------------------------------------------------------------
-# Final LLM aggregator
-# -------------------------------------------------------------------
 def final_answer_llm(user_question, index_dict, python_dict):
-    """
-    Combine Index data + Python data. If both are "No information", fallback.
-    Otherwise, let an LLM produce a cohesive answer. 
-    """
     index_top_k = index_dict.get("top_k", "No information").strip()
     python_result = python_dict.get("result", "No information").strip()
 
-    # Fallback if both are no info
     if index_top_k.lower() == "no information" and python_result.lower() == "no information":
         fallback_text = tool_3_llm_fallback(user_question)
         return f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
@@ -583,14 +520,7 @@ Chat_history:
 
     return final_text
 
-# -------------------------------------------------------------------
-# POST-PROCESS: Attach code or top_k if needed
-# -------------------------------------------------------------------
 def post_process_source(final_text, index_dict, python_dict):
-    """
-    If final_text ends with or contains "Source: Index", "Source: Python", 
-    or "Source: Index & Python", we attach the code or top_k accordingly.
-    """
     text_lower = final_text.lower()
 
     if "source: index & python" in text_lower:
@@ -621,56 +551,51 @@ The Files:
     else:
         return final_text
 
-# -------------------------------------------------------------------
-# Agent
-# -------------------------------------------------------------------
+####################################################
+#              GREETING HANDLING UPDATED           #
+####################################################
 def agent_answer(user_question):
-    # Check if the user question is empty on first usage
+    # If question is empty at first usage
     if user_question.strip() == "" and len(chat_history) < 2:
         return ""
 
-    # Use regex word boundaries for greeting detection
-    greet_list = [
-        "hello",
-        "hi",
-        "hey",
-        "good morning",
-        "good evening",
-        "assalam",
-        "hayo",
-        "hola",
-        "salam",
-        "alsalam",
-        "alsalamualaikum",
-        "al salam"
-    ]
-    # If user question contains any exact greeting word
-    if any(re.search(rf"\b{re.escape(g)}\b", user_question.lower()) for g in greet_list):
-        # Show a different greeting if chat_history is still short
+    # A function to see if entire user input is basically a greeting
+    def is_entirely_greeting_or_punc(phrase):
+        greet_words = {
+            "hello", "hi", "hey", "good", "morning", "evening",
+            "assalam", "hayo", "hola", "salam", "alsalam",
+            "alsalamualaikum", "al", "salam"
+        }
+        # Extract alphabetical tokens
+        tokens = re.findall(r"[A-Za-z]+", phrase.lower())
+        if not tokens:
+            return False
+        for t in tokens:
+            if t not in greet_words:
+                return False
+        return True
+
+    user_question_stripped = user_question.strip()
+
+    # If entire phrase is basically a greeting
+    if is_entirely_greeting_or_punc(user_question_stripped):
         if len(chat_history) < 4:
             return "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"
         else:
             return "Hello! How may I assist you?"
 
-    # Proceed with normal logic:
-    # 1) Tool 1 (Index Search)
+    # Otherwise, proceed with normal logic:
     index_dict = tool_1_index_search(user_question)
-    # 2) Tool 2 (Python)
     python_dict = tool_2_code_run(user_question)
-    # 3) Combine final
     final_ans = final_answer_llm(user_question, index_dict, python_dict)
     final_ans_with_src = post_process_source(final_ans, index_dict, python_dict)
     return final_ans_with_src
 
-# -------------------------------------------------------------------
-# Ask_Question
-# -------------------------------------------------------------------
 def Ask_Question(question):
     global chat_history
 
     chat_history.append(f"User: {question}")
 
-    # keep short
     number_of_messages = 10
     max_pairs = number_of_messages // 2
     max_entries = max_pairs * 2
