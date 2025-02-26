@@ -625,23 +625,39 @@ The Files:
 # Agent
 # -------------------------------------------------------------------
 def agent_answer(user_question):
-    # greet or empty?
+    # Check if the user question is empty on first usage
     if user_question.strip() == "" and len(chat_history) < 2:
         return ""
 
-    greet_list = ["hello", "hi", "hey", "good morning", "good evening", "assalam", "hayo", "hola", "salam", "alsalam", "alsalamualaikum", "al salam"]
-    if (any(g in user_question.lower() for g in greet_list)) and len(chat_history) < 4:
-        return "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"
-    
-    if any(g in user_question.lower() for g in greet_list):
-        return "Hello! How may I assist you?"
+    # Use regex word boundaries for greeting detection
+    greet_list = [
+        "hello",
+        "hi",
+        "hey",
+        "good morning",
+        "good evening",
+        "assalam",
+        "hayo",
+        "hola",
+        "salam",
+        "alsalam",
+        "alsalamualaikum",
+        "al salam"
+    ]
+    # If user question contains any exact greeting word
+    if any(re.search(rf"\b{re.escape(g)}\b", user_question.lower()) for g in greet_list):
+        # Show a different greeting if chat_history is still short
+        if len(chat_history) < 4:
+            return "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"
+        else:
+            return "Hello! How may I assist you?"
 
-    # 1) Index
+    # Proceed with normal logic:
+    # 1) Tool 1 (Index Search)
     index_dict = tool_1_index_search(user_question)
-    # 2) Python
+    # 2) Tool 2 (Python)
     python_dict = tool_2_code_run(user_question)
-
-    # 3) Combine
+    # 3) Combine final
     final_ans = final_answer_llm(user_question, index_dict, python_dict)
     final_ans_with_src = post_process_source(final_ans, index_dict, python_dict)
     return final_ans_with_src
