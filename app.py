@@ -3,207 +3,93 @@ import asyncio
 from flask import Flask, request, jsonify, Response
 import requests
 
-# Bot Framework
-from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
-from botbuilder.schema import Activity
-
-# Q&A logic
+# Your existing Ask_Question function (imported from ask_func.py)
 from ask_func import Ask_Question
 
-# GPT-based PPT generation
-import ppt_export_agent
-
-import uuid
+# BotBuilder imports
+from botbuilder.core import (
+    BotFrameworkAdapter,
+    BotFrameworkAdapterSettings,
+    TurnContext
+)
+from botbuilder.schema import Activity
 
 app = Flask(__name__)
 
+# 1) Read Bot credentials from ENV
 MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
 MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 
+# 2) Create settings & adapter for Bot
 adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
 
-##########################################################################################
-# We store the last Q, A, Source, and entire chat history in a dict for each conversation:
-# conversation_data[conversation_id] = {
-#   "last_question": "...",
-#   "last_answer": "...",   # answer text
-#   "last_source": "...",   # the "Source:" portion
-#   "chat_history": [ ... ] # same as ask_func.chat_history
-# }
-##########################################################################################
-conversation_data = {}
 
+# =========================
+# Existing endpoints
+# =========================
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({'message': 'API is running!'}), 200
 
+
 @app.route('/ask', methods=['POST'])
 def ask():
-    # Non-BotFramework usage
     data = request.get_json()
     if not data or 'question' not in data:
         return jsonify({'error': 'Invalid request, "question" field is required.'}), 400
+    
     question = data['question']
     answer = Ask_Question(question)
     return jsonify({'answer': answer})
 
+
+# =========================
+# Bot Framework endpoint
+# =========================
 @app.route("/api/messages", methods=["POST"])
 def messages():
-    # BotFramework endpoint
+    """
+    This is the endpoint the Bot Service calls (e.g. from Web Chat).
+    We must handle it asynchronously with 'adapter.process_activity'.
+    """
     if "application/json" not in request.headers.get("Content-Type", ""):
         return Response(status=415)
+
+    # 1) Deserialize incoming Activity
     body = request.json
     activity = Activity().deserialize(body)
+
+    # 2) Grab the Authorization header (for Bot Framework auth)
     auth_header = request.headers.get("Authorization", "")
+
+    # 3) We must run the async method in a separate event loop
     loop = asyncio.new_event_loop()
     try:
-        loop.run_until_complete(adapter.process_activity(activity, auth_header, _bot_logic))
+        loop.run_until_complete(
+            adapter.process_activity(activity, auth_header, _bot_logic)
+        )
     finally:
         loop.close()
+
+    # 4) Return HTTP 200 (or 201) once the message is processed
     return Response(status=200)
+
 
 async def _bot_logic(turn_context: TurnContext):
     """
-    - If user typed "show source", we display last_source in text.
-    - If user typed "export ppt", we generate PPT from last Q&A + entire chat.
-    - Otherwise, treat as normal question -> ask_func -> store Q, A, Source.
-    - Return an Adaptive Card with "Show Source" (ToggleVisibility) & "Export PPT" (Submit).
+    This async function is where we handle the user's message
+    and craft a reply.
     """
-    conversation_id = turn_context.activity.conversation.id
+    user_message = turn_context.activity.text or ""
+    answer = Ask_Question(user_message)  # your existing Q&A logic
 
-    # Initialize conversation data if not present
-    if conversation_id not in conversation_data:
-        conversation_data[conversation_id] = {
-            "last_question": "",
-            "last_answer": "",
-            "last_source": "",
-            "chat_history": []
-        }
+    # Send answer back to the user
+    await turn_context.send_activity(Activity(type="message", text=answer))
 
-    # Link ask_func's chat_history
-    import ask_func
-    ask_func.chat_history = conversation_data[conversation_id]["chat_history"]
 
-    user_message = (turn_context.activity.text or "").strip().lower()
-
-    # -----------------------------------------------------------------
-    # 1) Fallback text commands
-    # -----------------------------------------------------------------
-    if user_message == "show source":
-        source = conversation_data[conversation_id]["last_source"]
-        if source:
-            await turn_context.send_activity(source)
-        else:
-            await turn_context.send_activity("No source available for the last answer.")
-        return
-
-    if user_message == "export ppt":
-        last_q = conversation_data[conversation_id]["last_question"]
-        last_a = conversation_data[conversation_id]["last_answer"]
-        if not last_a:
-            await turn_context.send_activity("No previous answer found to export.")
-            return
-        # Entire chat
-        chat_history_str = "\n".join(ask_func.chat_history)
-        # If you want to gather user instructions, you'd prompt them here, but for now pass empty:
-        ppt_url = ppt_export_agent.generate_ppt_from_llm(
-            question=last_q,
-            answer_text=last_a,
-            chat_history_str=chat_history_str,
-            instructions=""
-        )
-        if ppt_url:
-            await turn_context.send_activity(f"Here is your GPT-based PPT link:\n{ppt_url}")
-        else:
-            await turn_context.send_activity("Sorry, I couldn't create the PPT file.")
-        return
-
-    # -----------------------------------------------------------------
-    # 2) Otherwise, treat as normal question
-    # -----------------------------------------------------------------
-    question_text = turn_context.activity.text or ""
-    answer_text = Ask_Question(question_text)
-    # Update chat_history
-    conversation_data[conversation_id]["chat_history"] = ask_func.chat_history
-
-    # If greeting
-    if answer_text.startswith("Hello! I'm The CXQA AI Assistant") or \
-       answer_text.startswith("Hello! How may I assist you"):
-        conversation_data[conversation_id]["last_question"] = question_text
-        conversation_data[conversation_id]["last_answer"] = answer_text
-        conversation_data[conversation_id]["last_source"] = ""
-        await turn_context.send_activity(Activity(type="message", text=answer_text))
-        return
-
-    # Check if there's "\n\nSource:" in the answer
-    source_index = answer_text.find("\n\nSource:")
-    if source_index >= 0:
-        main_answer = answer_text[:source_index].strip()
-        source_text = answer_text[source_index:].strip()
-    else:
-        main_answer = answer_text
-        source_text = ""
-
-    conversation_data[conversation_id]["last_question"] = question_text
-    conversation_data[conversation_id]["last_answer"] = main_answer
-    conversation_data[conversation_id]["last_source"] = source_text
-
-    displayed_text = main_answer
-    if source_text:
-        displayed_text += "\n\n(You can click 'Show Source' or type 'show source'.)"
-    displayed_text += "\n\n(You can click 'Export PPT' or type 'export ppt'.)"
-
-    # Build the Adaptive Card
-    actions = []
-    if source_text:
-        actions.append({
-            "type": "Action.ToggleVisibility",
-            "title": "Show Source",
-            "targetElements": ["sourceBlock"]
-        })
-    actions.append({
-        "type": "Action.Submit",
-        "title": "Export PPT",
-        "data": {
-            "action": "export"
-        }
-    })
-
-    card_body = [
-        {"type": "TextBlock", "text": main_answer, "wrap": True}
-    ]
-    if source_text:
-        card_body.append({
-            "type": "TextBlock",
-            "text": source_text,
-            "wrap": True,
-            "id": "sourceBlock",
-            "isVisible": False
-        })
-
-    adaptive_card = {
-        "type": "AdaptiveCard",
-        "fallbackText": (
-            "If you can't see buttons, type:\n"
-            "  'show source' to see the source,\n"
-            "  'export ppt' to export the PPT.\n"
-        ),
-        "body": card_body,
-        "actions": actions,
-        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-        "version": "1.2"
-    }
-
-    message = Activity(
-        type="message",
-        text=displayed_text,  # fallback text
-        attachments=[{
-            "contentType": "application/vnd.microsoft.card.adaptive",
-            "content": adaptive_card
-        }]
-    )
-    await turn_context.send_activity(message)
-
+# =========================
+# Gunicorn entry point
+# =========================
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=80)
