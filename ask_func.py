@@ -562,9 +562,11 @@ def agent_answer(user_question):
     # A function to see if entire user input is basically a greeting
     def is_entirely_greeting_or_punc(phrase):
         greet_words = {
-            "hello", "hi", "hey", "good", "morning", "evening",
+            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "goodevening", "good evening",
             "assalam", "hayo", "hola", "salam", "alsalam",
-            "alsalamualaikum", "al", "salam"
+            "alsalamualaikum", "alsalam", "salam", "al salam", "assalamualaikum",
+            "greetings", "howdy", "what's up", "yo", "sup", "namaste", "shalom", "bonjour", "ciao", "konichiwa",
+            "ni hao", "marhaba", "ahlan", "sawubona", "hallo", "salut", "hola amigo", "hey there", "good day"
         }
         # Extract alphabetical tokens
         tokens = re.findall(r"[A-Za-z]+", phrase.lower())
