@@ -8,26 +8,14 @@ from datetime import datetime
 
 def generate_ppt_from_llm(question, answer_text, chat_history_str, instructions):
     """
-    1) Build an LLM prompt from question/answer/chat history/instructions.
+    1) Build an LLM prompt from question/answer/chat_history/instructions.
     2) Send the prompt to Azure OpenAI for textual slide content.
     3) Build a PPT with python-pptx.
     4) Upload the PPT to Azure Blob Storage with a SAS token.
     5) Return a link to the uploaded PPT.
 
-    Parameters:
-    -----------
-    question : str
-        The user's last question.
-    answer_text : str
-        The last retrieved answer from the bot.
-    chat_history_str : str
-        The entire chat history (user queries + assistant replies).
-    instructions : str
-        Additional user instructions for structuring or styling the slides.
-
-    Returns:
-    --------
-    str : A publicly accessible URL (SAS-based or public container link) to the PPT.
+    FAKE placeholders for keys and endpoints are used below.
+    Replace them with your real values.
     """
 
     # ---------------------------------------------------------------------
@@ -55,7 +43,6 @@ User_Instructions:
 
     # ---------------------------------------------------------------------
     # 2) Send the prompt to your Azure OpenAI endpoint
-    #    (FAKE example values below - replace with real ones)
     # ---------------------------------------------------------------------
     LLM_ENDPOINT = (
         "https://cxqaazureaihub2358016269.openai.azure.com/"
@@ -83,7 +70,6 @@ User_Instructions:
         # The LLM's textual slide content
         slides_text = data["choices"][0]["message"]["content"].strip()
     except Exception as e:
-        # If there's an error calling the LLM, fallback or log
         slides_text = f"Could not generate slides. Error: {str(e)}"
 
     # ---------------------------------------------------------------------
@@ -91,26 +77,23 @@ User_Instructions:
     # ---------------------------------------------------------------------
     prs = Presentation()
 
-    # (a) Optional Title Slide
+    # (a) Title Slide
     title_slide_layout = prs.slide_layouts[0]
     slide = prs.slides.add_slide(title_slide_layout)
     slide.shapes.title.text = "Auto-Generated PPT"
     slide.placeholders[1].text = "Using Azure OpenAI + python-pptx"
 
-    # (b) Second slide for content
+    # (b) Content Slide
     bullet_slide_layout = prs.slide_layouts[1]
     content_slide = prs.slides.add_slide(bullet_slide_layout)
     shapes = content_slide.shapes
-
     shapes.title.text = "Slide Content"
     text_frame = shapes.placeholders[1].text_frame
 
-    # We can place an initial heading or introduction
     intro_paragraph = text_frame.add_paragraph()
     intro_paragraph.text = "Below is the textual content from the LLM:"
     intro_paragraph.font.size = Pt(18)
 
-    # Each non-empty line from slides_text becomes a bullet
     lines = slides_text.split("\n")
     for line in lines:
         line = line.strip()
@@ -118,11 +101,10 @@ User_Instructions:
             p = text_frame.add_paragraph()
             p.text = line
             p.font.size = Pt(16)
-            p.level = 1  # bullet level 1
+            p.level = 1
 
     # ---------------------------------------------------------------------
-    # 4) Upload the PPT to Azure Blob Storage
-    #    (FAKE example values below - replace with real ones)
+    # 4) Upload the PPT to Azure Blob Storage (FAKE placeholders)
     # ---------------------------------------------------------------------
     account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
     sas_token = (
@@ -132,24 +114,17 @@ User_Instructions:
     )
     container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
 
-    # Create an in-memory buffer for the PPT
     ppt_stream = io.BytesIO()
     prs.save(ppt_stream)
     ppt_stream.seek(0)
 
-    # Give the blob a unique name with timestamp
     blob_name = f"gpt_ppt_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pptx"
 
-    # Upload to Blob Storage
     blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
     container_client = blob_service_client.get_container_client(container_name)
     blob_client = container_client.get_blob_client(blob_name)
     blob_client.upload_blob(ppt_stream, overwrite=True)
 
-    # Construct an accessible link to the PPT
     ppt_url = f"{account_url}/{container_name}/{blob_name}?{sas_token}"
 
-    # ---------------------------------------------------------------------
-    # 5) Return the link to the generated PPT
-    # ---------------------------------------------------------------------
     return ppt_url
