@@ -7,7 +7,7 @@ import requests
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
 from botbuilder.schema import Activity
 
-# Q&A logic (unchanged) 
+# Q&A logic
 from ask_func import Ask_Question
 
 # GPT-based PPT generation
@@ -27,8 +27,8 @@ adapter = BotFrameworkAdapter(adapter_settings)
 # We store the last Q, A, Source, and entire chat history in a dict for each conversation:
 # conversation_data[conversation_id] = {
 #   "last_question": "...",
-#   "last_answer": "...",   # answer without the "Source:"
-#   "last_source": "...",   # just the "Source:" portion
+#   "last_answer": "...",   # answer text
+#   "last_source": "...",   # the "Source:" portion
 #   "chat_history": [ ... ] # same as ask_func.chat_history
 # }
 ##########################################################################################
@@ -67,9 +67,8 @@ async def _bot_logic(turn_context: TurnContext):
     """
     - If user typed "show source", we display last_source in text.
     - If user typed "export ppt", we generate PPT from last Q&A + entire chat.
-    - Otherwise, we treat as normal question -> ask_func -> store Q, A, Source.
-    - We build an Adaptive Card with "Show Source" (ToggleVisibility) + "Export PPT" (Submit).
-    - Channels that don't support it => fallback to text commands.
+    - Otherwise, treat as normal question -> ask_func -> store Q, A, Source.
+    - Return an Adaptive Card with "Show Source" (ToggleVisibility) & "Export PPT" (Submit).
     """
     conversation_id = turn_context.activity.conversation.id
 
@@ -82,7 +81,7 @@ async def _bot_logic(turn_context: TurnContext):
             "chat_history": []
         }
 
-    # Link ask_func's chat_history to this conversation
+    # Link ask_func's chat_history
     import ask_func
     ask_func.chat_history = conversation_data[conversation_id]["chat_history"]
 
@@ -92,7 +91,6 @@ async def _bot_logic(turn_context: TurnContext):
     # 1) Fallback text commands
     # -----------------------------------------------------------------
     if user_message == "show source":
-        # Return last_source if available
         source = conversation_data[conversation_id]["last_source"]
         if source:
             await turn_context.send_activity(source)
@@ -108,6 +106,7 @@ async def _bot_logic(turn_context: TurnContext):
             return
         # Entire chat
         chat_history_str = "\n".join(ask_func.chat_history)
+        # If you want to gather user instructions, you'd prompt them here, but for now pass empty:
         ppt_url = ppt_export_agent.generate_ppt_from_llm(
             question=last_q,
             answer_text=last_a,
@@ -128,7 +127,7 @@ async def _bot_logic(turn_context: TurnContext):
     # Update chat_history
     conversation_data[conversation_id]["chat_history"] = ask_func.chat_history
 
-    # If greeting, just store & respond
+    # If greeting
     if answer_text.startswith("Hello! I'm The CXQA AI Assistant") or \
        answer_text.startswith("Hello! How may I assist you"):
         conversation_data[conversation_id]["last_question"] = question_text
@@ -146,20 +145,16 @@ async def _bot_logic(turn_context: TurnContext):
         main_answer = answer_text
         source_text = ""
 
-    # Store them
     conversation_data[conversation_id]["last_question"] = question_text
     conversation_data[conversation_id]["last_answer"] = main_answer
     conversation_data[conversation_id]["last_source"] = source_text
 
-    # Build the final displayed text
     displayed_text = main_answer
     if source_text:
-        # We'll hide the source behind a button, fallback text for channels ignoring AC
         displayed_text += "\n\n(You can click 'Show Source' or type 'show source'.)"
-    # Also mention 'Export PPT'
     displayed_text += "\n\n(You can click 'Export PPT' or type 'export ppt'.)"
 
-    # Build Adaptive Card with 2 buttons: "Show Source" (ToggleVisibility) & "Export PPT" (Submit)
+    # Build the Adaptive Card
     actions = []
     if source_text:
         actions.append({
