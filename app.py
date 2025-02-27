@@ -7,10 +7,10 @@ import requests
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
 from botbuilder.schema import Activity
 
-# The Q&A logic
+# Q&A logic (unchanged from your ask_func.py)
 from ask_func import Ask_Question
 
-# The GPT-based PPT generation
+# GPT-based PPT generation with your fake keys
 import ppt_export_agent
 
 app = Flask(__name__)
@@ -21,16 +21,16 @@ MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
 
-########################################################################
-# We store the "last question" and "last answer" for each conversation
-########################################################################
-conversation_data = {
-    # conversation_id: {
-    #   "last_question": "...",
-    #   "last_answer": "...",
-    #   "chat_history": [...]
-    # }
-}
+##################################################################################
+# conversation_data storage (per conversation_id):
+# {
+#   "last_question": "...",
+#   "last_answer": "...",
+#   "last_source": "...",   # if any
+#   "chat_history": [...]
+# }
+##################################################################################
+conversation_data = {}
 
 @app.route('/', methods=['GET'])
 def home():
@@ -38,7 +38,9 @@ def home():
 
 @app.route('/ask', methods=['POST'])
 def ask():
-    """ Direct usage endpoint (non-BotFramework) """
+    """
+    Direct usage endpoint for non-BotFramework usage.
+    """
     data = request.get_json()
     if not data or 'question' not in data:
         return jsonify({'error': 'Invalid request, "question" field is required.'}), 400
@@ -63,39 +65,61 @@ def messages():
     return Response(status=200)
 
 async def _bot_logic(turn_context: TurnContext):
+    """
+    We do everything in text. 
+    Commands:
+      - normal question => run ask_func
+      - "show source" => show last_source (if any)
+      - "export ppt" => generate PPT from entire chat, last question, last answer
+    """
     conversation_id = turn_context.activity.conversation.id
 
-    # Ensure we have some dict for this conversation
+    # Initialize conversation data if not present
     if conversation_id not in conversation_data:
         conversation_data[conversation_id] = {
             "last_question": "",
             "last_answer": "",
+            "last_source": "",
             "chat_history": []
         }
 
-    # Link with ask_func's chat_history
+    # Link with ask_func
     import ask_func
     ask_func.chat_history = conversation_data[conversation_id]["chat_history"]
 
-    user_message = (turn_context.activity.text or "").strip().lower()
+    user_message = (turn_context.activity.text or "").strip()
 
-    # If user typed "export ppt", do the PPT generation
-    if user_message == "export ppt":
-        # Use the last Q&A
+    ############################################################################
+    # 1. If user typed "show source"
+    ############################################################################
+    if user_message.lower() == "show source":
+        # Return the last_source if we have any
+        last_source = conversation_data[conversation_id]["last_source"]
+        if last_source:
+            await turn_context.send_activity(last_source)
+        else:
+            await turn_context.send_activity("No source available for the last answer.")
+        return
+
+    ############################################################################
+    # 2. If user typed "export ppt"
+    ############################################################################
+    if user_message.lower() == "export ppt":
         last_q = conversation_data[conversation_id]["last_question"]
         last_a = conversation_data[conversation_id]["last_answer"]
         if not last_a:
             await turn_context.send_activity("No previous answer found to export.")
             return
 
+        # Build the entire chat as a single string
         chat_history_str = "\n".join(ask_func.chat_history)
 
-        # Call the GPT-based PPT
+        # Generate PPT
         ppt_url = ppt_export_agent.generate_ppt_from_llm(
             question=last_q,
             answer_text=last_a,
             chat_history_str=chat_history_str,
-            instructions=""
+            instructions=""  # or prompt user for instructions in another step
         )
         if ppt_url:
             await turn_context.send_activity(f"Here is your GPT-based PPT link:\n{ppt_url}")
@@ -103,33 +127,46 @@ async def _bot_logic(turn_context: TurnContext):
             await turn_context.send_activity("Sorry, I couldn't create the PPT file.")
         return
 
-    # Otherwise, treat it as a normal question
-    question_text = turn_context.activity.text or ""
+    ############################################################################
+    # 3. Otherwise, treat user_message as a normal question
+    ############################################################################
+    question_text = user_message
     answer_text = Ask_Question(question_text)
 
-    # Update chat_history
+    # Update the chat_history with ask_func
     conversation_data[conversation_id]["chat_history"] = ask_func.chat_history
 
-    # If greeting, just respond with text
+    # If greeting, just respond and store
     if answer_text.startswith("Hello! I'm The CXQA AI Assistant") or \
        answer_text.startswith("Hello! How may I assist you"):
-        # store it, though
         conversation_data[conversation_id]["last_question"] = question_text
         conversation_data[conversation_id]["last_answer"] = answer_text
-        await turn_context.send_activity(Activity(type="message", text=answer_text))
+        conversation_data[conversation_id]["last_source"] = ""
+        await turn_context.send_activity(answer_text)
         return
 
-    # store the Q & A
-    conversation_data[conversation_id]["last_question"] = question_text
-    conversation_data[conversation_id]["last_answer"] = answer_text
+    # We check if the answer has "\n\nSource:"
+    # If so, we split it out, store the source, and remove it from the displayed portion
+    source_index = answer_text.find("\n\nSource:")
+    if source_index != -1:
+        main_answer = answer_text[:source_index].strip()
+        source_text = answer_text[source_index:].strip()  # includes "\n\nSource:..."
+    else:
+        main_answer = answer_text
+        source_text = ""
 
-    # Return the final answer as plain text
-    # Also tell them how to export PPT:
-    final_message = (
-        f"{answer_text}\n\n"
-        "If you'd like to export this answer to PPT, please type: 'export ppt'"
-    )
-    await turn_context.send_activity(Activity(type="message", text=final_message))
+    # Store Q, A, Source
+    conversation_data[conversation_id]["last_question"] = question_text
+    conversation_data[conversation_id]["last_answer"] = main_answer
+    conversation_data[conversation_id]["last_source"] = source_text
+
+    # Build final message to user
+    final_msg = main_answer
+    if source_text:
+        final_msg += "\n\n(Type 'show source' to view the source.)"
+    final_msg += "\n\n(Type 'export ppt' to create a PPT from this answer.)"
+
+    await turn_context.send_activity(final_msg)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=80)
