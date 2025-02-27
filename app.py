@@ -7,7 +7,7 @@ import requests
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
 from botbuilder.schema import Activity
 
-# Import your existing logic from ask_func.py
+# Import your existing Q&A logic from ask_func.py
 from ask_func import Ask_Question
 
 # Additional libraries for PPT
@@ -17,7 +17,7 @@ from azure.storage.blob import BlobServiceClient
 
 app = Flask(__name__)
 
-# Read Bot credentials from environment variables
+# Bot credentials from environment variables (placeholder if empty)
 MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
 MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 
@@ -25,19 +25,12 @@ MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
 
-###########################################################
-# Conversation State
-# - We now store multiple Q&A answers in a dictionary
-#   { answer_id: <answer text> }
-#
-# conversation_histories[conversation_id] = [
-#    ... chat messages ...
-# ]
-# conversation_histories[conversation_id + "_answers"] = {
-#    <uuid>: <answer_text>,
-#    ...
-# }
-###########################################################
+######################################################################
+# conversation_histories is a dict:
+#   conversation_histories[conversation_id] -> the chat messages (list)
+#   conversation_histories[conversation_id + "_answers"] -> a dict
+#       mapping answer_id (uuid) -> the GPT answer text
+######################################################################
 conversation_histories = {}
 
 @app.route('/', methods=['GET'])
@@ -50,7 +43,6 @@ def ask():
     if not data or 'question' not in data:
         return jsonify({'error': 'Invalid request, "question" field is required.'}), 400
     question = data['question']
-    # For direct usage, we still rely on the global chat_history in ask_func.
     answer = Ask_Question(question)
     return jsonify({'answer': answer})
 
@@ -61,7 +53,6 @@ def messages():
     # Deserialize incoming Activity
     body = request.json
     activity = Activity().deserialize(body)
-    # Get the Authorization header (for Bot Framework auth)
     auth_header = request.headers.get("Authorization", "")
     loop = asyncio.new_event_loop()
     try:
@@ -71,42 +62,44 @@ def messages():
     return Response(status=200)
 
 async def _bot_logic(turn_context: TurnContext):
-    # Unique conversation ID
+    """
+    Main logic to handle user messages:
+    1. For normal text: Ask_Question -> store answer -> show a card (unless greeting).
+    2. If user clicks "Export PPT", we retrieve the correct answer from stored answers by its ID.
+    """
     conversation_id = turn_context.activity.conversation.id
 
-    # 1) Ensure we have a chat history list for this conversation
+    # Ensure we have chat message list
     if conversation_id not in conversation_histories:
         conversation_histories[conversation_id] = []
-
-    # 2) Also ensure we have an "answers" dict to store multiple answers
+    # Ensure we have an answers dict
     answers_key = conversation_id + "_answers"
     if answers_key not in conversation_histories:
         conversation_histories[answers_key] = {}
 
-    # Hook up ask_func's chat_history to this conversation's messages
+    # Use the conversation-specific chat_history in ask_func
     import ask_func
     ask_func.chat_history = conversation_histories[conversation_id]
 
-    # Check if the user clicked an Action.Submit button
+    # Check if user clicked an action button
     if turn_context.activity.value and "action" in turn_context.activity.value:
+        # It's an Action.Submit
         action = turn_context.activity.value["action"]
-
         if action == "export":
-            # The user wants to export a PPT from a previous answer
+            # They want to export a PPT
             answer_id = turn_context.activity.value.get("answer_id", "")
-            # Retrieve that specific answer text from the answers dict
-            text_for_ppt = conversation_histories[answers_key].get(answer_id, "")
+            stored_answers = conversation_histories[answers_key]
+            text_for_ppt = stored_answers.get(answer_id, "")
 
             if not text_for_ppt:
-                # If there's no matching answer, we can't export
                 await turn_context.send_activity("No previous answer found to export.")
                 return
 
-            # Otherwise, generate PPT
-            ppt_filename = generate_and_upload_ppt(text_for_ppt)
-            if ppt_filename:
+            # Generate PPT
+            ppt_url = generate_and_upload_ppt(text_for_ppt)
+            if ppt_url:
                 await turn_context.send_activity(
-                    f"I've generated your PPT! You can download it here:\n{ppt_filename}"
+                    f"I've generated your PPT! You can download it here:\n{ppt_url}"
                 )
             else:
                 await turn_context.send_activity("Sorry, I couldn't create the PPT file.")
@@ -114,26 +107,31 @@ async def _bot_logic(turn_context: TurnContext):
             await turn_context.send_activity("Unknown action received.")
         return
 
-    # Otherwise, it's a normal user message: we ask the question
+    # Otherwise, it's normal text
     user_message = turn_context.activity.text or ""
     answer_text = Ask_Question(user_message)
-
-    # Update the conversation's chat messages
+    # update ask_func's chat_history
     conversation_histories[conversation_id] = ask_func.chat_history
 
-    # 3) Store the new answer in the answers dict using a unique ID
+    # STEP 1: Check if the answer is a greeting. If so, just send plain text
+    # The typical greeting answers from ask_func might be:
+    #  "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"
+    #  "Hello! How may I assist you?"
+    # We'll look for a simpler approach, just check if the answer_text starts with "Hello!"
+    if answer_text.startswith("Hello! I'm The CXQA AI Assistant") or answer_text.startswith("Hello! How may I assist you"):
+        await turn_context.send_activity(Activity(type="message", text=answer_text))
+        return
+
+    # STEP 2: Not a greeting -> store the answer in a dict with unique ID
     new_answer_id = str(uuid.uuid4())
     conversation_histories[answers_key][new_answer_id] = answer_text
 
-    # If the answer has "Source:" content, we show an Adaptive Card. 
-    # Or, you can always show an Adaptive Card for every answer, if you want.
+    # STEP 3: Decide how to show the card. If "Source:" is in the answer, we do a "Show Source" toggle.
     if "\n\nSource:" in answer_text:
-        # Split main answer vs. source
         parts = answer_text.split("\n\nSource:", 1)
         main_answer = parts[0].strip()
         source_details = "Source:" + parts[1].strip()
 
-        # Build a card with a Show Source button & an Export PPT button
         adaptive_card = {
             "type": "AdaptiveCard",
             "body": [
@@ -152,32 +150,21 @@ async def _bot_logic(turn_context: TurnContext):
                     "title": "Show Source",
                     "targetElements": ["sourceBlock"]
                 },
-                # Notice we pass "action": "export" AND the "answer_id" so we can find the right answer
+                # Export PPT
                 {
                     "type": "Action.Submit",
                     "title": "Export PPT",
                     "data": {
                         "action": "export",
-                        "answer_id": new_answer_id  # NEW
+                        "answer_id": new_answer_id
                     }
                 }
             ],
             "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
             "version": "1.2"
         }
-
-        message = Activity(
-            type="message",
-            attachments=[{
-                "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": adaptive_card
-            }]
-        )
-        await turn_context.send_activity(message)
     else:
-        # If there's no "Source:" line, we can still show a card with "Export PPT" if you prefer.
-        # Or just plain text. For demonstration, let's show a simpler card with an export button:
-
+        # A simple card with just "Export PPT"
         adaptive_card = {
             "type": "AdaptiveCard",
             "body": [
@@ -189,7 +176,7 @@ async def _bot_logic(turn_context: TurnContext):
                     "title": "Export PPT",
                     "data": {
                         "action": "export",
-                        "answer_id": new_answer_id  # NEW
+                        "answer_id": new_answer_id
                     }
                 }
             ],
@@ -197,34 +184,33 @@ async def _bot_logic(turn_context: TurnContext):
             "version": "1.2"
         }
 
-        message = Activity(
-            type="message",
-            attachments=[{
-                "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": adaptive_card
-            }]
-        )
-        await turn_context.send_activity(message)
+    message = Activity(
+        type="message",
+        attachments=[{
+            "contentType": "application/vnd.microsoft.card.adaptive",
+            "content": adaptive_card
+        }]
+    )
+    await turn_context.send_activity(message)
 
-##############################################
-# PPT Generation Helper
-##############################################
+####################################################
+# PPT Generation
+####################################################
 def generate_and_upload_ppt(text_for_ppt):
     """
-    1) Generate a local PPTX file from the answer text.
-    2) Upload it to Azure Blob Storage (or any location).
-    3) Return a direct link or None if error.
+    1) Generate a .pptx using python-pptx
+    2) Upload to Azure Blob (fake placeholders remain)
+    3) Return the public URL (SAS)
     """
     try:
-        # 1) Generate PPT using python-pptx
         prs = Presentation()
-        # Slide 1: Title & Subtitle
+        # Slide 1
         slide_layout = prs.slide_layouts[0]
         slide = prs.slides.add_slide(slide_layout)
         slide.shapes.title.text = "Your Generated PPT"
         slide.placeholders[1].text = "Subtitle from GPT"
 
-        # Slide 2: bullet points
+        # Slide 2
         bullet_slide_layout = prs.slide_layouts[1]
         slide2 = prs.slides.add_slide(bullet_slide_layout)
         slide2.shapes.title.text = "Main Answer"
@@ -236,12 +222,10 @@ def generate_and_upload_ppt(text_for_ppt):
                 p = tf.add_paragraph()
                 p.text = line.strip()
 
-        # Save to a temporary file
         filename = f"ppt_{uuid.uuid4()}.pptx"
         prs.save(filename)
 
-        # 2) Upload to Azure Blob
-        #    (Fake placeholders—replace with real credentials)
+        # Upload to Azure Blob
         account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
         sas_token = (
             "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
@@ -257,10 +241,9 @@ def generate_and_upload_ppt(text_for_ppt):
         with open(filename, "rb") as data:
             container_client.upload_blob(name=target_blob_name, data=data, overwrite=True)
 
-        # Create a direct link to the PPT
         ppt_url = f"{account_url}/{container_name}/{target_blob_name}?{sas_token}"
 
-        # Remove local file
+        # Cleanup
         import os
         os.remove(filename)
 
