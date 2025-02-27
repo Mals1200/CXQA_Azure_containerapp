@@ -10,7 +10,7 @@ from botbuilder.schema import Activity
 # Q&A logic (unchanged) 
 from ask_func import Ask_Question
 
-# GPT-based PPT generation (with your fake keys)
+# GPT-based PPT generation
 import ppt_export_agent
 
 import uuid
@@ -28,7 +28,7 @@ adapter = BotFrameworkAdapter(adapter_settings)
 # conversation_data[conversation_id] = {
 #   "last_question": "...",
 #   "last_answer": "...",   # answer without the "Source:"
-#   "last_source": "...",   # just the "Source:" portion if present
+#   "last_source": "...",   # just the "Source:" portion
 #   "chat_history": [ ... ] # same as ask_func.chat_history
 # }
 ##########################################################################################
@@ -69,7 +69,7 @@ async def _bot_logic(turn_context: TurnContext):
     - If user typed "export ppt", we generate PPT from last Q&A + entire chat.
     - Otherwise, we treat as normal question -> ask_func -> store Q, A, Source.
     - We build an Adaptive Card with "Show Source" (ToggleVisibility) + "Export PPT" (Submit).
-    - Channels that don't support it => 'cards.unsupported' can fallback to text commands.
+    - Channels that don't support it => fallback to text commands.
     """
     conversation_id = turn_context.activity.conversation.id
 
@@ -82,14 +82,14 @@ async def _bot_logic(turn_context: TurnContext):
             "chat_history": []
         }
 
-    # Link ask_func's chat_history
+    # Link ask_func's chat_history to this conversation
     import ask_func
     ask_func.chat_history = conversation_data[conversation_id]["chat_history"]
 
     user_message = (turn_context.activity.text or "").strip().lower()
 
     # -----------------------------------------------------------------
-    # 1) Fallback text commands (for Skype or channels that don't do AC)
+    # 1) Fallback text commands
     # -----------------------------------------------------------------
     if user_message == "show source":
         # Return last_source if available
@@ -112,7 +112,7 @@ async def _bot_logic(turn_context: TurnContext):
             question=last_q,
             answer_text=last_a,
             chat_history_str=chat_history_str,
-            instructions=""  # or a separate command for user instructions
+            instructions=""
         )
         if ppt_url:
             await turn_context.send_activity(f"Here is your GPT-based PPT link:\n{ppt_url}")
@@ -128,7 +128,7 @@ async def _bot_logic(turn_context: TurnContext):
     # Update chat_history
     conversation_data[conversation_id]["chat_history"] = ask_func.chat_history
 
-    # If greeting, just store & respond, no card
+    # If greeting, just store & respond
     if answer_text.startswith("Hello! I'm The CXQA AI Assistant") or \
        answer_text.startswith("Hello! How may I assist you"):
         conversation_data[conversation_id]["last_question"] = question_text
@@ -151,32 +151,22 @@ async def _bot_logic(turn_context: TurnContext):
     conversation_data[conversation_id]["last_answer"] = main_answer
     conversation_data[conversation_id]["last_source"] = source_text
 
-    # Now we build the final displayed text
+    # Build the final displayed text
     displayed_text = main_answer
     if source_text:
-        # We'll hide the source behind a button & fallback text
-        # This is for channels that support ToggleVisibility
+        # We'll hide the source behind a button, fallback text for channels ignoring AC
         displayed_text += "\n\n(You can click 'Show Source' or type 'show source'.)"
-    # Also mention 'export ppt'
+    # Also mention 'Export PPT'
     displayed_text += "\n\n(You can click 'Export PPT' or type 'export ppt'.)"
 
-    # -----------------------------------------------------------------
-    # 3) Build the Adaptive Card with 2 buttons:
-    #    - Show Source (Action.ToggleVisibility)
-    #    - Export PPT (Action.Submit)
-    #    Fallback text so channels that can't show the card see instructions
-    # -----------------------------------------------------------------
-    # We'll only add the toggle if we actually have source text
+    # Build Adaptive Card with 2 buttons: "Show Source" (ToggleVisibility) & "Export PPT" (Submit)
     actions = []
     if source_text:
-        # "Show Source"
         actions.append({
             "type": "Action.ToggleVisibility",
             "title": "Show Source",
             "targetElements": ["sourceBlock"]
         })
-
-    # "Export PPT"
     actions.append({
         "type": "Action.Submit",
         "title": "Export PPT",
@@ -212,7 +202,7 @@ async def _bot_logic(turn_context: TurnContext):
 
     message = Activity(
         type="message",
-        text=displayed_text,  # fallback text for channels ignoring the card
+        text=displayed_text,  # fallback text
         attachments=[{
             "contentType": "application/vnd.microsoft.card.adaptive",
             "content": adaptive_card
