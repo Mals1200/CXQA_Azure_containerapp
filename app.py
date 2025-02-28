@@ -110,26 +110,37 @@ async def _bot_logic(turn_context: TurnContext):
     # Update chat_history
     conversation_data[conversation_id]["chat_history"] = ask_func.chat_history
 
-    # If greeting, just respond with text
-    if answer_text.startswith("Hello! I'm The CXQA AI Assistant") or \
-       answer_text.startswith("Hello! How may I assist you"):
-        # store it, though
-        conversation_data[conversation_id]["last_question"] = question_text
-        conversation_data[conversation_id]["last_answer"] = answer_text
-        await turn_context.send_activity(Activity(type="message", text=answer_text))
-        return
-
-    # store the Q & A
+    # Store the Q & A
     conversation_data[conversation_id]["last_question"] = question_text
     conversation_data[conversation_id]["last_answer"] = answer_text
 
-    # Return the final answer as plain text
-    # Also tell them how to export PPT:
-    final_message = (
-        f"{answer_text}\n\n"
-        "If you'd like to export this answer to PPT, please type: 'export ppt'"
-    )
-    await turn_context.send_activity(Activity(type="message", text=final_message))
+    # Extract source if available
+    if "\n\nSource:" in answer_text:
+        parts = answer_text.split("\n\nSource:", 1)
+        main_answer = parts[0].strip()
+        source_details = "Source:" + parts[1].strip()
+        
+        # Build an Adaptive Card with a source toggle
+        adaptive_card = {
+            "type": "AdaptiveCard",
+            "body": [
+                {"type": "TextBlock", "text": main_answer, "wrap": True},
+                {"type": "TextBlock", "text": source_details, "wrap": True, "id": "sourceBlock", "isVisible": False}
+            ],
+            "actions": [
+                {"type": "Action.ToggleVisibility", "title": "Show Source", "targetElements": ["sourceBlock"]}
+            ],
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "version": "1.2"
+        }
+        message = Activity(
+            type="message",
+            attachments=[{"contentType": "application/vnd.microsoft.card.adaptive", "content": adaptive_card}]
+        )
+        await turn_context.send_activity(message)
+    else:
+        # Send plain text if no source is available
+        await turn_context.send_activity(Activity(type="message", text=answer_text))
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=80)
