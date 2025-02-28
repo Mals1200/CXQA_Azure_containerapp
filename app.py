@@ -1,10 +1,14 @@
+# app.py
 import os
 import asyncio
 from flask import Flask, request, jsonify, Response
 import requests
 
-# Import Ask_Question and its global chat_history from your unchanged ask_func.py
+# Import Ask_Question and chat_history from your unchanged ask_func.py
 from ask_func import Ask_Question, chat_history
+
+# Import the new ppt_export_agent
+import ppt_export_agent
 
 # Bot Framework imports
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
@@ -55,32 +59,84 @@ def messages():
     return Response(status=200)
 
 async def _bot_logic(turn_context: TurnContext):
-    # Retrieve the conversation ID from the incoming activity.
     conversation_id = turn_context.activity.conversation.id
 
-    # Initialize conversation history for this conversation if it doesn't exist.
     if conversation_id not in conversation_histories:
         conversation_histories[conversation_id] = []
 
-    # Before processing, override the chat_history in ask_func.py with this conversation's history.
+    # Sync ask_func's global chat_history with this conversation's history
     import ask_func
     ask_func.chat_history = conversation_histories[conversation_id]
 
-    user_message = turn_context.activity.text or ""
-    answer = Ask_Question(user_message)
+    user_message = (turn_context.activity.text or "").strip().lower()
 
-    # After processing, update the conversation-specific history.
+    # ----------------------------------------------------------------
+    # EXAMPLE: If user says "export ppt", we ask for instructions next.
+    # ----------------------------------------------------------------
+    if user_message == "export ppt":
+        await turn_context.send_activity(
+            Activity(type="message", text="Please provide instructions for the PPT slides.")
+        )
+        # We'll store a flag in your conversation state. This example is naive.
+        # For demonstration, let's store a marker in the last message of chat history:
+        ask_func.chat_history.append("Assistant: [PPT_EXPORT_INSTRUCTIONS_AWAITED]")
+        conversation_histories[conversation_id] = ask_func.chat_history
+        return
+
+    # ---------------------------------------------------------------------
+    # If we've asked the user for instructions (the marker is in chat_history),
+    # let's interpret the next user message as PPT instructions.
+    # ---------------------------------------------------------------------
+    if "Assistant: [PPT_EXPORT_INSTRUCTIONS_AWAITED]" in ask_func.chat_history:
+        # Extract the instructions from user_message
+        ppt_instructions = user_message
+        # Remove the marker from history
+        ask_func.chat_history = [
+            msg for msg in ask_func.chat_history 
+            if "[PPT_EXPORT_INSTRUCTIONS_AWAITED]" not in msg
+        ]
+
+        # Call the export function from ppt_export_agent
+        link = ppt_export_agent.export_ppt(ask_func.chat_history, ppt_instructions)
+
+        # Present the link as a button in an Adaptive Card
+        adaptive_card = {
+            "type": "AdaptiveCard",
+            "body": [
+                {"type": "TextBlock", "text": "Your PowerPoint is ready for download!", "wrap": True}
+            ],
+            "actions": [
+                {
+                    "type": "Action.OpenUrl",
+                    "title": "Export",
+                    "url": link  # the direct PPT download link
+                }
+            ],
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "version": "1.2"
+        }
+        message = Activity(
+            type="message",
+            attachments=[{"contentType": "application/vnd.microsoft.card.adaptive", "content": adaptive_card}]
+        )
+        await turn_context.send_activity(message)
+
+        # Save updated chat history
+        conversation_histories[conversation_id] = ask_func.chat_history
+        return
+
+    # -----------------------------------------------------
+    # Otherwise, handle normal Q&A with Ask_Question
+    # -----------------------------------------------------
+    answer = Ask_Question(user_message)
     conversation_histories[conversation_id] = ask_func.chat_history
 
-    # Check if the answer contains a source section (using "\n\nSource:" as a marker)
+    # Source handling
     if "\n\nSource:" in answer:
-        # Split into main answer and source details
         parts = answer.split("\n\nSource:", 1)
         main_answer = parts[0].strip()
-        # Optionally, prepend "Source:" to the details
         source_details = "Source:" + parts[1].strip()
 
-        # Build an Adaptive Card with the main answer and a hidden block for the source details.
         adaptive_card = {
             "type": "AdaptiveCard",
             "body": [
@@ -99,7 +155,6 @@ async def _bot_logic(turn_context: TurnContext):
         )
         await turn_context.send_activity(message)
     else:
-        # Send plain text answer if no source section is detected.
         await turn_context.send_activity(Activity(type="message", text=answer))
 
 if __name__ == '__main__':
