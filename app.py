@@ -1,102 +1,95 @@
-# app.py (partial) - Example of hooking up ppt_export_agent
-
 import os
 import asyncio
 from flask import Flask, request, jsonify, Response
-from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
-from botbuilder.schema import Activity
+import requests
 
-# Existing imports:
-from ask_func import Ask_Question, chat_history
-import ppt_export_agent  # <-- Import our new PPT agent
+# Your existing Ask_Question function (imported from ask_func.py)
+from ask_func import Ask_Question
+
+# BotBuilder imports
+from botbuilder.core import (
+    BotFrameworkAdapter,
+    BotFrameworkAdapterSettings,
+    TurnContext
+)
+from botbuilder.schema import Activity
 
 app = Flask(__name__)
 
-# ... your existing BotFramework setup ...
-adapter_settings = BotFrameworkAdapterSettings("", "")
+# 1) Read Bot credentials from ENV
+MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
+MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
+
+# 2) Create settings & adapter for Bot
+adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
 
-conversation_histories = {}  # to track chat history per conversation
 
+# =========================
+# Existing endpoints
+# =========================
+@app.route('/', methods=['GET'])
+def home():
+    return jsonify({'message': 'API is running!'}), 200
+
+
+@app.route('/ask', methods=['POST'])
+def ask():
+    data = request.get_json()
+    if not data or 'question' not in data:
+        return jsonify({'error': 'Invalid request, "question" field is required.'}), 400
+    
+    question = data['question']
+    answer = Ask_Question(question)
+    return jsonify({'answer': answer})
+
+
+# =========================
+# Bot Framework endpoint
+# =========================
 @app.route("/api/messages", methods=["POST"])
 def messages():
-    # ... existing code ...
-    pass
+    """
+    This is the endpoint the Bot Service calls (e.g. from Web Chat).
+    We must handle it asynchronously with 'adapter.process_activity'.
+    """
+    if "application/json" not in request.headers.get("Content-Type", ""):
+        return Response(status=415)
+
+    # 1) Deserialize incoming Activity
+    body = request.json
+    activity = Activity().deserialize(body)
+
+    # 2) Grab the Authorization header (for Bot Framework auth)
+    auth_header = request.headers.get("Authorization", "")
+
+    # 3) We must run the async method in a separate event loop
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(
+            adapter.process_activity(activity, auth_header, _bot_logic)
+        )
+    finally:
+        loop.close()
+
+    # 4) Return HTTP 200 (or 201) once the message is processed
+    return Response(status=200)
+
 
 async def _bot_logic(turn_context: TurnContext):
-    conversation_id = turn_context.activity.conversation.id
-    if conversation_id not in conversation_histories:
-        conversation_histories[conversation_id] = []
+    """
+    This async function is where we handle the user's message
+    and craft a reply.
+    """
+    user_message = turn_context.activity.text or ""
+    answer = Ask_Question(user_message)  # your existing Q&A logic
 
-    # Sync up with ask_func's chat_history
-    import ask_func
-    ask_func.chat_history = conversation_histories[conversation_id]
+    # Send answer back to the user
+    await turn_context.send_activity(Activity(type="message", text=answer))
 
-    # The user's message
-    user_message = (turn_context.activity.text or "").strip()
 
-    ############################################
-    # 1) DETECT if user explicitly says "export ppt"
-    ############################################
-    if user_message.lower() == "export ppt":
-        # Step 1: Prompt user for instructions
-        await turn_context.send_activity("Please type your PPT instructions now.")
-        
-        # Let's store a marker in the conversation history 
-        # so we know the next message is the 'instructions'
-        ask_func.chat_history.append("Assistant: [AWAITING_PPT_INSTRUCTIONS]")
-        conversation_histories[conversation_id] = ask_func.chat_history
-        return
-
-    # Step 2: If we are waiting for PPT instructions, the next user message is the instructions
-    if "Assistant: [AWAITING_PPT_INSTRUCTIONS]" in ask_func.chat_history:
-        # Remove the marker from chat history
-        ask_func.chat_history = [x for x in ask_func.chat_history if "[AWAITING_PPT_INSTRUCTIONS]" not in x]
-        
-        ppt_instructions = user_message
-        
-        # 3) Actually call the ppt_export_agent!
-        download_link = ppt_export_agent.export_ppt(
-            ask_func.chat_history,   # entire history
-            ppt_instructions         # user instructions
-        )
-        
-        # 4) Provide user a button or text link to download
-        # Example: an Adaptive Card
-        adaptive_card = {
-            "type": "AdaptiveCard",
-            "body": [
-                {"type": "TextBlock", "text": "Here is your PowerPoint download link:", "wrap": True}
-            ],
-            "actions": [
-                {
-                    "type": "Action.OpenUrl",
-                    "title": "Export",
-                    "url": download_link
-                }
-            ],
-            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-            "version": "1.2"
-        }
-
-        message = Activity(
-            type="message",
-            attachments=[{"contentType": "application/vnd.microsoft.card.adaptive", "content": adaptive_card}]
-        )
-        await turn_context.send_activity(message)
-
-        # Save updated history and return
-        conversation_histories[conversation_id] = ask_func.chat_history
-        return
-
-    ############################################
-    # 2) Otherwise, do normal Q&A with ask_func
-    ############################################
-    answer = Ask_Question(user_message)
-    conversation_histories[conversation_id] = ask_func.chat_history
-
-    if "\n\nSource:" in answer:
-        # ... your existing code to show source ...
-        pass
-    else:
-        await turn_context.send_activity(Activity(type="message", text=answer))
+# =========================
+# Gunicorn entry point
+# =========================
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=80)
