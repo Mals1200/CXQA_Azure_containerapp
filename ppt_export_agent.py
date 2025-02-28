@@ -1,11 +1,10 @@
 # ppt_export_agent.py
-
 import io
 import requests
 from flask import Blueprint, request, jsonify, send_file
 from datetime import datetime
 from pptx import Presentation
-from ask_func import chat_history  # We'll use the global chat_history
+from ask_func import chat_history
 
 ppt_export_bp = Blueprint("ppt_export_bp", __name__)
 
@@ -33,7 +32,7 @@ User_Instructions:
     payload = {
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": "Please create the PowerPoint outline now."}
+            {"role": "user", "content": "Create the PowerPoint outline now."}
         ],
         "max_tokens": 1000,
         "temperature": 0.7
@@ -43,37 +42,35 @@ User_Instructions:
         "api-key": LLM_API_KEY
     }
     try:
-        response = requests.post(LLM_ENDPOINT, headers=headers, json=payload, timeout=15)
-        response.raise_for_status()
-        data = response.json()
+        resp = requests.post(LLM_ENDPOINT, headers=headers, json=payload, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
         return data["choices"][0]["message"]["content"].strip()
     except Exception as e:
         return f"Error: {e}"
 
 def build_ppt_from_outline(outline_text):
     prs = Presentation()
-    # In this example, each blank line -> a new slide
     slide_sections = outline_text.split("\n\n")
 
-    for section in slide_sections:
-        slide_layout = prs.slide_layouts[1]  # Title + Content
-        slide = prs.slides.add_slide(slide_layout)
+    for sec in slide_sections:
+        layout = prs.slide_layouts[1]  # Title + Content
+        slide = prs.slides.add_slide(layout)
         shapes = slide.shapes
         title_shape = shapes.title
         body_shape = shapes.placeholders[1]
 
-        lines = section.split("\n")
+        lines = sec.strip().split("\n")
         if lines:
-            title_shape.text = lines[0].strip()  # first line as title
-        bullet_lines = lines[1:]  # subsequent lines as bullet points
+            title_shape.text = lines[0]
+        bullet_lines = lines[1:]
 
         tf = body_shape.text_frame
         for bullet in bullet_lines:
             p = tf.add_paragraph()
-            p.text = bullet.strip()
+            p.text = bullet
             p.level = 0
 
-    # Save to BytesIO for returning as file
     ppt_buffer = io.BytesIO()
     prs.save(ppt_buffer)
     ppt_buffer.seek(0)
@@ -82,13 +79,11 @@ def build_ppt_from_outline(outline_text):
 @ppt_export_bp.route("/create_ppt", methods=["POST"])
 def create_ppt():
     data = request.get_json()
-    instructions = data.get("instructions", "")
+    instructions = data.get("instructions", "").strip()
     if not instructions:
         return jsonify({"error": "No instructions provided."}), 400
 
-    # Convert chat_history list to a single string
     conversation_str = "\n".join(chat_history)
-
     outline = generate_ppt_outline(conversation_str, instructions)
     ppt_file = build_ppt_from_outline(outline)
 
