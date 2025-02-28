@@ -24,13 +24,7 @@ adapter = BotFrameworkAdapter(adapter_settings)
 ########################################################################
 # We store the "last question" and "last answer" for each conversation
 ########################################################################
-conversation_data = {
-    # conversation_id: {
-    #   "last_question": "...",
-    #   "last_answer": "...",
-    #   "chat_history": [...]
-    # }
-}
+conversation_data = {}
 
 @app.route('/', methods=['GET'])
 def home():
@@ -81,11 +75,15 @@ async def _bot_logic(turn_context: TurnContext):
 
     # If user typed "export ppt", do the PPT generation
     if user_message == "export ppt":
-        # Use the last Q&A
-        last_q = conversation_data[conversation_id]["last_question"]
-        last_a = conversation_data[conversation_id]["last_answer"]
-        if not last_a:
-            await turn_context.send_activity("No previous answer found to export.")
+        last_q = conversation_data[conversation_id].get("last_question", "")
+        last_a = conversation_data[conversation_id].get("last_answer", "")
+        
+        # Debugging: Print stored values
+        print(f"Exporting PPT - Last Q: {last_q}")
+        print(f"Exporting PPT - Last A: {last_a}")
+
+        if not last_a.strip():
+            await turn_context.send_activity("No previous answer found to export. Ask something first!")
             return
 
         chat_history_str = "\n".join(ask_func.chat_history)
