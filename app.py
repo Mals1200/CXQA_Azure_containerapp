@@ -3,18 +3,17 @@ import asyncio
 from flask import Flask, request, jsonify, Response
 import requests
 
-# Import your Q&A logic from ask_func
-from ask_func import Ask_Question, chat_history
-
 # Bot Framework
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
 from botbuilder.schema import Activity
 
-# Import PPT blueprint
-from ppt_export_agent import ppt_export_bp
+# The Q&A logic
+from ask_func import Ask_Question
+
+# The GPT-based PPT generation
+import ppt_export_agent
 
 app = Flask(__name__)
-app.register_blueprint(ppt_export_bp)
 
 MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
 MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
@@ -22,30 +21,37 @@ MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
 
-# We'll track conversation data in memory
-conversation_histories = {}
-conversation_states = {}  # track "waiting_for_ppt_instructions" or not
+########################################################################
+# We store the "last question" and "last answer" for each conversation
+########################################################################
+conversation_data = {
+    # conversation_id: {
+    #   "last_question": "...",
+    #   "last_answer": "...",
+    #   "chat_history": [...]
+    # }
+}
 
 @app.route('/', methods=['GET'])
 def home():
-    return jsonify({"message": "API is running!"}), 200
+    return jsonify({'message': 'API is running!'}), 200
 
 @app.route('/ask', methods=['POST'])
 def ask():
+    """ Direct usage endpoint (non-BotFramework) """
     data = request.get_json()
     if not data or 'question' not in data:
         return jsonify({'error': 'Invalid request, "question" field is required.'}), 400
 
-    # This is your simple endpoint for direct usage without BotFramework
     question = data['question']
     answer = Ask_Question(question)
     return jsonify({'answer': answer})
-
 
 @app.route("/api/messages", methods=["POST"])
 def messages():
     if "application/json" not in request.headers.get("Content-Type", ""):
         return Response(status=415)
+
     body = request.json
     activity = Activity().deserialize(body)
     auth_header = request.headers.get("Authorization", "")
@@ -57,114 +63,73 @@ def messages():
     return Response(status=200)
 
 async def _bot_logic(turn_context: TurnContext):
-    """
-    The main logic for receiving messages from the user (Teams/Slack).
-    """
     conversation_id = turn_context.activity.conversation.id
 
-    # Initialize conversation memory if needed
-    if conversation_id not in conversation_histories:
-        conversation_histories[conversation_id] = []
-    if conversation_id not in conversation_states:
-        conversation_states[conversation_id] = {"waiting_for_ppt_instructions": False}
+    # Ensure we have some dict for this conversation
+    if conversation_id not in conversation_data:
+        conversation_data[conversation_id] = {
+            "last_question": "",
+            "last_answer": "",
+            "chat_history": []
+        }
 
-    # Link the ask_func chat_history to this conversation
+    # Link with ask_func's chat_history
     import ask_func
-    ask_func.chat_history = conversation_histories[conversation_id]
+    ask_func.chat_history = conversation_data[conversation_id]["chat_history"]
 
-    # Check if we are currently waiting for PPT instructions
-    if conversation_states[conversation_id]["waiting_for_ppt_instructions"]:
-        # The user's message is presumably the instructions
-        instructions = turn_context.activity.text.strip()
-        conversation_states[conversation_id]["waiting_for_ppt_instructions"] = False
+    user_message = (turn_context.activity.text or "").strip().lower()
 
-        # Now call the PPT creation route
-        create_ppt_url = request.host_url.rstrip('/') + "/create_ppt"
-        try:
-            resp = requests.post(create_ppt_url, json={"instructions": instructions}, timeout=30)
-            if resp.status_code == 200:
-                # In a real scenario, resp is a .pptx file. 
-                # We can't directly attach that in BotFramework easily. 
-                # You might store it in a file share and provide a link, or something similar.
-                # For simplicity, let's confirm success:
-                await turn_context.send_activity("Your PPT has been generated. Please check your download.")
-            else:
-                await turn_context.send_activity(f"Failed to create PPT (status {resp.status_code}).")
-        except Exception as e:
-            await turn_context.send_activity(f"Error generating PPT: {e}")
-
-        return  # done handling this message
-
-    # If the user did NOT just provide instructions, let's see if they clicked the "Export PPT" button
-    # The "value" is in turn_context.activity.value for an Action.Submit
-    if turn_context.activity.value and "command" in turn_context.activity.value:
-        cmd = turn_context.activity.value["command"]
-        if cmd == "export_ppt":
-            # Start the flow to get instructions
-            conversation_states[conversation_id]["waiting_for_ppt_instructions"] = True
-            await turn_context.send_activity("Please provide the instructions for your PowerPoint.")
+    # If user typed "export ppt", do the PPT generation
+    if user_message == "export ppt":
+        # Use the last Q&A
+        last_q = conversation_data[conversation_id]["last_question"]
+        last_a = conversation_data[conversation_id]["last_answer"]
+        if not last_a:
+            await turn_context.send_activity("No previous answer found to export.")
             return
 
-    # Otherwise, it's a normal user question
-    user_message = turn_context.activity.text or ""
-    answer = Ask_Question(user_message)
-    conversation_histories[conversation_id] = ask_func.chat_history
+        chat_history_str = "\n".join(ask_func.chat_history)
 
-    # If the answer has a "Source: " line, we build an adaptive card with two buttons:
-    if "Source:" in answer:
-        # Let's split out main answer from the Source details
-        parts = answer.split("Source:")
-        main_answer = parts[0].strip()
-        source_details = "Source: " + parts[1].strip()
-
-        # Build an adaptive card with:
-        # - main_answer
-        # - hidden source block
-        # - "Show Source" (toggle)
-        # - "Export PPT" (submit)
-
-        adaptive_card = {
-            "type": "AdaptiveCard",
-            "body": [
-                {
-                    "type": "TextBlock",
-                    "text": main_answer,
-                    "wrap": True
-                },
-                {
-                    "type": "TextBlock",
-                    "text": source_details,
-                    "wrap": True,
-                    "id": "sourceBlock",
-                    "isVisible": False
-                }
-            ],
-            "actions": [
-                {
-                    "type": "Action.ToggleVisibility",
-                    "title": "Show Source",
-                    "targetElements": ["sourceBlock"]
-                },
-                {
-                    "type": "Action.Submit",
-                    "title": "Export PPT",
-                    "data": {"command": "export_ppt"}
-                }
-            ],
-            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-            "version": "1.2"
-        }
-        message = Activity(
-            type="message",
-            attachments=[{
-                "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": adaptive_card
-            }]
+        # Call the GPT-based PPT
+        ppt_url = ppt_export_agent.generate_ppt_from_llm(
+            question=last_q,
+            answer_text=last_a,
+            chat_history_str=chat_history_str,
+            instructions=""
         )
-        await turn_context.send_activity(message)
-    else:
-        # No source in the answer, just send it as text
-        await turn_context.send_activity(answer)
+        if ppt_url:
+            await turn_context.send_activity(f"Here is your GPT-based PPT link:\n{ppt_url}")
+        else:
+            await turn_context.send_activity("Sorry, I couldn't create the PPT file.")
+        return
+
+    # Otherwise, treat it as a normal question
+    question_text = turn_context.activity.text or ""
+    answer_text = Ask_Question(question_text)
+
+    # Update chat_history
+    conversation_data[conversation_id]["chat_history"] = ask_func.chat_history
+
+    # If greeting, just respond with text
+    if answer_text.startswith("Hello! I'm The CXQA AI Assistant") or \
+       answer_text.startswith("Hello! How may I assist you"):
+        # store it, though
+        conversation_data[conversation_id]["last_question"] = question_text
+        conversation_data[conversation_id]["last_answer"] = answer_text
+        await turn_context.send_activity(Activity(type="message", text=answer_text))
+        return
+
+    # store the Q & A
+    conversation_data[conversation_id]["last_question"] = question_text
+    conversation_data[conversation_id]["last_answer"] = answer_text
+
+    # Return the final answer as plain text
+    # Also tell them how to export PPT:
+    final_message = (
+        f"{answer_text}\n\n"
+        "If you'd like to export this answer to PPT, please type: 'export ppt'"
+    )
+    await turn_context.send_activity(Activity(type="message", text=final_message))
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=80)
