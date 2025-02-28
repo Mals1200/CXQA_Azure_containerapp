@@ -1,72 +1,100 @@
-import os
+# ppt_export_agent.py
+
 import io
-import asyncio
 import requests
-from flask import Flask, request, jsonify, send_file
+from flask import Blueprint, request, jsonify, send_file
+from datetime import datetime
 from pptx import Presentation
-from pptx.util import Inches
+from ask_func import chat_history  # We'll use the global chat_history
 
-# Import chat_history from ask_func.py
-from ask_func import chat_history
+ppt_export_bp = Blueprint("ppt_export_bp", __name__)
 
-app = Flask(__name__)
+LLM_ENDPOINT = (
+    "https://cxqaazureaihub2358016269.openai.azure.com/"
+    "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
+)
+LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
 
-# Define a global variable to store the instructions
-ppt_Instructions = ""
+def generate_ppt_outline(chat_history_str, instructions):
+    system_prompt = f"""
+You are a PowerPoint presentation expert. Use the following information to make the slides.
+Rules:
+- Only use the following information to create the slides.
+- Don't come up with anything outside of your scope in your slides.
+- Your output will be utilized by the "python-pptx" to create the slides.
 
-# PowerPoint generation function
-def generate_ppt(chat_history_str, instructions):
-    ppt = Presentation()
-    
-    # Title Slide
-    title_slide_layout = ppt.slide_layouts[0]  # Title Slide Layout
-    slide = ppt.slides.add_slide(title_slide_layout)
-    title = slide.shapes.title
-    subtitle = slide.placeholders[1]
-    title.text = "AI Conversation Summary"
-    subtitle.text = "Generated based on user interaction"
-    
-    # Content Slides
-    content_slide_layout = ppt.slide_layouts[1]  # Title and Content Layout
-    
-    # Convert chat history into slides
-    slides_data = chat_history_str.split('\n')
-    for i in range(0, len(slides_data), 2):
-        slide = ppt.slides.add_slide(content_slide_layout)
-        title = slide.shapes.title
-        content = slide.placeholders[1]
-        
-        user_text = slides_data[i] if i < len(slides_data) else ""
-        bot_text = slides_data[i + 1] if i + 1 < len(slides_data) else ""
-        
-        title.text = f"Conversation {i//2 + 1}"
-        content.text = f"User: {user_text}\n\nAssistant: {bot_text}"
-    
-    # Instruction Slide
-    slide = ppt.slides.add_slide(content_slide_layout)
-    title = slide.shapes.title
-    content = slide.placeholders[1]
-    title.text = "User Instructions"
-    content.text = instructions
-    
-    # Save presentation to bytes
-    ppt_bytes = io.BytesIO()
-    ppt.save(ppt_bytes)
-    ppt_bytes.seek(0)
-    return ppt_bytes
+(The Information)
+Conversation:
+{chat_history_str}
 
-@app.route('/export_ppt', methods=['POST'])
-def export_ppt():
-    global ppt_Instructions
+User_Instructions:
+{instructions}
+"""
+    payload = {
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": "Please create the PowerPoint outline now."}
+        ],
+        "max_tokens": 1000,
+        "temperature": 0.7
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "api-key": LLM_API_KEY
+    }
+    try:
+        response = requests.post(LLM_ENDPOINT, headers=headers, json=payload, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+        return data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        return f"Error: {e}"
+
+def build_ppt_from_outline(outline_text):
+    prs = Presentation()
+    # In this example, each blank line -> a new slide
+    slide_sections = outline_text.split("\n\n")
+
+    for section in slide_sections:
+        slide_layout = prs.slide_layouts[1]  # Title + Content
+        slide = prs.slides.add_slide(slide_layout)
+        shapes = slide.shapes
+        title_shape = shapes.title
+        body_shape = shapes.placeholders[1]
+
+        lines = section.split("\n")
+        if lines:
+            title_shape.text = lines[0].strip()  # first line as title
+        bullet_lines = lines[1:]  # subsequent lines as bullet points
+
+        tf = body_shape.text_frame
+        for bullet in bullet_lines:
+            p = tf.add_paragraph()
+            p.text = bullet.strip()
+            p.level = 0
+
+    # Save to BytesIO for returning as file
+    ppt_buffer = io.BytesIO()
+    prs.save(ppt_buffer)
+    ppt_buffer.seek(0)
+    return ppt_buffer
+
+@ppt_export_bp.route("/create_ppt", methods=["POST"])
+def create_ppt():
     data = request.get_json()
-    if not data or 'instructions' not in data:
-        return jsonify({'error': 'Instructions are required.'}), 400
-    
-    ppt_Instructions = data['instructions']
-    chat_history_str = "\n".join(chat_history)
-    ppt_file = generate_ppt(chat_history_str, ppt_Instructions)
-    
-    return send_file(ppt_file, as_attachment=True, download_name="chat_history_presentation.pptx", mimetype='application/vnd.openxmlformats-officedocument.presentationml.presentation')
+    instructions = data.get("instructions", "")
+    if not instructions:
+        return jsonify({"error": "No instructions provided."}), 400
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    # Convert chat_history list to a single string
+    conversation_str = "\n".join(chat_history)
+
+    outline = generate_ppt_outline(conversation_str, instructions)
+    ppt_file = build_ppt_from_outline(outline)
+
+    return send_file(
+        ppt_file,
+        mimetype="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        as_attachment=True,
+        download_name=f"Generated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pptx"
+    )
