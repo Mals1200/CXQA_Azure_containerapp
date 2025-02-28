@@ -3,28 +3,26 @@ import asyncio
 from flask import Flask, request, jsonify, Response
 import requests
 
-# Bot Framework
+# Import Ask_Question and its global chat_history from your unchanged ask_func.py
+from ask_func import Ask_Question, chat_history
+
+# Bot Framework imports
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
 from botbuilder.schema import Activity
 
-# The Q&A logic
-from ask_func import Ask_Question
-
-# The GPT-based PPT generation
-import ppt_export_agent
-
 app = Flask(__name__)
 
+# Read Bot credentials from environment variables
 MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
 MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 
+# Create settings & adapter for the Bot
 adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
 
-########################################################################
-# We store the "last question" and "last answer" for each conversation
-########################################################################
-conversation_data = {}
+# Global dictionary to maintain conversation-specific chat histories.
+# Keys will be conversation IDs and values will be lists of chat history messages.
+conversation_histories = {}
 
 @app.route('/', methods=['GET'])
 def home():
@@ -32,12 +30,11 @@ def home():
 
 @app.route('/ask', methods=['POST'])
 def ask():
-    """ Direct usage endpoint (non-BotFramework) """
     data = request.get_json()
     if not data or 'question' not in data:
         return jsonify({'error': 'Invalid request, "question" field is required.'}), 400
-
     question = data['question']
+    # For non-bot messages, we simply use the global chat_history.
     answer = Ask_Question(question)
     return jsonify({'answer': answer})
 
@@ -45,9 +42,10 @@ def ask():
 def messages():
     if "application/json" not in request.headers.get("Content-Type", ""):
         return Response(status=415)
-
+    # Deserialize incoming Activity
     body = request.json
     activity = Activity().deserialize(body)
+    # Get the Authorization header (for Bot Framework auth)
     auth_header = request.headers.get("Authorization", "")
     loop = asyncio.new_event_loop()
     try:
@@ -57,68 +55,32 @@ def messages():
     return Response(status=200)
 
 async def _bot_logic(turn_context: TurnContext):
+    # Retrieve the conversation ID from the incoming activity.
     conversation_id = turn_context.activity.conversation.id
 
-    # Ensure we have some dict for this conversation
-    if conversation_id not in conversation_data:
-        conversation_data[conversation_id] = {
-            "last_question": "",
-            "last_answer": "",
-            "chat_history": []
-        }
+    # Initialize conversation history for this conversation if it doesn't exist.
+    if conversation_id not in conversation_histories:
+        conversation_histories[conversation_id] = []
 
-    # Link with ask_func's chat_history
+    # Before processing, override the chat_history in ask_func.py with this conversation's history.
     import ask_func
-    ask_func.chat_history = conversation_data[conversation_id]["chat_history"]
+    ask_func.chat_history = conversation_histories[conversation_id]
 
-    user_message = (turn_context.activity.text or "").strip().lower()
+    user_message = turn_context.activity.text or ""
+    answer = Ask_Question(user_message)
 
-    # If user typed "export ppt", do the PPT generation
-    if user_message == "export ppt":
-        last_q = conversation_data[conversation_id].get("last_question", "")
-        last_a = conversation_data[conversation_id].get("last_answer", "")
-        
-        # Debugging: Print stored values
-        print(f"Exporting PPT - Last Q: {last_q}")
-        print(f"Exporting PPT - Last A: {last_a}")
+    # After processing, update the conversation-specific history.
+    conversation_histories[conversation_id] = ask_func.chat_history
 
-        if not last_a.strip():
-            await turn_context.send_activity("No previous answer found to export. Ask something first!")
-            return
-
-        chat_history_str = "\n".join(ask_func.chat_history)
-
-        # Call the GPT-based PPT
-        ppt_url = ppt_export_agent.generate_ppt_from_llm(
-            question=last_q,
-            answer_text=last_a,
-            chat_history_str=chat_history_str,
-            instructions=""
-        )
-        if ppt_url:
-            await turn_context.send_activity(f"Here is your GPT-based PPT link:\n{ppt_url}")
-        else:
-            await turn_context.send_activity("Sorry, I couldn't create the PPT file.")
-        return
-
-    # Otherwise, treat it as a normal question
-    question_text = turn_context.activity.text or ""
-    answer_text = Ask_Question(question_text)
-
-    # Update chat_history
-    conversation_data[conversation_id]["chat_history"] = ask_func.chat_history
-
-    # Store the Q & A
-    conversation_data[conversation_id]["last_question"] = question_text
-    conversation_data[conversation_id]["last_answer"] = answer_text
-
-    # Extract source if available
-    if "\n\nSource:" in answer_text:
-        parts = answer_text.split("\n\nSource:", 1)
+    # Check if the answer contains a source section (using "\n\nSource:" as a marker)
+    if "\n\nSource:" in answer:
+        # Split into main answer and source details
+        parts = answer.split("\n\nSource:", 1)
         main_answer = parts[0].strip()
+        # Optionally, prepend "Source:" to the details
         source_details = "Source:" + parts[1].strip()
-        
-        # Build an Adaptive Card with a source toggle
+
+        # Build an Adaptive Card with the main answer and a hidden block for the source details.
         adaptive_card = {
             "type": "AdaptiveCard",
             "body": [
@@ -137,8 +99,8 @@ async def _bot_logic(turn_context: TurnContext):
         )
         await turn_context.send_activity(message)
     else:
-        # Send plain text if no source is available
-        await turn_context.send_activity(Activity(type="message", text=answer_text))
+        # Send plain text answer if no source section is detected.
+        await turn_context.send_activity(Activity(type="message", text=answer))
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=80)
