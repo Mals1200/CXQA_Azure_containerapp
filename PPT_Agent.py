@@ -7,25 +7,25 @@ from pptx import Presentation
 from pptx.util import Pt
 from azure.storage.blob import BlobServiceClient
 
-def Call_PPT():
+def Call_PPT(instructions=""):
     """
-    1) Reads the existing chat_history from ask_func.py
-    2) Finds the latest user question & assistant answer
-    3) Calls Azure OpenAI to produce slide text
-    4) Creates a PPT, uploads to Azure
-    5) Deletes after 5 min
-    6) Returns link
+    1) Imports chat_history from ask_func to get the latest conversation.
+    2) Finds the latest user question & latest assistant answer.
+    3) Builds a prompt with `instructions` included under (User_Instructions).
+    4) Calls Azure OpenAI with fake credentials to generate the PPT text.
+    5) Creates a .pptx using python-pptx.
+    6) Uploads the PPT to Azure & schedules auto-delete in 5 minutes.
+    7) Returns the download link.
     """
 
-    # We import chat_history inside the function to avoid circular import issues
+    # We do a late import to avoid circular references
     from ask_func import chat_history
 
-    # --------------------------------------
-    # (A) Find the latest Q & A
-    # --------------------------------------
+    # ---------------------------
+    # (A) Find Latest Q & A
+    # ---------------------------
     latest_question = ""
     latest_answer = ""
-
     reversed_history = list(reversed(chat_history))
     for entry in reversed_history:
         if entry.startswith("User: ") and not latest_question:
@@ -41,18 +41,16 @@ def Call_PPT():
     if not latest_answer:
         latest_answer = "No assistant answer found."
 
-    instructions = "Make the slides short and highlight bullet points."
-
-    # --------------------------------------
-    # (B) Build prompt & call Azure OpenAI
-    # --------------------------------------
+    # ---------------------------
+    # (B) Build the OpenAI Prompt
+    # ---------------------------
     ppt_prompt = f"""
 You are a PowerPoint presentation expert. Use the following information to make the slides.
 Rules:
 - Only use the following information to create the slides.
 - Don't come up with anything outside of your scope in your slides.
-- Your output will be utilized by 'python-pptx' to create the slides (keep in mind formatting).
-- Make the output complete and ready for a presentation. Only give text for the slides.
+- Your output will be utilized by the 'python-pptx' to create the slides (keep formatting in mind).
+- Make the output complete and ready for a presentation. **Only give text for the slides**.
 - Do not add any instructions or slide_numbers with the slides text.
 
 (The Information)
@@ -68,6 +66,7 @@ Rules:
 - Full Conversation:
 {chat_history}
 """
+
     LLM_ENDPOINT = (
         "https://cxqaazureaihub2358016269.openai.azure.com/"
         "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
@@ -89,7 +88,7 @@ Rules:
         "api-key": LLM_API_KEY
     }
 
-    slides_text = ""
+    ppt_response = ""
     try:
         with requests.post(LLM_ENDPOINT, headers=headers, json=payload, stream=True) as response:
             response.raise_for_status()
@@ -108,23 +107,23 @@ Rules:
                                 and "delta" in data_json["choices"][0]
                             ):
                                 content_piece = data_json["choices"][0]["delta"].get("content", "")
-                                slides_text += content_piece
+                                ppt_response += content_piece
                         except json.JSONDecodeError:
                             pass
     except Exception as e:
         return f"Error generating slides text: {e}"
 
-    slides_text = slides_text.strip()
+    slides_text = ppt_response.strip()
     if not slides_text:
         return "No valid slide text returned from Azure OpenAI."
 
-    # --------------------------------------
-    # (C) Create PPT in-memory
-    # --------------------------------------
+    # ---------------------------
+    # (C) Create PPT in memory
+    # ---------------------------
     raw_slides = [s.strip() for s in slides_text.split("\n\n") if s.strip()]
 
     prs = Presentation()
-    layout = prs.slide_layouts[1]  # Title & Content
+    layout = prs.slide_layouts[1]  # Title & Content layout
 
     for raw_slide in raw_slides:
         lines = raw_slide.split("\n")
@@ -142,15 +141,15 @@ Rules:
             for bullet_item in bullet_lines:
                 p = body_tf.add_paragraph()
                 p.text = bullet_item
-                p.font.size = Pt(18)  # Example bullet size
+                p.font.size = Pt(18)
 
     ppt_buffer = io.BytesIO()
     prs.save(ppt_buffer)
     ppt_buffer.seek(0)
 
-    # --------------------------------------
-    # (D) Upload to Azure & auto-delete in 5min
-    # --------------------------------------
+    # ---------------------------
+    # (D) Upload to Azure & auto-delete
+    # ---------------------------
     account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
     sas_token = (
         "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
@@ -174,7 +173,8 @@ Rules:
         except Exception:
             pass
 
-    timer = threading.Timer(300, delete_blob_after_5)  # 300 seconds = 5 minutes
+    # 300 seconds = 5 minutes
+    timer = threading.Timer(300, delete_blob_after_5)
     timer.start()
 
     return download_link
