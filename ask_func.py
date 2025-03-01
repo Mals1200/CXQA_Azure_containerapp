@@ -19,6 +19,18 @@ logging.getLogger("azure").setLevel(logging.WARNING)
 
 chat_history = []
 
+# NEW FLAG FOR PPT FLOW
+waiting_for_ppt_instructions = False
+
+# Placeholder function to simulate PPT generation
+def generate_ppt(latest_question, latest_answer, chat_history, instructions):
+    """
+    Replace this with your real PPT-building logic if needed.
+    Returns a URL or file path to the generated PPT.
+    """
+    # For demo, just return a fixed link or message:
+    return "https://example.com/your-exported-ppt.pptx"
+
 # -------------------------------------------------------------------------
 # Fixed coded tables info for decision. and schema/sample for writing code
 # -------------------------------------------------------------------------
@@ -80,6 +92,7 @@ Tickets.xlsx: {'Date': 'datetime64[ns]', 'Number of tickets': 'int64', 'revenue'
 Top2Box Summary.xlsx: {'Month': 'datetime64[ns]', 'Type': 'object', 'Top2Box scores/ rating': 'float64'},
 Total Landscape areas and quantities.xlsx: {'Assets': 'object', 'Unnamed: 1': 'object', 'Unnamed: 2': 'object', 'Unnamed: 3': 'object'},
 """
+
 # -------------------------------------------------------------------
 # Helper: Stream OpenAI from Azure
 # -------------------------------------------------------------------
@@ -568,7 +581,6 @@ def agent_answer(user_question):
             "greetings", "howdy", "what's up", "yo", "sup", "namaste", "shalom", "bonjour", "ciao", "konichiwa",
             "ni hao", "marhaba", "ahlan", "sawubona", "hallo", "salut", "hola amigo", "hey there", "good day"
         }
-        # Extract alphabetical tokens
         tokens = re.findall(r"[A-Za-z]+", phrase.lower())
         if not tokens:
             return False
@@ -577,16 +589,51 @@ def agent_answer(user_question):
                 return False
         return True
 
-    user_question_stripped = user_question.strip()
+    global waiting_for_ppt_instructions
+    user_question_stripped = user_question.strip().lower()
 
-    # If entire phrase is basically a greeting
+    # 1) If we're currently waiting for PPT instructions,
+    #    interpret the user's new message as the instructions
+    if waiting_for_ppt_instructions:
+        waiting_for_ppt_instructions = False  # reset the flag
+
+        # Grab the latest user Q & answer from chat_history
+        latest_user_q = ""
+        latest_answer = ""
+        for entry in reversed(chat_history):
+            if entry.startswith("User:"):
+                latest_user_q = entry.replace("User:", "").strip()
+                break
+        for entry in reversed(chat_history):
+            if entry.startswith("Assistant:"):
+                latest_answer = entry.replace("Assistant:", "").strip()
+                break
+
+        instructions = user_question  # use the actual raw input as instructions
+
+        # Call the PPT generator
+        ppt_link = generate_ppt(
+            latest_question=latest_user_q,
+            latest_answer=latest_answer,
+            chat_history=chat_history,
+            instructions=instructions
+        )
+        return f"Here is your PPT link:\n{ppt_link}"
+
+    # 2) If entire phrase is basically a greeting
     if is_entirely_greeting_or_punc(user_question_stripped):
         if len(chat_history) < 4:
             return "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"
         else:
             return "Hello! How may I assist you?"
 
-    # Otherwise, proceed with normal logic:
+    # 3) If user typed EXACTLY "export ppt"
+    if user_question_stripped == "export ppt":
+        waiting_for_ppt_instructions = True
+        return "Sure! Please provide the PPT instructions or details."
+
+    # 4) Otherwise, normal Q&A logic
+    #    (unchanged from your old code)
     index_dict = tool_1_index_search(user_question)
     python_dict = tool_2_code_run(user_question)
     final_ans = final_answer_llm(user_question, index_dict, python_dict)
@@ -607,7 +654,7 @@ def Ask_Question(question):
     chat_history.append(f"Assistant: {answer}")
     chat_history = chat_history[-max_entries:]
 
-    # logging
+    # logging (unchanged)
     account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
     sas_token = (
         "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
