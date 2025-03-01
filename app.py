@@ -3,7 +3,7 @@ import asyncio
 from flask import Flask, request, jsonify, Response
 import requests
 
-# Keep your existing Ask_Question function (from ask_func.py)
+# Your existing Ask_Question function (imported from ask_func.py)
 from ask_func import Ask_Question
 
 # BotBuilder imports
@@ -13,11 +13,6 @@ from botbuilder.core import (
     TurnContext
 )
 from botbuilder.schema import Activity
-
-################################################################################
-# NEW GLOBAL VARIABLES FOR "EXPORT PPT" FLOW
-################################################################################
-waiting_for_ppt_instructions = False  # Flag: Are we waiting for the user to give PPT instructions?
 
 app = Flask(__name__)
 
@@ -30,6 +25,9 @@ adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_P
 adapter = BotFrameworkAdapter(adapter_settings)
 
 
+# =========================
+# Existing endpoints
+# =========================
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({'message': 'API is running!'}), 200
@@ -37,36 +35,12 @@ def home():
 
 @app.route('/ask', methods=['POST'])
 def ask():
-    """
-    Endpoint to handle user questions. If user says "Export PPT", we prompt for instructions
-    and store that state in a global variable. On the next user message, we create the PPT.
-    """
-    global waiting_for_ppt_instructions
-
     data = request.get_json()
     if not data or 'question' not in data:
         return jsonify({'error': 'Invalid request, "question" field is required.'}), 400
     
-    user_message = data['question'].strip()
-
-    # 1) If we are waiting for instructions, this user_message is the instructions
-    if waiting_for_ppt_instructions:
-        waiting_for_ppt_instructions = False
-
-        instructions = user_message  # store the instructions
-        # Now call PPT_Agent
-        from PPT_Agent import Call_PPT
-        link = Call_PPT(instructions=instructions)
-
-        return jsonify({'answer': link})
-
-    # 2) If user typed "Export PPT", we prompt them for instructions
-    if user_message.lower() == "export ppt":
-        waiting_for_ppt_instructions = True
-        return jsonify({'answer': "Please add your instructions for the PPT now."})
-
-    # 3) Otherwise do normal Q&A
-    answer = Ask_Question(user_message)
+    question = data['question']
+    answer = Ask_Question(question)
     return jsonify({'answer': answer})
 
 
@@ -76,16 +50,20 @@ def ask():
 @app.route("/api/messages", methods=["POST"])
 def messages():
     """
-    Bot Framework endpoint that the Bot Service calls (e.g., from Web Chat).
+    This is the endpoint the Bot Service calls (e.g. from Web Chat).
     We must handle it asynchronously with 'adapter.process_activity'.
     """
     if "application/json" not in request.headers.get("Content-Type", ""):
         return Response(status=415)
 
+    # 1) Deserialize incoming Activity
     body = request.json
     activity = Activity().deserialize(body)
+
+    # 2) Grab the Authorization header (for Bot Framework auth)
     auth_header = request.headers.get("Authorization", "")
 
+    # 3) We must run the async method in a separate event loop
     loop = asyncio.new_event_loop()
     try:
         loop.run_until_complete(
@@ -94,19 +72,24 @@ def messages():
     finally:
         loop.close()
 
+    # 4) Return HTTP 200 (or 201) once the message is processed
     return Response(status=200)
 
 
 async def _bot_logic(turn_context: TurnContext):
     """
-    Bot logic for messages from Bot Framework. 
-    If user typed "Export PPT", we rely on the same logic 
-    in our /ask route above for the actual PPT handling.
+    This async function is where we handle the user's message
+    and craft a reply.
     """
     user_message = turn_context.activity.text or ""
-    answer = Ask_Question(user_message)
+    answer = Ask_Question(user_message)  # your existing Q&A logic
+
+    # Send answer back to the user
     await turn_context.send_activity(Activity(type="message", text=answer))
 
 
+# =========================
+# Gunicorn entry point
+# =========================
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=80)
