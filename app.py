@@ -3,8 +3,11 @@ import asyncio
 from flask import Flask, request, jsonify, Response
 import requests
 
-# Your existing Ask_Question function (imported from ask_func.py)
+# Keep your existing imports from ask_func.py
 from ask_func import Ask_Question
+
+# Import our new PPT_Agent code
+from PPT_Agent import Call_PPT
 
 # BotBuilder imports
 from botbuilder.core import (
@@ -24,7 +27,6 @@ MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
 
-
 # =========================
 # Existing endpoints
 # =========================
@@ -40,6 +42,14 @@ def ask():
         return jsonify({'error': 'Invalid request, "question" field is required.'}), 400
     
     question = data['question']
+
+    # 1) Check if user typed "Export PPT"
+    if question.strip().lower() == "export ppt":
+        # 1a) Call the Call_PPT() function directly
+        link = Call_PPT()
+        return jsonify({'answer': link})
+
+    # 2) Otherwise, do normal Q&A via ask_func
     answer = Ask_Question(question)
     return jsonify({'answer': answer})
 
@@ -56,14 +66,10 @@ def messages():
     if "application/json" not in request.headers.get("Content-Type", ""):
         return Response(status=415)
 
-    # 1) Deserialize incoming Activity
     body = request.json
     activity = Activity().deserialize(body)
-
-    # 2) Grab the Authorization header (for Bot Framework auth)
     auth_header = request.headers.get("Authorization", "")
 
-    # 3) We must run the async method in a separate event loop
     loop = asyncio.new_event_loop()
     try:
         loop.run_until_complete(
@@ -72,19 +78,12 @@ def messages():
     finally:
         loop.close()
 
-    # 4) Return HTTP 200 (or 201) once the message is processed
     return Response(status=200)
 
 
 async def _bot_logic(turn_context: TurnContext):
-    """
-    This async function is where we handle the user's message
-    and craft a reply.
-    """
     user_message = turn_context.activity.text or ""
     answer = Ask_Question(user_message)  # your existing Q&A logic
-
-    # Send answer back to the user
     await turn_context.send_activity(Activity(type="message", text=answer))
 
 
