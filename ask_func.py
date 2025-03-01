@@ -14,25 +14,23 @@ from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
 import csv
 
+############################################################################
+# IMPORTANT: Import your real PPT Agent function from PPT_Agent.py
+############################################################################
+from PPT_Agent import generate_ppt
+
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
 logging.getLogger("azure").setLevel(logging.WARNING)
 
+############################################################################
+# GLOBALS
+############################################################################
 chat_history = []
-
-# NEW FLAG FOR PPT FLOW
+# Add a flag to manage the export PPT flow
 waiting_for_ppt_instructions = False
 
-# Placeholder function to simulate PPT generation
-def generate_ppt(latest_question, latest_answer, chat_history, instructions):
-    """
-    Replace this with your real PPT-building logic if needed.
-    Returns a URL or file path to the generated PPT.
-    """
-    # For demo, just return a fixed link or message:
-    return "https://example.com/your-exported-ppt.pptx"
-
 # -------------------------------------------------------------------------
-# Fixed coded tables info for decision. and schema/sample for writing code
+# Fixed-coded tables info for decision. and schema/sample for writing code
 # -------------------------------------------------------------------------
 TABLES =  """
 1) "Al-Bujairy Terrace Footfalls.xlsx", with the following tables:
@@ -62,40 +60,42 @@ TABLES =  """
 13) "Total Landscape areas and quantities.xlsx", with the following tables:
    -Assets: object, Unnamed: 1: object, Unnamed: 2: object, Unnamed: 3: object
 """
+
 SAMPLE_TEXT = """
-Al-Bujairy Terrace Footfalls.xlsx: [{'Date': "Timestamp('2023-01-01 00:00:00')", 'Footfalls': 2950}, {'Date': "Timestamp('2023-01-02 00:00:00')", 'Footfalls': 2864}, {'Date': "Timestamp('2023-01-03 00:00:00')", 'Footfalls': 4366}],
-Al-Turaif Footfalls.xlsx: [{'Date': "Timestamp('2023-06-01 00:00:00')", 'Footfalls': 694}, {'Date': "Timestamp('2023-06-02 00:00:00')", 'Footfalls': 1862}, {'Date': "Timestamp('2023-06-03 00:00:00')", 'Footfalls': 1801}],
-Complaints.xlsx: [{'Created On': "Timestamp('2024-01-01 00:00:00')", 'Incident Category': 'Contact Center Operation', 'Status': 'Resolved', 'Resolved On Date(Local)': datetime.datetime(2024, 1, 1, 0, 0), 'Incident Description': 'Message: السلام عليكم ورحمة الله وبركاته، مساء الخير م', 'Resolution': 'ضيفنا العزيز،نشكر لكم تواصلكم معنافيما يخص طلبكم في فرص التدريب التعاوني يرجى رفع طلبكم عبر موقع هيئة تطوير بوابة الدرعية Career | Diriyah Gate Development Authority (dgda.gov.sa)نتشرف بخدمتكم'}, {'Created On': "Timestamp('2024-01-01 00:00:00')", 'Incident Category': 'Roads and Infrastructure', 'Status': 'Resolved', 'Resolved On Date(Local)': datetime.datetime(2024, 1, 8, 0, 0), 'Incident Description': 'test', 'Resolution': 'test'}, {'Created On': "Timestamp('2024-01-01 00:00:00')", 'Incident Category': 'Security and Safety', 'Status': 'Resolved', 'Resolved On Date(Local)': datetime.datetime(2024, 1, 1, 0, 0), 'Incident Description': 'Test', 'Resolution': 'Test'}],
-Duty manager log.xlsx: [{'DM NAME': 'Abdulrahman Alkanhal', 'Date': "Timestamp('2024-06-01 00:00:00')", 'Shift': 'Morning Shift', 'Issue': 'Hakkassan and WC5', 'Department': 'Operation', 'Team': 'Operation', 'Incident': ' Electricity box in WC5 have water and its under maintenance, its effected hakkasan and WC5 (WC5 closed)', 'Remark': 'FM has been informed ', 'Status': 'Pending', 'ETA': 'Please FM update the ETA', 'Days': nan}, {'DM NAME': 'Abdulrahman Alkanhal', 'Date': "Timestamp('2024-06-01 00:00:00')", 'Shift': 'Morning Shift', 'Issue': 'flamingo', 'Department': 'Operation', 'Team': 'Operation', 'Incident': '\\nWe received a massage from flamingo manager regarding to some points needs to be fixed in the restaurant, painting,doors,ropes,canopys,scratch and cracks,varnishing, some of the points been shared to FM before.', 'Remark': 'The pictures been sent to FM', 'Status': 'Pending', 'ETA': 'Please FM update the ETA', 'Days': 7.0}, {'DM NAME': 'Abdulrahman Alkanhal', 'Date': "Timestamp('2024-06-01 00:00:00')", 'Shift': 'Morning Shift', 'Issue': 'Al Habib Hospital', 'Department': 'Operation', 'Team': 'Operation', 'Incident': '7 Minor incidents  ', 'Remark': nan, 'Status': 'Done', 'ETA': nan, 'Days': nan}],
-Food and Beverages (F&b) Sales.xlsx: [{'Restaurant name': 'Angelina', 'Category': 'Casual Dining', 'Date': "Timestamp('2023-08-01 00:00:00')", 'Covers': 195.0, 'Gross Sales': 12536.65383}, {'Restaurant name': 'Angelina', 'Category': 'Casual Dining', 'Date': "Timestamp('2023-08-02 00:00:00')", 'Covers': 169.0, 'Gross Sales': 11309.05671}, {'Restaurant name': 'Angelina', 'Category': 'Casual Dining', 'Date': "Timestamp('2023-08-03 00:00:00')", 'Covers': 243.0, 'Gross Sales': 17058.61479}],
-Meta-Data.xlsx: [{'Visitation': 'Revenue', 'Attendance': 'Income', 'Visitors': 'Sales', 'Guests': 'Gross Sales', 'Footfalls': nan, 'Unnamed: 5': nan}, {'Visitation': 'Utilization', 'Attendance': 'Occupancy', 'Visitors': 'Usage Rate', 'Guests': 'Capacity', 'Footfalls': 'Efficiency', 'Unnamed: 5': nan}, {'Visitation': 'Penetration', 'Attendance': 'Covers rate', 'Visitors': 'Restaurants rate', 'Guests': nan, 'Footfalls': nan, 'Unnamed: 5': nan}],
-PE Observations.xlsx: [{'Unnamed: 0': nan, 'Unnamed: 1': nan}, {'Unnamed: 0': 'Row Labels', 'Unnamed: 1': 'Count of Colleague name'}, {'Unnamed: 0': 'Guest Greetings ', 'Unnamed: 1': 2154}],
-Parking.xlsx: [{'Date': "Timestamp('2023-01-01 00:00:00')", 'Valet Volume': 194, 'Valet Revenue': 29100, 'Valet Utilization': 0.23, 'BCP Revenue': '               -  ', 'BCP Volume': 1951, 'BCP Utilization': 0.29, 'SCP Volume': 0, 'SCP Revenue': 0, 'SCP Utilization': 0.0}, {'Date': "Timestamp('2023-01-02 00:00:00')", 'Valet Volume': 223, 'Valet Revenue': 33450, 'Valet Utilization': 0.27, 'BCP Revenue': '               -  ', 'BCP Volume': 1954, 'BCP Utilization': 0.29, 'SCP Volume': 0, 'SCP Revenue': 0, 'SCP Utilization': 0.0}, {'Date': "Timestamp('2023-01-03 00:00:00')", 'Valet Volume': 243, 'Valet Revenue': 36450, 'Valet Utilization': 0.29, 'BCP Revenue': '               -  ', 'BCP Volume': 2330, 'BCP Utilization': 0.35, 'SCP Volume': 0, 'SCP Revenue': 0, 'SCP Utilization': 0.0}],
-Qualitative Comments.xlsx: [{'Open Ended': 'يفوقو توقعاتي كل شيء رائع'}, {'Open Ended': 'وقليل اسعار التذاكر اجعل الجميع يستمتع بهذه التجربة الرائعة'}, {'Open Ended': 'إضافة كراسي هامة اكثر من المتوفر'}],
-Tenants Violations.xlsx: [{'Unnamed: 0': nan, 'Unnamed: 1': nan}, {'Unnamed: 0': 'Row Labels', 'Unnamed: 1': 'Count of Department\\u200b'}, {'Unnamed: 0': 'Lab Test', 'Unnamed: 1': 38}],
-Tickets.xlsx: [{'Date': "Timestamp('2023-01-01 00:00:00')", 'Number of tickets': 4644, 'revenue': 288050, 'attendnace': 2950, 'Reservation Attendnace': 0, 'Pass Attendance': 0, 'Male attendance': 1290, 'Female attendance': 1660, 'Rebate value': 131017.96, 'AM Tickets': 287, 'PM Tickets': 2663, 'Free tickets': 287, 'Paid tickets': 2663, 'Free tickets %': 0.09728813559322035, 'Paid tickets %': 0.9027118644067796, 'AM Tickets %': 0.09728813559322035, 'PM Tickets %': 0.9027118644067796, 'Rebate Rate V 55': 131017.96, 'Revenue  v2': 288050}, {'Date': "Timestamp('2023-01-02 00:00:00')", 'Number of tickets': 7276, 'revenue': 205250, 'attendnace': 2864, 'Reservation Attendnace': 0, 'Pass Attendance': 0, 'Male attendance': 1195, 'Female attendance': 1669, 'Rebate value': 123698.68, 'AM Tickets': 978, 'PM Tickets': 1886, 'Free tickets': 978, 'Paid tickets': 1886, 'Free tickets %': 0.3414804469273743, 'Paid tickets %': 0.6585195530726257, 'AM Tickets %': 0.3414804469273743, 'PM Tickets %': 0.6585195530726257, 'Rebate Rate V 55': 123698.68, 'Revenue  v2': 205250}, {'Date': "Timestamp('2023-01-03 00:00:00')", 'Number of tickets': 8354, 'revenue': 308050, 'attendnace': 4366, 'Reservation Attendnace': 0, 'Pass Attendance': 0, 'Male attendance': 1746, 'Female attendance': 2620, 'Rebate value': 206116.58, 'AM Tickets': 1385, 'PM Tickets': 2981, 'Free tickets': 1385, 'Paid tickets': 2981, 'Free tickets %': 0.3172240036646816, 'Paid tickets %': 0.6827759963353184, 'AM Tickets %': 0.3172240036646816, 'PM Tickets %': 0.6827759963353184, 'Rebate Rate V 55': 206116.58, 'Revenue  v2': 308050}],
-Top2Box Summary.xlsx: [{'Month': "Timestamp('2024-01-01 00:00:00')", 'Type': 'Bujairi Terrace/ Diriyah  offering', 'Top2Box scores/ rating': 0.669449081803}, {'Month': "Timestamp('2024-01-01 00:00:00')", 'Type': 'Eating out experience', 'Top2Box scores/ rating': 0.7662337662338}, {'Month': "Timestamp('2024-01-01 00:00:00')", 'Type': 'Entrance to Bujairi Terrace', 'Top2Box scores/ rating': 0.7412353923205}],
-Total Landscape areas and quantities.xlsx: [{'Assets': 'SN', 'Unnamed: 1': 'Location', 'Unnamed: 2': 'Unit', 'Unnamed: 3': 'Quantity'}, {'Assets': 'Bujairi, Turaif Gardens, and Terraces', 'Unnamed: 1': nan, 'Unnamed: 2': nan, 'Unnamed: 3': nan}, {'Assets': '\\xa0A', 'Unnamed: 1': 'Turaif Gardens', 'Unnamed: 2': nan, 'Unnamed: 3': nan}],
+Al-Bujairy Terrace Footfalls.xlsx: [{'Date': "Timestamp('2023-01-01 00:00:00')", 'Footfalls': 2950}, {'Date': "Timestamp('2023-01-02 00:00:00')", 'Footfalls': 2864}, ...],
+Al-Turaif Footfalls.xlsx: [{'Date': "Timestamp('2023-06-01 00:00:00')", 'Footfalls': 694}, {'Date': "Timestamp('2023-06-02 00:00:00')", 'Footfalls': 1862}, ...],
+Complaints.xlsx: [{'Created On': "Timestamp('2024-01-01 00:00:00')", ...}, ...],
+Duty manager log.xlsx: [...],
+Food and Beverages (F&b) Sales.xlsx: [...],
+Meta-Data.xlsx: [...],
+PE Observations.xlsx: [...],
+Parking.xlsx: [...],
+Qualitative Comments.xlsx: [...],
+Tenants Violations.xlsx: [...],
+Tickets.xlsx: [...],
+Top2Box Summary.xlsx: [...],
+Total Landscape areas and quantities.xlsx: [...]
 """
+
 SCHEMA_TEXT = """
 Al-Bujairy Terrace Footfalls.xlsx: {'Date': 'datetime64[ns]', 'Footfalls': 'int64'},
 Al-Turaif Footfalls.xlsx: {'Date': 'datetime64[ns]', 'Footfalls': 'int64'},
-Complaints.xlsx: {'Created On': 'datetime64[ns]', 'Incident Category': 'object', 'Status': 'object', 'Resolved On Date(Local)': 'object', 'Incident Description': 'object', 'Resolution': 'object'},
-Duty manager log.xlsx: {'DM NAME': 'object', 'Date': 'datetime64[ns]', 'Shift': 'object', 'Issue': 'object', 'Department': 'object', 'Team': 'object', 'Incident': 'object', 'Remark': 'object', 'Status': 'object', 'ETA': 'object', 'Days': 'float64'},
-Food and Beverages (F&b) Sales.xlsx: {'Restaurant name': 'object', 'Category': 'object', 'Date': 'datetime64[ns]', 'Covers': 'float64', 'Gross Sales': 'float64'},
-Meta-Data.xlsx: {'Visitation': 'object', 'Attendance': 'object', 'Visitors': 'object', 'Guests': 'object', 'Footfalls': 'object', 'Unnamed: 5': 'object'},
+Complaints.xlsx: {'Created On': 'datetime64[ns]', 'Incident Category': 'object', 'Status': 'object', ...},
+Duty manager log.xlsx: {'DM NAME': 'object', 'Date': 'datetime64[ns]', 'Shift': 'object', ...},
+Food and Beverages (F&b) Sales.xlsx: {'Restaurant name': 'object', 'Category': 'object', ...},
+Meta-Data.xlsx: {'Visitation': 'object', 'Attendance': 'object', 'Visitors': 'object', ...},
 PE Observations.xlsx: {'Unnamed: 0': 'object', 'Unnamed: 1': 'object'},
-Parking.xlsx: {'Date': 'datetime64[ns]', 'Valet Volume': 'int64', 'Valet Revenue': 'int64', 'Valet Utilization': 'float64', 'BCP Revenue': 'object', 'BCP Volume': 'int64', 'BCP Utilization': 'float64', 'SCP Volume': 'int64', 'SCP Revenue': 'int64', 'SCP Utilization': 'float64'},
+Parking.xlsx: {'Date': 'datetime64[ns]', 'Valet Volume': 'int64', 'Valet Revenue': 'int64', ...},
 Qualitative Comments.xlsx: {'Open Ended': 'object'},
 Tenants Violations.xlsx: {'Unnamed: 0': 'object', 'Unnamed: 1': 'object'},
-Tickets.xlsx: {'Date': 'datetime64[ns]', 'Number of tickets': 'int64', 'revenue': 'int64', 'attendnace': 'int64', 'Reservation Attendnace': 'int64', 'Pass Attendance': 'int64', 'Male attendance': 'int64', 'Female attendance': 'int64', 'Rebate value': 'float64', 'AM Tickets': 'int64', 'PM Tickets': 'int64', 'Free tickets': 'int64', 'Paid tickets': 'int64', 'Free tickets %': 'float64', 'Paid tickets %': 'float64', 'AM Tickets %': 'float64', 'PM Tickets %': 'float64', 'Rebate Rate V 55': 'float64', 'Revenue  v2': 'int64'},
+Tickets.xlsx: {'Date': 'datetime64[ns]', 'Number of tickets': 'int64', 'revenue': 'int64', ...},
 Top2Box Summary.xlsx: {'Month': 'datetime64[ns]', 'Type': 'object', 'Top2Box scores/ rating': 'float64'},
-Total Landscape areas and quantities.xlsx: {'Assets': 'object', 'Unnamed: 1': 'object', 'Unnamed: 2': 'object', 'Unnamed: 3': 'object'},
+Total Landscape areas and quantities.xlsx: {'Assets': 'object', 'Unnamed: 1': 'object', ...},
 """
 
-# -------------------------------------------------------------------
+############################################################################
 # Helper: Stream OpenAI from Azure
-# -------------------------------------------------------------------
+############################################################################
 def stream_azure_chat_completion(endpoint, headers, payload, print_stream=False):
     with requests.post(endpoint, headers=headers, json=payload, stream=True) as response:
         response.raise_for_status()
@@ -139,7 +139,7 @@ def is_text_relevant(question, snippet):
         "https://cxqaazureaihub2358016269.openai.azure.com/"
         "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
     )
-    LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+    LLM_API_KEY = "FAKE_AZURE_OPENAI_KEY"
 
     system_prompt = (
         "You are a classifier. We have a user question and a snippet of text. "
@@ -201,7 +201,7 @@ def references_tabular_data(question, tables_text):
         endpoint="https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview",
         headers={
             "Content-Type": "application/json",
-            "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+            "api-key": "FAKE_AZURE_OPENAI_KEY"
         },
         payload=payload,
         print_stream=False
@@ -211,10 +211,10 @@ def references_tabular_data(question, tables_text):
     return "YES" in clean_response
 
 def tool_1_index_search(user_question, top_k=5):
-    SEARCH_SERVICE_NAME = "cxqa-azureai-search"
+    SEARCH_SERVICE_NAME = "FAKE-SEARCH-SVC"
     SEARCH_ENDPOINT = f"https://{SEARCH_SERVICE_NAME}.search.windows.net"
-    INDEX_NAME = "cxqa-ind-v6"
-    ADMIN_API_KEY = "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv"
+    INDEX_NAME = "FAKE-INDEX"
+    ADMIN_API_KEY = "FAKE_ADMIN_KEY"
 
     subquestions = split_question_into_subquestions(user_question)
 
@@ -236,13 +236,11 @@ def tool_1_index_search(user_question, top_k=5):
         relevant_texts = []
         for r in results:
             snippet = r.get("content", "").strip()
-
             keep_snippet = False
             for sq in subquestions:
                 if is_text_relevant(sq, snippet):
                     keep_snippet = True
                     break
-
             if keep_snippet:
                 relevant_texts.append(snippet)
 
@@ -263,7 +261,7 @@ def tool_2_code_run(user_question):
         "https://cxqaazureaihub2358016269.openai.azure.com/"
         "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
     )
-    LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+    LLM_API_KEY = "FAKE_AZURE_OPENAI_KEY"
 
     system_prompt = f"""
 You are a python expert. Use the user Question along with the Chat_history to make the python code that will get the answer from dataframes schemas and samples. 
@@ -342,12 +340,8 @@ Chat_history:
 
 def execute_generated_code(code_str):
     account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
-    sas_token = (
-        "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
-        "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
-        "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
-    )
-    container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
+    sas_token = "FAKE_BLOB_SAS_TOKEN"
+    container_name = "FAKE-CONTAINER"
     target_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
 
     try:
@@ -385,7 +379,6 @@ def execute_generated_code(code_str):
 
         output = output_buffer.getvalue().strip()
         return output if output else "Execution completed with no output."
-
     except Exception as e:
         return f"An error occurred during code execution: {e}"
 
@@ -394,7 +387,7 @@ def tool_3_llm_fallback(user_question):
         "https://cxqaazureaihub2358016269.openai.azure.com/"
         "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
     )
-    LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+    LLM_API_KEY = "FAKE_AZURE_OPENAI_KEY"
 
     system_prompt = (
         "You are a highly knowledgeable large language model. The user asked a question, "
@@ -456,7 +449,7 @@ def final_answer_llm(user_question, index_dict, python_dict):
         "https://cxqaazureaihub2358016269.openai.azure.com/"
         "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
     )
-    LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+    LLM_API_KEY = "FAKE_AZURE_OPENAI_KEY"
 
     combined_info = f"INDEX_DATA:\n{index_top_k}\n\nPYTHON_DATA:\n{python_result}"
 
@@ -565,39 +558,23 @@ The Files:
         return final_text
 
 ####################################################
-#              GREETING HANDLING UPDATED           #
+#                MAIN AGENT LOGIC
 ####################################################
 def agent_answer(user_question):
-    # If question is empty at first usage
-    if user_question.strip() == "" and len(chat_history) < 2:
-        return ""
-
-    # A function to see if entire user input is basically a greeting
-    def is_entirely_greeting_or_punc(phrase):
-        greet_words = {
-            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "goodevening", "good evening",
-            "assalam", "hayo", "hola", "salam", "alsalam",
-            "alsalamualaikum", "alsalam", "salam", "al salam", "assalamualaikum",
-            "greetings", "howdy", "what's up", "yo", "sup", "namaste", "shalom", "bonjour", "ciao", "konichiwa",
-            "ni hao", "marhaba", "ahlan", "sawubona", "hallo", "salut", "hola amigo", "hey there", "good day"
-        }
-        tokens = re.findall(r"[A-Za-z]+", phrase.lower())
-        if not tokens:
-            return False
-        for t in tokens:
-            if t not in greet_words:
-                return False
-        return True
-
+    """
+    Decides how to handle the user input: if "export ppt" is typed,
+    we ask for instructions and then call generate_ppt on the next message.
+    Otherwise, normal Q&A flow as before.
+    """
     global waiting_for_ppt_instructions
+
+    # Handle "export ppt" flow
     user_question_stripped = user_question.strip().lower()
-
-    # 1) If we're currently waiting for PPT instructions,
-    #    interpret the user's new message as the instructions
     if waiting_for_ppt_instructions:
-        waiting_for_ppt_instructions = False  # reset the flag
+        # This new message is the instructions for the PPT
+        waiting_for_ppt_instructions = False
 
-        # Grab the latest user Q & answer from chat_history
+        # Grab the latest user Q & assistant answer from chat_history
         latest_user_q = ""
         latest_answer = ""
         for entry in reversed(chat_history):
@@ -609,57 +586,62 @@ def agent_answer(user_question):
                 latest_answer = entry.replace("Assistant:", "").strip()
                 break
 
-        instructions = user_question  # use the actual raw input as instructions
-
-        # Call the PPT generator
         ppt_link = generate_ppt(
             latest_question=latest_user_q,
             latest_answer=latest_answer,
             chat_history=chat_history,
-            instructions=instructions
+            instructions=user_question  # the entire new message
         )
         return f"Here is your PPT link:\n{ppt_link}"
 
-    # 2) If entire phrase is basically a greeting
-    if is_entirely_greeting_or_punc(user_question_stripped):
-        if len(chat_history) < 4:
-            return "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"
-        else:
-            return "Hello! How may I assist you?"
-
-    # 3) If user typed EXACTLY "export ppt"
+    # If user typed exactly "export ppt"
     if user_question_stripped == "export ppt":
         waiting_for_ppt_instructions = True
-        return "Sure! Please provide the PPT instructions or details."
+        return "Sure! Please provide the instructions or details for the PPT."
 
-    # 4) Otherwise, normal Q&A logic
-    #    (unchanged from your old code)
+    # Otherwise, proceed with normal Q&A logic
+    # (unchanged from your original code)
     index_dict = tool_1_index_search(user_question)
     python_dict = tool_2_code_run(user_question)
     final_ans = final_answer_llm(user_question, index_dict, python_dict)
     final_ans_with_src = post_process_source(final_ans, index_dict, python_dict)
     return final_ans_with_src
 
+
 def Ask_Question(question):
+    """
+    Your main public function that:
+    1) Adds the user question to chat_history
+    2) Calls agent_answer
+    3) Adds the assistant's answer to chat_history
+    4) Logs to CSV
+    5) Returns the final answer
+    """
     global chat_history
 
+    # Add user input to chat history
     chat_history.append(f"User: {question}")
 
+    # Generate the answer
+    answer = agent_answer(question)
+
+    # Add answer to chat history
+    chat_history.append(f"Assistant: {answer}")
+
+    # Trim chat_history if needed
     number_of_messages = 10
     max_pairs = number_of_messages // 2
     max_entries = max_pairs * 2
-
-    answer = agent_answer(question)
-
-    chat_history.append(f"Assistant: {answer}")
     chat_history = chat_history[-max_entries:]
 
-    # logging (unchanged)
+    ##################################
+    # Logging to CSV in Azure Blob
+    ##################################
     account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
     sas_token = (
         "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
         "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
-        "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
+        "spr=https&sig=FAKE_SIGNATURE"
     )
     container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
     blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
