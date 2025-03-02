@@ -698,4 +698,3 @@ def Ask_Question(question):
         blob_client.upload_blob(new_csv_content, overwrite=True)
 
         return answer
-
