@@ -605,20 +605,33 @@ def Ask_Question(question):
     max_pairs = number_of_messages // 2
     max_entries = max_pairs * 2
 
-    # Generate the normal answer
+    # Generate the normal answer first
     answer = agent_answer(question)
 
-    # ------------------------
-    # Check for "export ppt"
-    # ------------------------
-    if question.strip().lower() == "export ppt":
-        # If user wants to export, call Call_PPT
+    ###################################
+    #   Check if user wants "export ppt"
+    ###################################
+    # We will look for either an exact match or a prefix match.
+    question_lower = question.strip().lower()
+    
+    if question_lower.startswith("export ppt"):
+        # Extract instructions after "export ppt" if any
+        # e.g. user typed: "export ppt Summarize the main insights"
+        # instructions would be "Summarize the main insights"
+
+        # remove "export ppt" from the user question
+        possible_instructions = question[10:].strip()  # remove 10 chars: len("export ppt")
+
+        if not possible_instructions:
+            possible_instructions = "No instructions provided"
+
+        # Now call the PPT function
         ppt_result = Call_PPT(
-            latest_question=question,
-            latest_answer=answer,
-            chat_history=chat_history
+            latest_question=question, 
+            latest_answer=answer, 
+            chat_history=chat_history,
+            instructions=possible_instructions
         )
-        # We'll use the ppt_result as the final answer
         final_answer = ppt_result
     else:
         final_answer = answer
@@ -632,7 +645,7 @@ def Ask_Question(question):
     sas_token = (
         "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
         "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
-        "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
+        "spr=https&sig=xxxx"
     )
     container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
     blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
