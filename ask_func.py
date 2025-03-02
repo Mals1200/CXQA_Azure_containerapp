@@ -14,7 +14,6 @@ from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
 import csv
 
-
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
 logging.getLogger("azure").setLevel(logging.WARNING)
 
@@ -594,125 +593,61 @@ def agent_answer(user_question):
     final_ans_with_src = post_process_source(final_ans, index_dict, python_dict)
     return final_ans_with_src
 
-# Import your PPT_Agent function
-from PPT_Agent import Call_PPT
-
-###############################################################################
-# In-memory store for conversation state, keyed by conversation_id.
-# For real bots, store this in Azure Bot Framework conversation state or a DB.
-###############################################################################
-conversation_states = {}
-# conversation_states[conversation_id] = {
-#     "awaiting_instructions": bool,
-#     "chat_history": []
-# }
-
-def agent_answer(user_message):
-    """
-    Stub for your normal chat response logic or AI model call.
-    """
-    return f"Normal response to: '{user_message}'"
-
-def log_interaction(user_message, assistant_answer):
-    """
-    Logs the interaction to Azure Blob Storage. 
-    Adapt account_url, SAS token, container_name, etc. to your environment.
-    """
-    account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
-    sas_token = (
-        "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
-        "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
-        "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
-    )
-    container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
+def Ask_Question(question):
+    global chat_history
+    chat_history.append(f"User: {question}")
     
-    blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
-    container_client = blob_service_client.get_container_client(container_name)
+    if question.lower() == "export ppt":
+        # Function calls:
+       from PPT_Agent import Call_PPT
+       answer = Call_PPT(latest_question = chat_history[-2], latest_answer = chat_history[-1], chat_history = chat_history)
+       return answer
+
+    else: 
+        number_of_messages = 10
+        max_pairs = number_of_messages // 2
+        max_entries = max_pairs * 2
     
-    target_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/logs/"
-    date_str = datetime.datetime.now().strftime("%Y_%m_%d")
-    log_filename = f"logs_{date_str}.csv"
-    blob_name = target_folder_path + log_filename
-    blob_client = container_client.get_blob_client(blob_name)
+        answer = agent_answer(question)
     
-    try:
-        existing_data = blob_client.download_blob().readall().decode("utf-8")
-        lines = existing_data.strip().split("\n")
-        if not lines or not lines[0].startswith("time,question,answer,user_id"):
-            lines = ["time,question,answer,user_id"]
-    except:
-        # If blob doesn't exist, initialize new lines
-        lines = ["time,question,answer,user_id"]
+        chat_history.append(f"Assistant: {answer}")
+        chat_history = chat_history[-max_entries:]
     
-    current_time = datetime.datetime.now().strftime("%H:%M:%S")
-    row = [
-        current_time,
-        user_message.replace('"','""'),
-        assistant_answer.replace('"','""'),
-        "anonymous"
-    ]
-    lines.append(",".join(f'"{x}"' for x in row))
-    
-    new_csv_content = "\n".join(lines) + "\n"
-    blob_client.upload_blob(new_csv_content, overwrite=True)
-
-def Ask_Question(user_message, conversation_id):
-    """
-    Main function to handle user input in a multi-turn approach (no print/input).
-    1. If user says "export ppt," sets a flag to wait for instructions in the next message.
-    2. If we're awaiting instructions, treat the user_message as instructions -> call Call_PPT.
-    3. Otherwise, do a normal conversation flow.
-    """
-
-    # 1) Load or init conversation state
-    if conversation_id not in conversation_states:
-        conversation_states[conversation_id] = {
-            "awaiting_instructions": False,
-            "chat_history": []
-        }
-    state = conversation_states[conversation_id]
-
-    # 2) Append this user message to chat history
-    state["chat_history"].append(f"User: {user_message}")
-
-    # 3) If we were awaiting instructions, user_message is the instructions:
-    if state["awaiting_instructions"]:
-        state["awaiting_instructions"] = False
-
-        # Call the PPT generation
-        answer = Call_PPT(
-            latest_question=state["chat_history"][-2],  # e.g. "User: export ppt"
-            latest_answer="(Prior assistant response here if needed)",
-            chat_history=state["chat_history"],
-            instructions=user_message
+        # logging
+        account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
+        sas_token = (
+            "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
+            "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
+            "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
         )
-        state["chat_history"].append(f"Assistant: {answer}")
-
-        # Log the interaction
-        log_interaction(user_message, answer)
-
-        # Save state
-        conversation_states[conversation_id] = state
+        container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
+        blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
+        container_client = blob_service_client.get_container_client(container_name)
+    
+        target_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/logs/"
+        date_str = datetime.now().strftime("%Y_%m_%d")
+        log_filename = f"logs_{date_str}.csv"
+        blob_name = target_folder_path + log_filename
+        blob_client = container_client.get_blob_client(blob_name)
+    
+        try:
+            existing_data = blob_client.download_blob().readall().decode("utf-8")
+            lines = existing_data.strip().split("\n")
+            if not lines or not lines[0].startswith("time,question,answer,user_id"):
+                lines = ["time,question,answer,user_id"]
+        except:
+            lines = ["time,question,answer,user_id"]
+    
+        current_time = datetime.now().strftime("%H:%M:%S")
+        row = [
+            current_time,
+            question.replace('"','""'),
+            answer.replace('"','""'),
+            "anonymous"
+        ]
+        lines.append(",".join(f'"{x}"' for x in row))
+    
+        new_csv_content = "\n".join(lines) + "\n"
+        blob_client.upload_blob(new_csv_content, overwrite=True)
+    
         return answer
-
-    # 4) If user says "export ppt," set awaiting_instructions = True
-    if user_message.lower().startswith("export ppt"):
-        state["awaiting_instructions"] = True
-        conversation_states[conversation_id] = state
-        return "Please provide your instructions in your next message."
-
-    # 5) Otherwise, normal conversation
-    answer = agent_answer(user_message)
-    state["chat_history"].append(f"Assistant: {answer}")
-
-    # (optional) keep chat history short
-    state["chat_history"] = state["chat_history"][-10:]
-
-    # 6) Log interaction
-    log_interaction(user_message, answer)
-
-    # 7) Save the updated state
-    conversation_states[conversation_id] = state
-
-    # 8) Return final answer
-    return answer
