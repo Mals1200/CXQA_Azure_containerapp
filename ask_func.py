@@ -622,7 +622,7 @@ def Ask_Question(question):
             )
             return answer
         else:
-            return "There is not enough information to generate your slides from."
+            return f"There is not enough information to generate your slides from. length is:{len(chat_history)}"
     else:
         # Normal messages flow here
         number_of_messages = 10
