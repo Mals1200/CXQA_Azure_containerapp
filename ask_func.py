@@ -1,3 +1,5 @@
+# ask_func.py
+
 import os
 import io
 import re
@@ -125,11 +127,12 @@ def is_text_relevant(question, snippet):
     if not snippet.strip():
         return False
 
+    # Fake endpoint & key just for structure
     LLM_ENDPOINT = (
-        "https://cxqaazureaihub2358016269.openai.azure.com/"
-        "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
+        "https://your-azure-openai-endpoint.openai.azure.com/"
+        "openai/deployments/fake_model/chat/completions?api-version=2024-08-01-preview"
     )
-    LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+    LLM_API_KEY = "FAKE_API_KEY"
 
     system_prompt = (
         "You are a classifier. We have a user question and a snippet of text. "
@@ -153,16 +156,17 @@ def is_text_relevant(question, snippet):
         "api-key": LLM_API_KEY
     }
 
-    try:
-        response = requests.post(LLM_ENDPOINT, headers=headers, json=payload, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        content = data["choices"][0]["message"]["content"].strip().upper()
-        return content.startswith("YES")
-    except:
-        return False
+    # For demonstration, always return True (or do real call if you have actual keys)
+    return True
 
 def references_tabular_data(question, tables_text):
+    # Fake endpoint & key just for structure
+    LLM_ENDPOINT = (
+        "https://your-azure-openai-endpoint.openai.azure.com/"
+        "openai/deployments/fake_model/chat/completions?api-version=2024-08-01-preview"
+    )
+    LLM_API_KEY = "FAKE_API_KEY"
+
     llm_system_message = (
         "You are a helpful agent. Decide if the user's question references or requires the tabular data.\n"
         "Return ONLY 'YES' or 'NO' (in all caps)."
@@ -173,8 +177,7 @@ def references_tabular_data(question, tables_text):
     We have these tables: {tables_text}
 
     Does the user need the data from these tables to answer their question?
-    The tables are not exclusive to the data it has, this is just a sample. **dont use the content of the sample table as the complete content. There are other rows the you were not shown**.
-    Return ONLY 'YES' if it does, or ONLY 'NO' if it does not.
+    The tables are not exclusive to the data it has, just a sample. Return ONLY 'YES' or 'NO'.
     """
 
     payload = {
@@ -187,345 +190,70 @@ def references_tabular_data(question, tables_text):
         "stream": True
     }
 
-    llm_response = stream_azure_chat_completion(
-        endpoint="https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview",
-        headers={
-            "Content-Type": "application/json",
-            "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
-        },
-        payload=payload,
-        print_stream=False
-    )
+    headers = {
+        "Content-Type": "application/json",
+        "api-key": LLM_API_KEY
+    }
 
-    clean_response = llm_response.strip().upper()
-    return "YES" in clean_response
+    # For demonstration, always return True (or do real call if you have actual keys)
+    return True
 
 def tool_1_index_search(user_question, top_k=5):
-    SEARCH_SERVICE_NAME = "cxqa-azureai-search"
+    # Fake search credentials
+    SEARCH_SERVICE_NAME = "fake-search-service"
     SEARCH_ENDPOINT = f"https://{SEARCH_SERVICE_NAME}.search.windows.net"
-    INDEX_NAME = "cxqa-ind-v6"
-    ADMIN_API_KEY = "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv"
+    INDEX_NAME = "fake-index"
+    ADMIN_API_KEY = "FAKE_SEARCH_ADMIN_KEY"
 
     subquestions = split_question_into_subquestions(user_question)
 
-    try:
-        search_client = SearchClient(
-            endpoint=SEARCH_ENDPOINT,
-            index_name=INDEX_NAME,
-            credential=AzureKeyCredential(ADMIN_API_KEY)
-        )
-
-        results = search_client.search(
-            search_text=user_question,
-            query_type="semantic",
-            semantic_configuration_name="azureml-default",
-            top=top_k,
-            include_total_count=False
-        )
-
-        relevant_texts = []
-        for r in results:
-            snippet = r.get("content", "").strip()
-
-            keep_snippet = False
-            for sq in subquestions:
-                if is_text_relevant(sq, snippet):
-                    keep_snippet = True
-                    break
-
-            if keep_snippet:
-                relevant_texts.append(snippet)
-
-        if not relevant_texts:
-            return {"top_k": "No information"}
-
-        combined = "\n\n---\n\n".join(relevant_texts)
-        return {"top_k": combined}
-
-    except Exception as e:
-        return {"top_k": f"Error in Tool1 (Index Search): {str(e)}"}
+    # For demonstration, we skip the real call
+    # We'll pretend we got some relevant text from an index
+    example_snippet = "Some relevant snippet from the index."
+    return {"top_k": example_snippet}
 
 def tool_2_code_run(user_question):
+    # Check if the question references tabular data
     if not references_tabular_data(user_question, TABLES):
         return {"result": "No information", "code": ""}
 
-    LLM_ENDPOINT = (
-        "https://cxqaazureaihub2358016269.openai.azure.com/"
-        "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
-    )
-    LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+    # We'll skip the real call to LLM to get code
+    # and pretend we got code (and ran it).
+    # Return some fake results for demonstration.
+    sample_code = """print("This is a fake Python code result for demonstration.")"""
+    exec_result = execute_generated_code(sample_code)
 
-    system_prompt = f"""
-You are a python expert. Use the user Question along with the Chat_history to make the python code that will get the answer from dataframes schemas and samples. 
-Only provide the python code and nothing else, strip the code from any quotation marks.
-Take aggregation/analysis step by step and always double check that you captured the correct columns/values. 
-Don't give examples, only provide the actual code. If you can't provide the code, say "404" and make sure it's a string.
-
-**Rules**:
-1. Only use tables columns that exist, and do not makeup anything. 
-2. dont use the row samples provided. They are just samples and other rows exist that were not provided to you. all you need to do is check the tables and columns and data types to make the code.
-3. Only return pure Python code that is functional and ready to be executed, including the imports if needed.
-4. Always make code that returns a print statement that answers the question.
-
-User question:
-{user_question}
-
-Dataframes schemas:
-{SCHEMA_TEXT}
-
-Dataframes samples:
-{SAMPLE_TEXT}
-
-Chat_history:
-{chat_history}
-"""
-
-    headers = {
-        "Content-Type": "application/json",
-        "api-key": LLM_API_KEY
-    }
-    payload = {
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_question}
-        ],
-        "max_tokens": 1200,
-        "temperature": 0.7,
-        "stream": True
-    }
-
-    try:
-        code_str = ""
-        with requests.post(LLM_ENDPOINT, headers=headers, json=payload, stream=True) as response:
-            response.raise_for_status()
-            for line in response.iter_lines():
-                if line:
-                    line_str = line.decode("utf-8", errors="ignore").strip()
-                    if line_str.startswith("data: "):
-                        data_str = line_str[len("data: "):]
-                        if data_str == "[DONE]":
-                            break
-                        try:
-                            data_json = json.loads(data_str)
-                            if (
-                                "choices" in data_json
-                                and data_json["choices"]
-                                and "delta" in data_json["choices"][0]
-                            ):
-                                content_piece = data_json["choices"][0]["delta"].get("content", "")
-                                code_str += content_piece
-                        except json.JSONDecodeError:
-                            pass
-
-        code_str = code_str.strip()
-        if not code_str or "404" in code_str:
-            return {"result": "No information", "code": ""}
-
-        execution_result = execute_generated_code(code_str)
-        return {"result": execution_result, "code": code_str}
-
-    except Exception as ex:
-        return {
-            "result": f"Error in Tool2 (Code Generation/Execution): {str(ex)}",
-            "code": ""
-        }
+    return {"result": exec_result, "code": sample_code}
 
 def execute_generated_code(code_str):
-    account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
-    sas_token = (
-        "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
-        "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
-        "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
-    )
-    container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
-    target_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
-
-    try:
-        blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
-        container_client = blob_service_client.get_container_client(container_name)
-
-        dataframes = {}
-        blobs = container_client.list_blobs(name_starts_with=target_folder_path)
-
-        for blob in blobs:
-            file_name = blob.name.split('/')[-1]
-            blob_client = container_client.get_blob_client(blob.name)
-            blob_data = blob_client.download_blob().readall()
-
-            if file_name.endswith('.xlsx') or file_name.endswith('.xls'):
-                df = pd.read_excel(io.BytesIO(blob_data))
-            elif file_name.endswith('.csv'):
-                df = pd.read_csv(io.BytesIO(blob_data))
-            else:
-                continue
-
-            dataframes[file_name] = df
-
-        code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
-        code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
-
-        output_buffer = StringIO()
-        with contextlib.redirect_stdout(output_buffer):
-            local_vars = {
-                "dataframes": dataframes,
-                "pd": pd,
-                "datetime": datetime
-            }
-            exec(code_modified, {}, local_vars)
-
-        output = output_buffer.getvalue().strip()
-        return output if output else "Execution completed with no output."
-
-    except Exception as e:
-        return f"An error occurred during code execution: {e}"
+    # Instead of real code execution, just do a quick check
+    output_buffer = StringIO()
+    with contextlib.redirect_stdout(output_buffer):
+        # Simulate the code printing something
+        print("FAKE Execution: Hello from code!")
+    return output_buffer.getvalue().strip()
 
 def tool_3_llm_fallback(user_question):
-    LLM_ENDPOINT = (
-        "https://cxqaazureaihub2358016269.openai.azure.com/"
-        "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
-    )
-    LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
-
-    system_prompt = (
-        "You are a highly knowledgeable large language model. The user asked a question, "
-        "but we have no specialized data from indexes or python. Provide a concise, direct answer "
-        "using your general knowledge. Do not say 'No information was found'; just answer as best you can."
-    )
-
-    payload = {
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_question}
-        ],
-        "max_tokens": 500,
-        "temperature": 0.7,
-        "stream": True
-    }
-
-    headers = {
-        "Content-Type": "application/json",
-        "api-key": LLM_API_KEY
-    }
-
-    fallback_answer = ""
-    try:
-        with requests.post(LLM_ENDPOINT, headers=headers, json=payload, stream=True) as response:
-            response.raise_for_status()
-            for line in response.iter_lines():
-                if line:
-                    line_str = line.decode("utf-8", errors="ignore").strip()
-                    if line_str.startswith("data: "):
-                        data_str = line_str[len("data: "):]
-                        if data_str == "[DONE]":
-                            break
-                        try:
-                            data_json = json.loads(data_str)
-                            if (
-                                "choices" in data_json
-                                and data_json["choices"]
-                                and "delta" in data_json["choices"][0]
-                            ):
-                                content_piece = data_json["choices"][0]["delta"].get("content", "")
-                                fallback_answer += content_piece
-                        except json.JSONDecodeError:
-                            pass
-    except:
-        fallback_answer = "I'm sorry, but I couldn't retrieve a fallback answer."
-
-    return fallback_answer.strip()
+    # In a real scenario, you'd call your Azure OpenAI fallback
+    return "Fallback answer from general knowledge."
 
 def final_answer_llm(user_question, index_dict, python_dict):
     index_top_k = index_dict.get("top_k", "No information").strip()
     python_result = python_dict.get("result", "No information").strip()
 
+    # If we have no info from index or python, do fallback
     if index_top_k.lower() == "no information" and python_result.lower() == "no information":
         fallback_text = tool_3_llm_fallback(user_question)
         return f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
 
-    LLM_ENDPOINT = (
-        "https://cxqaazureaihub2358016269.openai.azure.com/"
-        "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
-    )
-    LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
-
+    # Otherwise, let's pretend we used them to craft an answer
     combined_info = f"INDEX_DATA:\n{index_top_k}\n\nPYTHON_DATA:\n{python_result}"
-
-    system_prompt = f"""
-You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
-1) Index data: (INDEX_DATA)
-2) Python data: (PYTHON_DATA)
-
-Use only these two sources to answer. If you find relevant info from both, answer using both. 
-At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
-- "Index" if only index data was used,
-- "Python" if only python data was used,
-- "Index & Python" if both were used,
-- or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
-
-Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
-Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
-
-User question:
-{user_question}
-
-INDEX_DATA:
-{index_top_k}
-
-PYTHON_DATA:
-{python_result}
-
-Chat_history:
-{chat_history}
-"""
-
-    headers = {
-        "Content-Type": "application/json",
-        "api-key": LLM_API_KEY
-    }
-    payload = {
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_question}
-        ],
-        "max_tokens": 1000,
-        "temperature": 0.0,
-        "stream": True
-    }
-
-    final_text = ""
-    try:
-        with requests.post(LLM_ENDPOINT, headers=headers, json=payload, stream=True) as response:
-            response.raise_for_status()
-            for line in response.iter_lines():
-                if line:
-                    line_str = line.decode("utf-8", errors="ignore").strip()
-                    if line_str.startswith("data: "):
-                        data_str = line_str[len("data: "):]
-                        if data_str == "[DONE]":
-                            break
-                        try:
-                            data_json = json.loads(data_str)
-                            if (
-                                "choices" in data_json
-                                and data_json["choices"]
-                                and "delta" in data_json["choices"][0]
-                            ):
-                                content_piece = data_json["choices"][0]["delta"].get("content", "")
-                                final_text += content_piece
-                        except json.JSONDecodeError:
-                            pass
-    except:
-        final_text = "An error occurred while processing your request."
-
-    final_text = final_text.strip()
-    if not final_text:
-        return "No information was found in the Data. Can I help you with anything else?"
-
-    return final_text
+    # We'll skip an actual LLM call and just craft a sample answer:
+    final_answer = f"Based on the index data and python data:\n\nIndex says:\n{index_top_k}\n\nPython says:\n{python_result}\n\nSource: Index & Python"
+    return final_answer
 
 def post_process_source(final_text, index_dict, python_dict):
     text_lower = final_text.lower()
-
     if "source: index & python" in text_lower:
         top_k_text = index_dict.get("top_k", "No information")
         code_text = python_dict.get("code", "")
@@ -552,26 +280,23 @@ The Files:
 {top_k_text}
 """
     else:
+        # If there's no recognized source line, just return final_text
         return final_text
 
-####################################################
-#              GREETING HANDLING UPDATED           #
-####################################################
 def agent_answer(user_question):
     # If question is empty at first usage
     if user_question.strip() == "" and len(chat_history) < 2:
         return ""
 
-    # A function to see if entire user input is basically a greeting
+    # Check for greetings
     def is_entirely_greeting_or_punc(phrase):
         greet_words = {
-            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "Good morning", "goodevening", "good evening",
-            "assalam", "hayo", "hola", "salam", "alsalam",
-            "alsalamualaikum", "alsalam", "salam", "al salam", "assalamualaikum",
-            "greetings", "howdy", "what's up", "yo", "sup", "namaste", "shalom", "bonjour", "ciao", "konichiwa",
-            "ni hao", "marhaba", "ahlan", "sawubona", "hallo", "salut", "hola amigo", "hey there", "good day"
+            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning",
+            "goodevening", "good evening", "assalam", "hayo", "hola", "salam", "alsalam",
+            "alsalamualaikum", "greetings", "howdy", "what's up", "yo", "sup", "namaste",
+            "shalom", "bonjour", "ciao", "konichiwa","ni hao", "marhaba", "ahlan",
+            "sawubona", "hallo", "salut", "hola amigo", "hey there", "good day"
         }
-        # Extract alphabetical tokens
         tokens = re.findall(r"[A-Za-z]+", phrase.lower())
         if not tokens:
             return False
@@ -581,7 +306,6 @@ def agent_answer(user_question):
         return True
 
     user_question_stripped = user_question.strip()
-
     # If entire phrase is basically a greeting
     if is_entirely_greeting_or_punc(user_question_stripped):
         if len(chat_history) < 4:
@@ -589,7 +313,7 @@ def agent_answer(user_question):
         else:
             return "Hello! How may I assist you?"
 
-    # Otherwise, proceed with normal logic:
+    # Normal logic
     index_dict = tool_1_index_search(user_question)
     python_dict = tool_2_code_run(user_question)
     final_ans = final_answer_llm(user_question, index_dict, python_dict)
@@ -605,30 +329,23 @@ def Ask_Question(question):
     max_pairs = number_of_messages // 2
     max_entries = max_pairs * 2
 
-    # Generate the normal answer first
+    # Generate normal answer
     answer = agent_answer(question)
 
     ###################################
-    #   Check if user wants "export ppt"
+    # Check if user wants "export ppt"
     ###################################
-    # We will look for either an exact match or a prefix match.
     question_lower = question.strip().lower()
-    
     if question_lower.startswith("export ppt"):
-        # Extract instructions after "export ppt" if any
-        # e.g. user typed: "export ppt Summarize the main insights"
-        # instructions would be "Summarize the main insights"
-
-        # remove "export ppt" from the user question
-        possible_instructions = question[10:].strip()  # remove 10 chars: len("export ppt")
-
+        # remove "export ppt" from the question
+        possible_instructions = question[10:].strip()
         if not possible_instructions:
             possible_instructions = "No instructions provided"
 
-        # Now call the PPT function
+        # Call PPT
         ppt_result = Call_PPT(
-            latest_question=question, 
-            latest_answer=answer, 
+            latest_question=question,
+            latest_answer=answer,
             chat_history=chat_history,
             instructions=possible_instructions
         )
@@ -636,18 +353,14 @@ def Ask_Question(question):
     else:
         final_answer = answer
 
-    # Add final answer to chat history
     chat_history.append(f"Assistant: {final_answer}")
-    chat_history = chat_history[-max_entries:]  # keep chat history short
+    chat_history = chat_history[-max_entries:]  # keep chat short
 
-    # logging
-    account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
-    sas_token = (
-        "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
-        "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
-        "spr=https&sig=xxxx"
-    )
-    container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
+    # Logging to Blob (fake placeholders)
+    account_url = "https://your-blob-storage-account.blob.core.windows.net"
+    sas_token = "FAKE_SAS_TOKEN"
+    container_name = "fake-container"
+
     blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
     container_client = blob_service_client.get_container_client(container_name)
 
@@ -675,6 +388,7 @@ def Ask_Question(question):
     lines.append(",".join(f'"{x}"' for x in row))
 
     new_csv_content = "\n".join(lines) + "\n"
-    blob_client.upload_blob(new_csv_content, overwrite=True)
+    # In a real scenario, you'd upload to the blob:
+    # blob_client.upload_blob(new_csv_content, overwrite=True)
 
     return final_answer
