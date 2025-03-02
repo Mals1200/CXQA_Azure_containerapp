@@ -7,50 +7,30 @@ from pptx import Presentation
 from pptx.util import Pt
 from azure.storage.blob import BlobServiceClient
 
-def Call_PPT(instructions=""):
+def Call_PPT(latest_question, latest_answer, chat_history, instructions="No instructions provided"):
     """
-    1) Imports chat_history from ask_func to get the latest conversation.
-    2) Finds the latest user question & latest assistant answer.
-    3) Builds a prompt with `instructions` included under (User_Instructions).
-    4) Calls Azure OpenAI with fake credentials to generate the PPT text.
-    5) Creates a .pptx using python-pptx.
-    6) Uploads the PPT to Azure & schedules auto-delete in 5 minutes.
-    7) Returns the download link.
+    This function creates a PowerPoint based on the instructions, question/answer,
+    and chat history. 
+    If instructions == 'cancel', it cancels immediately. Otherwise, it calls Azure
+    OpenAI to produce slide text, then builds the PPT and returns a download link.
     """
 
-    # We do a late import to avoid circular references
-    from ask_func import chat_history
+    # Exit the function if instructions are canceled:
+    if instructions.lower() == "cancel":
+        return "Operation canceled by the user."
 
-    # ---------------------------
-    # (A) Find Latest Q & A
-    # ---------------------------
-    latest_question = ""
-    latest_answer = ""
-    reversed_history = list(reversed(chat_history))
-    for entry in reversed_history:
-        if entry.startswith("User: ") and not latest_question:
-            latest_question = entry.replace("User: ", "").strip()
-        elif entry.startswith("Assistant: ") and not latest_answer:
-            latest_answer = entry.replace("Assistant: ", "").strip()
+    ##################################################
+    # (A) CALL AZURE OPENAI TO GET SLIDE TEXT
+    ##################################################
+    chat_history_str = str(chat_history)
 
-        if latest_question and latest_answer:
-            break
-
-    if not latest_question:
-        latest_question = "No user question found."
-    if not latest_answer:
-        latest_answer = "No assistant answer found."
-
-    # ---------------------------
-    # (B) Build the OpenAI Prompt
-    # ---------------------------
     ppt_prompt = f"""
 You are a PowerPoint presentation expert. Use the following information to make the slides.
 Rules:
 - Only use the following information to create the slides.
 - Don't come up with anything outside of your scope in your slides.
-- Your output will be utilized by the 'python-pptx' to create the slides (keep formatting in mind).
-- Make the output complete and ready for a presentation. **Only give text for the slides**.
+- Your output will be utilized by the "python-pptx" to create the slides (Keep in mind formatting).
+- Make the output complete and ready for a presentation. **Only give the text for the slides**.
 - Do not add any instructions or slide_numbers with the slides text.
 
 (The Information)
@@ -64,20 +44,23 @@ Rules:
 {latest_answer}
 
 - Full Conversation:
-{chat_history}
+{chat_history_str}
 """
 
+    # FAKE Azure OpenAI values (example placeholders)
     LLM_ENDPOINT = (
         "https://cxqaazureaihub2358016269.openai.azure.com/"
         "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
     )
-    LLM_API_KEY = "FAKE_AZURE_OPENAI_API_KEY"
+    LLM_API_KEY = "xxxx"  # Your key
 
     system_message = "You are a helpful assistant that formats PowerPoint slides from user input."
+    user_message = ppt_prompt
+
     payload = {
         "messages": [
             {"role": "system", "content": system_message},
-            {"role": "user", "content": ppt_prompt}
+            {"role": "user", "content": user_message}
         ],
         "max_tokens": 1000,
         "temperature": 0.7,
@@ -111,24 +94,22 @@ Rules:
                         except json.JSONDecodeError:
                             pass
     except Exception as e:
-        return f"Error generating slides text: {e}"
+        ppt_response = f"An error occurred while creating the PowerPoint slides: {e}"
 
     slides_text = ppt_response.strip()
-    if not slides_text:
-        return "No valid slide text returned from Azure OpenAI."
+    if not slides_text or "An error occurred" in slides_text:
+        return f"No valid slide text returned:\n{slides_text}"
 
-    # ---------------------------
-    # (C) Create PPT in memory
-    # ---------------------------
+    ##################################################
+    # (B) PARSE TEXT INTO SLIDES & CREATE A .PPTX
+    ##################################################
     raw_slides = [s.strip() for s in slides_text.split("\n\n") if s.strip()]
 
     prs = Presentation()
-    layout = prs.slide_layouts[1]  # Title & Content layout
+    layout = prs.slide_layouts[1]  # Title & Content
 
     for raw_slide in raw_slides:
         lines = raw_slide.split("\n")
-        if not lines:
-            continue
         title_text = lines[0]
         bullet_lines = lines[1:]
 
@@ -141,20 +122,20 @@ Rules:
             for bullet_item in bullet_lines:
                 p = body_tf.add_paragraph()
                 p.text = bullet_item
-                p.font.size = Pt(18)
+                p.font.size = Pt(18)  # Example bullet font size
 
     ppt_buffer = io.BytesIO()
     prs.save(ppt_buffer)
     ppt_buffer.seek(0)
 
-    # ---------------------------
-    # (D) Upload to Azure & auto-delete
-    # ---------------------------
+    ##################################################
+    # (C) UPLOAD TO AZURE BLOB STORAGE
+    ##################################################
     account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
     sas_token = (
         "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
         "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
-        "spr=https&sig=FAKE_SAS_SIGNATURE"
+        "spr=https&sig=xxxx"
     )
     container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
 
@@ -165,16 +146,20 @@ Rules:
     blob_client = container_client.get_blob_client(ppt_filename)
 
     blob_client.upload_blob(ppt_buffer, overwrite=True)
+
     download_link = f"{account_url}/{container_name}/{ppt_filename}?{sas_token}"
 
+    ##################################################
+    # (D) SCHEDULE AUTO-DELETE AFTER 5 MINUTES
+    ##################################################
     def delete_blob_after_5():
         try:
             blob_client.delete_blob()
         except Exception:
             pass
 
-    # 300 seconds = 5 minutes
-    timer = threading.Timer(300, delete_blob_after_5)
+    timer = threading.Timer(300, delete_blob_after_5)  # 300s = 5 minutes
     timer.start()
 
+    # (E) Return the link
     return download_link
