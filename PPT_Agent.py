@@ -28,6 +28,7 @@ Rules:
 - Your output will be utilized by the "python-pptx" to create the slides **Keep in mind for formatting the slides**.
 - Make the output complete and ready for a presentation. **Only give the text for the slides**.
 - Do not add any instructions or slide_numbers with the slides text.
+- If there is absolutly not enough information to make a slides return "There is not enough information to generate slides from."
 
 (The Information)
 - User_Instructions:
