@@ -6,7 +6,6 @@ def Call_diagram_pyvis(latest_question, latest_answer, chat_history, diagram_typ
     from datetime import datetime
     from azure.storage.blob import BlobServiceClient
     from pyvis.network import Network
-
     """
     1) Calls Azure OpenAI (gpt-4o-3) to generate diagram text.
     2) Uses the PyVis library to build an interactive HTML diagram.
