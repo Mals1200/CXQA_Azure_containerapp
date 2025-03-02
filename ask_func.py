@@ -1,5 +1,3 @@
-# ask_func.py
-
 import os
 import io
 import re
@@ -16,7 +14,7 @@ from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
 import csv
 
-# <-- Add this import for your PPT_Agent:
+#import for your PPT_Agent:
 from PPT_Agent import Call_PPT
 
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
@@ -336,18 +334,18 @@ def Ask_Question(question):
     # Check if user wants "export ppt"
     ###################################
     question_lower = question.strip().lower()
-    if question_lower.startswith("export ppt"):
-        # remove "export ppt" from the question
-        possible_instructions = question[10:].strip()
-        if not possible_instructions:
-            possible_instructions = "No instructions provided"
-
-        # Call PPT
+    if question_lower == "export ppt":
+        instructions_input = input("Please provide your instructions for the PPT (type 'cancel' to abort): ")
+        
+        if instructions_input.lower() == "cancel":
+            print("User canceled the operation. Exiting function.")
+            return "Operation canceled by the user."
+        
         ppt_result = Call_PPT(
-            latest_question=question,
-            latest_answer=answer,
+            latest_question=chat_history[-2] if len(chat_history) > 1 else None,
+            latest_answer=chat_history[-1] if chat_history else None,
             chat_history=chat_history,
-            instructions=possible_instructions
+            instructions=instructions_input
         )
         final_answer = ppt_result
     else:
