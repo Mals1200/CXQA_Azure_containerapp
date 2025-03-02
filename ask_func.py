@@ -14,6 +14,9 @@ from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
 import csv
 
+# <-- Add this import for your PPT_Agent:
+from PPT_Agent import Call_PPT
+
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
 logging.getLogger("azure").setLevel(logging.WARNING)
 
@@ -602,10 +605,27 @@ def Ask_Question(question):
     max_pairs = number_of_messages // 2
     max_entries = max_pairs * 2
 
+    # Generate the normal answer
     answer = agent_answer(question)
 
-    chat_history.append(f"Assistant: {answer}")
-    chat_history = chat_history[-max_entries:]
+    # ------------------------
+    # Check for "export ppt"
+    # ------------------------
+    if question.strip().lower() == "export ppt":
+        # If user wants to export, call Call_PPT
+        ppt_result = Call_PPT(
+            latest_question=question,
+            latest_answer=answer,
+            chat_history=chat_history
+        )
+        # We'll use the ppt_result as the final answer
+        final_answer = ppt_result
+    else:
+        final_answer = answer
+
+    # Add final answer to chat history
+    chat_history.append(f"Assistant: {final_answer}")
+    chat_history = chat_history[-max_entries:]  # keep chat history short
 
     # logging
     account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
@@ -636,7 +656,7 @@ def Ask_Question(question):
     row = [
         current_time,
         question.replace('"','""'),
-        answer.replace('"','""'),
+        final_answer.replace('"','""'),
         "anonymous"
     ]
     lines.append(",".join(f'"{x}"' for x in row))
@@ -644,5 +664,4 @@ def Ask_Question(question):
     new_csv_content = "\n".join(lines) + "\n"
     blob_client.upload_blob(new_csv_content, overwrite=True)
 
-    return answer
-
+    return final_answer
