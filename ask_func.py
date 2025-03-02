@@ -620,28 +620,27 @@ def Ask_Question(question):
             # If we can't find a previous Q/A pair
             return "No recent Q/A found to export to PPT."
 
-        # Now call the PPT generation function
+        # Now call the PPT generation function with the full chat_history
         ppt_url = Call_PPT(last_user_question, last_assistant_answer, chat_history)
         return ppt_url
 
     chat_history.append(f"User: {question}")
 
-    number_of_messages = 10
-    max_pairs = number_of_messages // 2
-    max_entries = max_pairs * 2
-
+    # Removed truncation so that chat_history retains the full conversation
     answer = agent_answer(question)
     chat_history.append(f"Assistant: {answer}")
-    chat_history = chat_history[-max_entries:]
+    # Previously, you had:
+    # chat_history = chat_history[-max_entries:]
+    # This line is removed to send the full chat_history regardless of its length.
 
-    # logging
+    # logging code remains unchanged
     account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
     sas_token = (
         "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
         "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
         "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
     )
-    container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
+    container_name = "5d74a98c-1fc6-4567-2632b489bd0b-azureml-blobstore"
     blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
     container_client = blob_service_client.get_container_client(container_name)
 
