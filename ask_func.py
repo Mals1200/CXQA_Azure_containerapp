@@ -13,9 +13,6 @@ from azure.storage.blob import BlobServiceClient
 from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
 import csv
-# Function calls:
-from PPT_Agent import Call_PPT
-
 
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
 logging.getLogger("azure").setLevel(logging.WARNING)
@@ -605,37 +602,12 @@ def Ask_Question(question):
     max_pairs = number_of_messages // 2
     max_entries = max_pairs * 2
 
-    # Handle the "export ppt" case
-    if question.strip().lower() == "export ppt":
-        # Step 1: Print instructions and get user input
-        initial_answer = "Write your instructions for the PPT"
-        print(initial_answer)
-        instructions_input = input("PPT Instructions: ").strip()
+    answer = agent_answer(question)
 
-        # Step 2: Call PPT agent
-        from PPT_Agent import Call_PPT
-        latest_question = chat_history[-2]  # User's original "export ppt" question
-        latest_answer = f"Assistant: {initial_answer}"
-        
-        # Get the agent's final answer
-        answer = Call_PPT(
-            latest_question=latest_question,
-            latest_answer=latest_answer,
-            chat_history=chat_history,
-            instruction=instructions_input
-        )
-        
-        # Add/update the final answer in chat history
-        chat_history.append(f"Assistant: {answer}")
-    else:
-        # Original behavior for other questions
-        answer = agent_answer(question)
-        chat_history.append(f"Assistant: {answer}")
-
-    # Keep only the most recent messages
+    chat_history.append(f"Assistant: {answer}")
     chat_history = chat_history[-max_entries:]
 
-    # Logging (unchanged)
+    # logging
     account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
     sas_token = (
         "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
@@ -673,3 +645,4 @@ def Ask_Question(question):
     blob_client.upload_blob(new_csv_content, overwrite=True)
 
     return answer
+
