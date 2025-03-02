@@ -1,4 +1,4 @@
-def Call_PPT(latest_question, latest_answer, chat_history, instructions):
+def Call_PPT(latest_question, latest_answer, chat_history):
     import requests
     import json
     import io
@@ -31,8 +31,6 @@ Rules:
 - If there is absolutly not enough information to make a slides return "There is not enough information to generate slides from."
 
 (The Information)
-- User_Instructions:
-{instructions}
 
 - Latest_Question:
 {latest_question}
