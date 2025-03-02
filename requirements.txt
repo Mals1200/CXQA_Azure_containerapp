@@ -29,6 +29,8 @@ azure-core==1.29.0
 numpy==1.23.3
 pandas==1.5.3
 
-# For generating Word and PPT files:
+# For generating Word, PPT and graphs/charts files:
 python-pptx==1.0.2
 python-docx==1.1.2
+graphviz==0.20.3
+
