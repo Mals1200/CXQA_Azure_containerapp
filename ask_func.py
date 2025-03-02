@@ -594,30 +594,24 @@ def agent_answer(user_question):
     return final_ans_with_src
 
 def Ask_Question(question):
-
+    global chat_history
 
     # -----------------------------------------------------------
     # (A) Check if user requested a diagram export: "export diagram <diagram_type>"
     # -----------------------------------------------------------
-    # Example usage:
-    #   "export diagram directed"
-    #   "export diagram undirected"
-    #   "export diagram hierarchical"
-    #   "export diagram forceatlas"
     if question.lower().startswith("export diagram"):
         # parse the diagram_type from the command
         splitted = question.split(" ", 2)  # e.g. ["export", "diagram", "directed"]
         if len(splitted) == 3:
             diagram_type = splitted[2].strip()  # directed, undirected, ...
         else:
-            # If user didn't specify any diagram type, set a default
             diagram_type = "directed"
 
-        # call the diagram function
-        from Diagram_Agent import Call_diagram_pyvis
-        latest_q = chat_history[-2] if len(chat_history) >= 2 else ""
-        latest_a = chat_history[-1] if len(chat_history) >= 1 else ""
+        # Remove the length checks:
+        latest_q = chat_history[-2]
+        latest_a = chat_history[-1]
 
+        from Diagram_Agent import Call_diagram_pyvis
         answer = Call_diagram_pyvis(
             latest_question=latest_q,
             latest_answer=latest_a,
@@ -631,10 +625,10 @@ def Ask_Question(question):
     # -----------------------------------------------------------
     elif question.lower() == "export ppt":
         # Function call for generating PPT
-        from PPT_Agent import Call_PPT
-        latest_q = chat_history[-2] if len(chat_history) >= 2 else ""
-        latest_a = chat_history[-1] if len(chat_history) >= 1 else ""
+        latest_q = chat_history[-2]
+        latest_a = chat_history[-1]
 
+        from PPT_Agent import Call_PPT
         answer = Call_PPT(
             latest_question=latest_q,
             latest_answer=latest_a,
@@ -646,15 +640,13 @@ def Ask_Question(question):
     # (C) Otherwise, normal chat flow
     # -----------------------------------------------------------
     else:
-      
-        global chat_history
         chat_history.append(f"User: {question}")
-        
+
         number_of_messages = 10
         max_pairs = number_of_messages // 2
         max_entries = max_pairs * 2
 
-        # Your normal question -> agent answer flow
+        # Normal question -> agent answer flow
         answer = agent_answer(question)
 
         chat_history.append(f"Assistant: {answer}")
@@ -675,6 +667,7 @@ def Ask_Question(question):
         container_client = blob_service_client.get_container_client(container_name)
 
         target_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/logs/"
+        from datetime import datetime
         date_str = datetime.now().strftime("%Y_%m_%d")
         log_filename = f"logs_{date_str}.csv"
         blob_name = target_folder_path + log_filename
@@ -701,3 +694,4 @@ def Ask_Question(question):
         blob_client.upload_blob(new_csv_content, overwrite=True)
 
         return answer
+
