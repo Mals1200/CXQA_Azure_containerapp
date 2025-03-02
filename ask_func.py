@@ -13,9 +13,9 @@ from azure.storage.blob import BlobServiceClient
 from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
 import csv
-
 # Function calls:
 from PPT_Agent import Call_PPT
+
 
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
 logging.getLogger("azure").setLevel(logging.WARNING)
@@ -605,40 +605,37 @@ def Ask_Question(question):
     max_pairs = number_of_messages // 2
     max_entries = max_pairs * 2
 
-    answer = None
-
-    # Check if current question is "export ppt"
+    # Handle the "export ppt" case
     if question.strip().lower() == "export ppt":
-        answer = "Write your instructions for the PPT"
+        # Step 1: Print instructions and get user input
+        initial_answer = "Write your instructions for the PPT"
+        print(initial_answer)
+        instructions_input = input("PPT Instructions: ").strip()
+
+        # Step 2: Call PPT agent
+        from PPT_Agent import Call_PPT
+        latest_question = chat_history[-2]  # User's original "export ppt" question
+        latest_answer = f"Assistant: {initial_answer}"
+        
+        # Get the agent's final answer
+        answer = Call_PPT(
+            latest_question=latest_question,
+            latest_answer=latest_answer,
+            chat_history=chat_history,
+            instruction=instructions_input
+        )
+        
+        # Add/update the final answer in chat history
+        chat_history.append(f"Assistant: {answer}")
     else:
-        # Check if previous assistant message was the PPT prompt
-        if len(chat_history) >= 2:
-            prev_assistant_msg = chat_history[-2]
-            if prev_assistant_msg == "Assistant: Write your instructions for the PPT":
-                # This is the instructions
-                instructions = question
-                # Get the latest_question ("export ppt")
-                latest_question = ""
-                if len(chat_history) >= 3:
-                    latest_question_entry = chat_history[-3]
-                    if latest_question_entry.startswith("User: "):
-                        latest_question = latest_question_entry[len("User: "):]
-                # Import and call Call_PPT
-                from PPT_Agent import Call_PPT
-                answer = Call_PPT(latest_question, instructions, chat_history)
-            else:
-                answer = agent_answer(question)
-        else:
-            answer = agent_answer(question)
-
-    # Fallback to agent_answer if answer is not set (shouldn't occur with current logic)
-    if answer is None:
+        # Original behavior for other questions
         answer = agent_answer(question)
+        chat_history.append(f"Assistant: {answer}")
 
-    chat_history.append(f"Assistant: {answer}")
+    # Keep only the most recent messages
     chat_history = chat_history[-max_entries:]
 
-    # Logging code remains unchanged
+    # Logging (unchanged)
     account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
     sas_token = (
         "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
@@ -666,8 +663,8 @@ def Ask_Question(question):
     current_time = datetime.now().strftime("%H:%M:%S")
     row = [
         current_time,
-        question.replace('"', '""'),
-        answer.replace('"', '""'),
+        question.replace('"','""'),
+        answer.replace('"','""'),
         "anonymous"
     ]
     lines.append(",".join(f'"{x}"' for x in row))
@@ -676,4 +673,3 @@ def Ask_Question(question):
     blob_client.upload_blob(new_csv_content, overwrite=True)
 
     return answer
-
