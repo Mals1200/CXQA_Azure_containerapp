@@ -600,7 +600,7 @@ def Ask_Question(question):
     
     if question.lower() == "export ppt":
         # Function calls:
-        if len(chat_history) > 2:
+        if len(chat_history) < 4:
             from PPT_Agent import Call_PPT
             instructions_input = input("Please enter your Instructions: ").strip()
             answer = Call_PPT(latest_question = chat_history[-2], latest_answer = chat_history[-1], chat_history = chat_history, instructions = instructions_input)
