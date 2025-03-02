@@ -29,6 +29,7 @@ Rules:
 - Make the output complete and ready for a presentation. **Only give the text for the slides**.
 - Do not add any instructions or slide_numbers with the slides text.
 - If there is not enough information to create a diagram, **return a string "There is not enough information to generate a diagram."**
+- If the Full Conversation is empty or has meaningless information, **return a string "There is not enough information to generate a diagram."** 
 
 (The Information)
 
