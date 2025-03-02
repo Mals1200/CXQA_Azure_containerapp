@@ -21,12 +21,16 @@ def Call_diagram_pyvis(latest_question, latest_answer, chat_history, diagram_typ
     ##################################################
     chat_history_str = str(chat_history)
 
-    diagram_prompt = f"""
-You are a diagram creation expert. Use the following information to make a {diagram_type} node-edge diagram.
+    ppt_prompt = f"""
+You are a diagram generator. Use the following information to make the {diagram_type} diagram.
 Rules:
-- Only use the given information to create the diagram instructions.
-- Return lines like "NodeA -> NodeB" or single lines for nodes ("NodeC").
-- If not enough information to create a diagram, return "There is not enough information to generate a diagram."
+- Only use the following information to create the diagram.
+- Don't come up with anything outside of your scope in your diagram.
+- Your output will be utilized by the "pyvis" to create the diagram **Keep in mind for formatting the diagram**.
+- Make the output complete and ready for a presentation. **Only give the text for the diagram**.
+- Do not add any instructions with the diagram.
+- If there is not enough information to create a diagram, **return a string "There is not enough information to generate a diagram."**
+- If the Full Conversation is empty or has meaningless information, **return a string "There is not enough information to generate a diagram."** 
 
 (The Information)
 
