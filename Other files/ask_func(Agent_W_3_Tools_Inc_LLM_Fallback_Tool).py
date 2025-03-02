@@ -562,7 +562,7 @@ def agent_answer(user_question):
     # A function to see if entire user input is basically a greeting
     def is_entirely_greeting_or_punc(phrase):
         greet_words = {
-            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "goodevening", "good evening",
+            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "Good morning", "goodevening", "good evening",
             "assalam", "hayo", "hola", "salam", "alsalam",
             "alsalamualaikum", "alsalam", "salam", "al salam", "assalamualaikum",
             "greetings", "howdy", "what's up", "yo", "sup", "namaste", "shalom", "bonjour", "ciao", "konichiwa",
@@ -645,4 +645,3 @@ def Ask_Question(question):
     blob_client.upload_blob(new_csv_content, overwrite=True)
 
     return answer
-
