@@ -601,10 +601,10 @@ def Ask_Question(question):
     if question.lower() == "export ppt":
         # Function calls:
         if len(chat_history) > 3:
-           print("(((in the if))), ch length is: ", len(chat_history))
+           r1 = f"(((in the if))), ch length is:  {len(chat_history)}"
            print("Please enter your Instructions: ")
            instructions_input = input("...").strip()
-           answer = Call_PPT(latest_question = chat_history[-2], latest_answer = chat_history[-1], chat_history = chat_history, instructions = instructions_input)
+           answer = r1 #Call_PPT(latest_question = chat_history[-2], latest_answer = chat_history[-1], chat_history = chat_history, instructions = instructions_input)
            return answer
         else:
            print("(((in the else))), ch length is: ", len(chat_history))
