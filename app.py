@@ -42,20 +42,16 @@ def ask():
 def messages():
     if "application/json" not in request.headers.get("Content-Type", ""):
         return Response(status=415)
-
     # Deserialize incoming Activity
     body = request.json
     activity = Activity().deserialize(body)
-
     # Get the Authorization header (for Bot Framework auth)
     auth_header = request.headers.get("Authorization", "")
-
     loop = asyncio.new_event_loop()
     try:
         loop.run_until_complete(adapter.process_activity(activity, auth_header, _bot_logic))
     finally:
         loop.close()
-
     return Response(status=200)
 
 async def _bot_logic(turn_context: TurnContext):
@@ -76,14 +72,15 @@ async def _bot_logic(turn_context: TurnContext):
     # After processing, update the conversation-specific history.
     conversation_histories[conversation_id] = ask_func.chat_history
 
-    # This block preserves the "Show Source" toggle:
+    # Check if the answer contains a source section (using "\n\nSource:" as a marker)
     if "\n\nSource:" in answer:
         # Split into main answer and source details
         parts = answer.split("\n\nSource:", 1)
         main_answer = parts[0].strip()
+        # Optionally, prepend "Source:" to the details
         source_details = "Source:" + parts[1].strip()
 
-        # Build an Adaptive Card with a hidden source block + toggle
+        # Build an Adaptive Card with the main answer and a hidden block for the source details.
         adaptive_card = {
             "type": "AdaptiveCard",
             "body": [
@@ -102,7 +99,7 @@ async def _bot_logic(turn_context: TurnContext):
         )
         await turn_context.send_activity(message)
     else:
-        # Send plain text if no Source marker
+        # Send plain text answer if no source section is detected.
         await turn_context.send_activity(Activity(type="message", text=answer))
 
 if __name__ == '__main__':
