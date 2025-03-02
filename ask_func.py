@@ -355,9 +355,13 @@ def Ask_Question(question):
     chat_history = chat_history[-max_entries:]  # keep chat short
 
     # Logging to Blob (fake placeholders)
-    account_url = "https://your-blob-storage-account.blob.core.windows.net"
-    sas_token = "FAKE_SAS_TOKEN"
-    container_name = "fake-container"
+   account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
+   sas_token = (
+        "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
+        "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
+        "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
+    )
+   container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
 
     blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
     container_client = blob_service_client.get_container_client(container_name)
