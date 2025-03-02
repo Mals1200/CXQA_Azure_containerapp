@@ -14,6 +14,7 @@ from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
 import csv
 
+
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
 logging.getLogger("azure").setLevel(logging.WARNING)
 
@@ -595,54 +596,63 @@ def agent_answer(user_question):
 
 def Ask_Question(question):
     global chat_history
-
     chat_history.append(f"User: {question}")
-
-    number_of_messages = 10
-    max_pairs = number_of_messages // 2
-    max_entries = max_pairs * 2
-
-    answer = agent_answer(question)
-
-    chat_history.append(f"Assistant: {answer}")
-    chat_history = chat_history[-max_entries:]
-
-    # logging
-    account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
-    sas_token = (
-        "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
-        "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
-        "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
-    )
-    container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
-    blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
-    container_client = blob_service_client.get_container_client(container_name)
-
-    target_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/logs/"
-    date_str = datetime.now().strftime("%Y_%m_%d")
-    log_filename = f"logs_{date_str}.csv"
-    blob_name = target_folder_path + log_filename
-    blob_client = container_client.get_blob_client(blob_name)
-
-    try:
-        existing_data = blob_client.download_blob().readall().decode("utf-8")
-        lines = existing_data.strip().split("\n")
-        if not lines or not lines[0].startswith("time,question,answer,user_id"):
+    
+    if question.lower() == "export ppt":
+        # Function calls:
+        if len(chat_history) > 2:
+            from PPT_Agent import Call_PPT
+            instructions_input = input("Please enter your Instructions: ").strip()
+            answer = Call_PPT(latest_question = chat_history[-2], latest_answer = chat_history[-1], chat_history = chat_history, instructions = instructions_input)
+            return answer
+        else:
+            return "There is not enough information to generate your slides from"
+    else: 
+        number_of_messages = 10
+        max_pairs = number_of_messages // 2
+        max_entries = max_pairs * 2
+    
+        answer = agent_answer(question)
+    
+        chat_history.append(f"Assistant: {answer}")
+        chat_history = chat_history[-max_entries:]
+    
+        # logging
+        account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
+        sas_token = (
+            "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
+            "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
+            "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
+        )
+        container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
+        blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
+        container_client = blob_service_client.get_container_client(container_name)
+    
+        target_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/logs/"
+        date_str = datetime.now().strftime("%Y_%m_%d")
+        log_filename = f"logs_{date_str}.csv"
+        blob_name = target_folder_path + log_filename
+        blob_client = container_client.get_blob_client(blob_name)
+    
+        try:
+            existing_data = blob_client.download_blob().readall().decode("utf-8")
+            lines = existing_data.strip().split("\n")
+            if not lines or not lines[0].startswith("time,question,answer,user_id"):
+                lines = ["time,question,answer,user_id"]
+        except:
             lines = ["time,question,answer,user_id"]
-    except:
-        lines = ["time,question,answer,user_id"]
-
-    current_time = datetime.now().strftime("%H:%M:%S")
-    row = [
-        current_time,
-        question.replace('"','""'),
-        answer.replace('"','""'),
-        "anonymous"
-    ]
-    lines.append(",".join(f'"{x}"' for x in row))
-
-    new_csv_content = "\n".join(lines) + "\n"
-    blob_client.upload_blob(new_csv_content, overwrite=True)
-
-    return answer
+    
+        current_time = datetime.now().strftime("%H:%M:%S")
+        row = [
+            current_time,
+            question.replace('"','""'),
+            answer.replace('"','""'),
+            "anonymous"
+        ]
+        lines.append(",".join(f'"{x}"' for x in row))
+    
+        new_csv_content = "\n".join(lines) + "\n"
+        blob_client.upload_blob(new_csv_content, overwrite=True)
+    
+        return answer
 
