@@ -594,8 +594,7 @@ def agent_answer(user_question):
     return final_ans_with_src
 
 def Ask_Question(question):
-    global chat_history
-    chat_history.append(f"User: {question}")
+
 
     # -----------------------------------------------------------
     # (A) Check if user requested a diagram export: "export diagram <diagram_type>"
@@ -646,7 +645,11 @@ def Ask_Question(question):
     # -----------------------------------------------------------
     # (C) Otherwise, normal chat flow
     # -----------------------------------------------------------
-    else: 
+    else:
+      
+        global chat_history
+        chat_history.append(f"User: {question}")
+        
         number_of_messages = 10
         max_pairs = number_of_messages // 2
         max_entries = max_pairs * 2
