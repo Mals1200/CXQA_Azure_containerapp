@@ -595,13 +595,23 @@ def agent_answer(user_question):
 
 def Ask_Question(question):
     global chat_history
+    
+    # 0) Check if user wants to restart
+    if question.lower() == "restart chat":
+        chat_history = []
+        return "The chat has been restarted."
+    
+    # 1) Proceed as before
     chat_history.append(f"User: {question}")
     
     if question.lower() == "export ppt":
-        # Function calls:
-       from PPT_Agent import Call_PPT
-       answer = Call_PPT(latest_question = chat_history[-2], latest_answer = chat_history[-1], chat_history = chat_history)
-       return answer
+        from PPT_Agent import Call_PPT
+        answer = Call_PPT(
+            latest_question=chat_history[-2],
+            latest_answer=chat_history[-1],
+            chat_history=chat_history
+        )
+        return answer
 
     else: 
         number_of_messages = 10
@@ -651,3 +661,4 @@ def Ask_Question(question):
         blob_client.upload_blob(new_csv_content, overwrite=True)
     
         return answer
+
