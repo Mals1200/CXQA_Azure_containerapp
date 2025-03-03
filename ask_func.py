@@ -596,24 +596,47 @@ def agent_answer(user_question):
 def Ask_Question(question):
     global chat_history
     
-    # Check if the user wants to restart the chat before anything else
+    # Check if the user wants to restart the chat
     if question.lower() == "restart chat":
         chat_history = []
-        return f"The chat has been restarted.\n{chat_history}"
+        return "The chat has been restarted."
 
-    # If not "restart chat", proceed as usual.
+    # Otherwise, append the user message to the chat history
     chat_history.append(f"User: {question}")
-    
+
+    # 1) Export PPT
     if question.lower() == "export ppt":
-        # Function calls:
         from PPT_Agent import Call_PPT
         answer = Call_PPT(
-            latest_question = chat_history[-2],
-            latest_answer = chat_history[-1],
-            chat_history = chat_history
+            latest_question=chat_history[-2],  # last user message before "export ppt"
+            latest_answer=chat_history[-1],    # the "export ppt" line
+            chat_history=chat_history
         )
         return answer
 
+    # 2) Export Diagram
+    elif question.lower().startswith("export diagram"):
+        # Parse diagram type from user input
+        parts = question.split()
+        if len(parts) >= 3:
+            diagram_type = parts[2].lower()
+            if diagram_type not in ["directed", "undirected", "hierarchical"]:
+                # If user-supplied type is invalid, default to "directed"
+                diagram_type = "directed"
+        else:
+            # If no diagram type is specified, default to "directed"
+            diagram_type = "directed"
+
+        from Diagram_Agent import Call_diagram_pyvis
+        answer = Call_diagram_pyvis(
+            latest_question=chat_history[-2],  # last user message before "export diagram ..."
+            latest_answer=chat_history[-1],    # the "export diagram ..." line
+            chat_history=chat_history,
+            diagram_type=diagram_type
+        )
+        return answer
+
+    # 3) Default case: use the normal agent flow
     else:
         number_of_messages = 10
         max_pairs = number_of_messages // 2
@@ -621,11 +644,16 @@ def Ask_Question(question):
 
         answer = agent_answer(question)
 
-        # Append answer and trim chat_history
+        # Append the assistant's answer and trim the chat history
         chat_history.append(f"Assistant: {answer}")
         chat_history = chat_history[-max_entries:]
 
-        # Logging
+        # -------------------------------------------------------
+        # LOGGING SECTION
+        # -------------------------------------------------------
+        from datetime import datetime
+        from azure.storage.blob import BlobServiceClient
+
         account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
         sas_token = (
             "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
@@ -645,7 +673,7 @@ def Ask_Question(question):
         try:
             existing_data = blob_client.download_blob().readall().decode("utf-8")
             lines = existing_data.strip().split("\n")
-            # Check header
+            # Check if the CSV header is present
             if not lines or not lines[0].startswith("time,question,answer,user_id"):
                 lines = ["time,question,answer,user_id"]
         except:
@@ -663,5 +691,7 @@ def Ask_Question(question):
         new_csv_content = "\n".join(lines) + "\n"
         blob_client.upload_blob(new_csv_content, overwrite=True)
 
+        # Return the assistant's response
         return answer
+
 
