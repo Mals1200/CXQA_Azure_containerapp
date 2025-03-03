@@ -1,4 +1,4 @@
-def Call_PPT(latest_question, latest_answer, chat_history):
+def Call_PPT(latest_question, latest_answer, chat_history, instructions):
     import requests
     import json
     import io
@@ -32,6 +32,9 @@ Rules:
 - If the Full Conversation is empty or has meaningless information, **return a string "There is not enough information to generate a diagram."** 
 
 (The Information)
+
+- Instructions:
+{instructions}
 
 - Latest_Question:
 {latest_question}
