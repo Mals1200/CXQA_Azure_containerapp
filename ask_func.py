@@ -595,31 +595,37 @@ def agent_answer(user_question):
 
 def Ask_Question(question):
     global chat_history
-    chat_history.append(f"User: {question}")
-
-
-   
+    
+    # Check if the user wants to restart the chat before anything else
     if question.lower() == "restart chat":
-       chat_history = []
-       return "Chat has been reset"
-       
-    elif question.lower() == "export ppt":
-        # Function calls:
-       from PPT_Agent import Call_PPT
-       answer = Call_PPT(latest_question = chat_history[-2], latest_answer = chat_history[-1], chat_history = chat_history)
-       return answer
+        chat_history = []
+        return "The chat has been restarted."
 
-    else: 
+    # If not "restart chat", proceed as usual.
+    chat_history.append(f"User: {question}")
+    
+    if question.lower() == "export ppt":
+        # Function calls:
+        from PPT_Agent import Call_PPT
+        answer = Call_PPT(
+            latest_question = chat_history[-2],
+            latest_answer = chat_history[-1],
+            chat_history = chat_history
+        )
+        return answer
+
+    else:
         number_of_messages = 10
         max_pairs = number_of_messages // 2
         max_entries = max_pairs * 2
-    
+
         answer = agent_answer(question)
-    
+
+        # Append answer and trim chat_history
         chat_history.append(f"Assistant: {answer}")
         chat_history = chat_history[-max_entries:]
-    
-        # logging
+
+        # Logging
         account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
         sas_token = (
             "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
@@ -629,21 +635,22 @@ def Ask_Question(question):
         container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
         blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
         container_client = blob_service_client.get_container_client(container_name)
-    
+
         target_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/logs/"
         date_str = datetime.now().strftime("%Y_%m_%d")
         log_filename = f"logs_{date_str}.csv"
         blob_name = target_folder_path + log_filename
         blob_client = container_client.get_blob_client(blob_name)
-    
+
         try:
             existing_data = blob_client.download_blob().readall().decode("utf-8")
             lines = existing_data.strip().split("\n")
+            # Check header
             if not lines or not lines[0].startswith("time,question,answer,user_id"):
                 lines = ["time,question,answer,user_id"]
         except:
             lines = ["time,question,answer,user_id"]
-    
+
         current_time = datetime.now().strftime("%H:%M:%S")
         row = [
             current_time,
@@ -652,8 +659,9 @@ def Ask_Question(question):
             "anonymous"
         ]
         lines.append(",".join(f'"{x}"' for x in row))
-    
+
         new_csv_content = "\n".join(lines) + "\n"
         blob_client.upload_blob(new_csv_content, overwrite=True)
-    
+
         return answer
+
