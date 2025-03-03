@@ -595,14 +595,31 @@ def agent_answer(user_question):
 
 def Ask_Question(question):
     global chat_history
+    # Append the user message to the chat history
     chat_history.append(f"User: {question}")
-    
-    if question.lower() == "export ppt":
-        # Function calls:
-       from PPT_Agent import Call_PPT
-       answer = Call_PPT(latest_question = chat_history[-2], latest_answer = chat_history[-1], chat_history = chat_history)
-       return answer
 
+    # 1) Export PPT with Instructions
+    #    Trigger: "export_ppt [some instructions]"
+    if question.lower().startswith("export_ppt"):
+        # Extract instructions (everything after the first space)
+        parts = question.split(" ", 1)  # split into ["export_ppt", "<instructions>"]
+        instructions = parts[1].strip() if len(parts) > 1 else ""
+
+        from PPT_Agent import Call_PPT
+        # Safely access the last user question/assistant answer (if available)
+        latest_question = chat_history[-2] if len(chat_history) >= 2 else ""
+        latest_answer = chat_history[-1] if len(chat_history) >= 1 else ""
+
+        # Pass the instructions to Call_PPT
+        answer = Call_PPT(
+            latest_question=latest_question,
+            latest_answer=latest_answer,
+            chat_history=chat_history,
+            instructions=instructions
+        )
+        return answer
+
+    # 2) All other questions
     else: 
         number_of_messages = 10
         max_pairs = number_of_messages // 2
@@ -610,10 +627,13 @@ def Ask_Question(question):
     
         answer = agent_answer(question)
     
+        # Append the assistant's answer and trim history
         chat_history.append(f"Assistant: {answer}")
         chat_history = chat_history[-max_entries:]
     
-        # logging
+        # -------------------------------------------------------
+        # LOGGING SECTION (same as your original code)
+        # -------------------------------------------------------
         account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
         sas_token = (
             "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
@@ -650,4 +670,5 @@ def Ask_Question(question):
         new_csv_content = "\n".join(lines) + "\n"
         blob_client.upload_blob(new_csv_content, overwrite=True)
     
+        # Return the assistant's response
         return answer
