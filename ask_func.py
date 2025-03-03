@@ -595,67 +595,25 @@ def agent_answer(user_question):
 
 def Ask_Question(question):
     global chat_history
+    chat_history.append(f"User: {question}")
+    
+    if question.lower() == "export ppt":
+        # Function calls:
+       from PPT_Agent import Call_PPT
+       answer = Call_PPT(latest_question = chat_history[-2], latest_answer = chat_history[-1], chat_history = chat_history)
+       return answer
 
-    # -----------------------------------------------------------
-    # (A) Check if user requested a diagram export: "export diagram <diagram_type>"
-    # -----------------------------------------------------------
-    if question.lower().startswith("export diagram"):
-        # parse the diagram_type from the command
-        splitted = question.split(" ", 2)  # e.g. ["export", "diagram", "directed"]
-        if len(splitted) == 3:
-            diagram_type = splitted[2].strip()  # directed, undirected, ...
-        else:
-            diagram_type = "directed"
-
-        # Remove the length checks:
-        latest_q = chat_history[-2]
-        latest_a = chat_history[-1]
-
-        from Diagram_Agent import Call_diagram_pyvis
-        answer = Call_diagram_pyvis(
-            latest_question=latest_q,
-            latest_answer=latest_a,
-            chat_history=chat_history,
-            diagram_type=diagram_type
-        )
-        return answer
-
-    # -----------------------------------------------------------
-    # (B) Check if user requested a PPT export: "export ppt"
-    # -----------------------------------------------------------
-    elif question.lower() == "export ppt":
-        # Function call for generating PPT
-        latest_q = chat_history[-2]
-        latest_a = chat_history[-1]
-
-        from PPT_Agent import Call_PPT
-        answer = Call_PPT(
-            latest_question=latest_q,
-            latest_answer=latest_a,
-            chat_history=chat_history
-        )
-        return answer
-
-    # -----------------------------------------------------------
-    # (C) Otherwise, normal chat flow
-    # -----------------------------------------------------------
-    else:
-        chat_history.append(f"User: {question}")
-
+    else: 
         number_of_messages = 10
         max_pairs = number_of_messages // 2
         max_entries = max_pairs * 2
-
-        # Normal question -> agent answer flow
+    
         answer = agent_answer(question)
-
+    
         chat_history.append(f"Assistant: {answer}")
         chat_history = chat_history[-max_entries:]
-
-        # -------------------------------------------------------
-        # (D) Logging to Azure Blob
-        # -------------------------------------------------------
-        from azure.storage.blob import BlobServiceClient
+    
+        # logging
         account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
         sas_token = (
             "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
@@ -665,14 +623,13 @@ def Ask_Question(question):
         container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
         blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
         container_client = blob_service_client.get_container_client(container_name)
-
+    
         target_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/logs/"
-        from datetime import datetime
         date_str = datetime.now().strftime("%Y_%m_%d")
         log_filename = f"logs_{date_str}.csv"
         blob_name = target_folder_path + log_filename
         blob_client = container_client.get_blob_client(blob_name)
-
+    
         try:
             existing_data = blob_client.download_blob().readall().decode("utf-8")
             lines = existing_data.strip().split("\n")
@@ -680,7 +637,7 @@ def Ask_Question(question):
                 lines = ["time,question,answer,user_id"]
         except:
             lines = ["time,question,answer,user_id"]
-
+    
         current_time = datetime.now().strftime("%H:%M:%S")
         row = [
             current_time,
@@ -689,9 +646,8 @@ def Ask_Question(question):
             "anonymous"
         ]
         lines.append(",".join(f'"{x}"' for x in row))
-
+    
         new_csv_content = "\n".join(lines) + "\n"
         blob_client.upload_blob(new_csv_content, overwrite=True)
-
+    
         return answer
-
