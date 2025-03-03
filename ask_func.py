@@ -599,7 +599,7 @@ def Ask_Question(question):
     # Check if the user wants to restart the chat before anything else
     if question.lower() == "restart chat":
         chat_history = []
-        return "The chat has been restarted."
+        return f"The chat has been restarted.\n{chat_history}"
 
     # If not "restart chat", proceed as usual.
     chat_history.append(f"User: {question}")
