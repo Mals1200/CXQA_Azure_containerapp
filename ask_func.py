@@ -581,7 +581,7 @@ def agent_answer(user_question):
 
     # If entire phrase is basically a greeting
     if is_entirely_greeting_or_punc(user_question_stripped):
-        if len(chat_history) < 4:
+        if len(chat_history) < 3:
             return "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"
         else:
             return "Hello! How may I assist you?"
