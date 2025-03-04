@@ -10,12 +10,14 @@ from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 from azure.storage.blob import BlobServiceClient
 from docx import Document
-from docx.shared import Pt, RGBColor
+from docx.shared import Pt, RGBColor, Inches  # <-- ADDED Inches
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from docx.oxml.ns import nsdecls
 from docx.oxml import parse_xml
 import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator    
+from matplotlib.ticker import MaxNLocator
+
+
 
 
     ##################################################
@@ -289,7 +291,7 @@ Data:
         chart_response = generate_chart_data()
 
         # Debug: Print the raw response for troubleshooting (remove in production)
-        print("DEBUG raw chart_response:", repr(chart_response))
+        # print("DEBUG raw chart_response:", repr(chart_response))
 
         # Check for API error.
         if chart_response.startswith("API_ERROR:"):
@@ -519,15 +521,15 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
 
     # Helper function: PowerPoint generation
     def generate_ppt():
-        return Call_PPT(latest_question, latest_answer, chat_history, instructions)
+        return f"Here are your Slides:\n{Call_PPT(latest_question, latest_answer, chat_history, instructions)}"
 
     # Helper function: Word document generation
     def generate_doc():
-        return Call_DOC(latest_question, latest_answer, chat_history, instructions)
+        return f"Here is your Document:\n{Call_DOC(latest_question, latest_answer, chat_history, instructions)}"
 
     # Helper function: Chart generation
     def generate_chart():
-        return Call_CHART(latest_question, latest_answer, chat_history, instructions)
+        return f"Here is your Chart:\n{Call_CHART(latest_question, latest_answer, chat_history, instructions)}"
 
     # Decide what to generate based on keywords in instructions
     instructions_lower = instructions.lower()
