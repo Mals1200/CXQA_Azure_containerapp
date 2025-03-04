@@ -604,7 +604,7 @@ def Ask_Question(question):
         latest_question = chat_history[-1] if len(chat_history) >= 1 else ""
         latest_answer = chat_history[-2] if len(chat_history) >= 2 else ""
 
-        if len(chat_history) > 2:
+        if len(chat_history) < 2:
             return "Error: Not enough Information to perform export."
 
         result = Call_Export(
@@ -613,7 +613,7 @@ def Ask_Question(question):
             chat_history=chat_history,
             instructions=instructions
         )
-     return result  # If export worked, stop here
+        return result  # If export worked, stop here
     # 2) Check if user wants to restart the chat
     if question.lower() == "restart chat":
         chat_history = []
@@ -669,4 +669,3 @@ def Ask_Question(question):
     blob_client.upload_blob(new_csv_content, overwrite=True)
 
     return answer
-
