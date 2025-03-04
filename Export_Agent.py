@@ -153,7 +153,7 @@ Data:
         # Schedule cleanup
         threading.Timer(300, blob_client.delete_blob).start()
 
-        return download_url
+        return f"Here are your Slides:\n{download_url}"
 
     except Exception as e:
         return f"Presentation Generation Error: {str(e)}"
@@ -364,7 +364,7 @@ Data:
         # Auto-delete the blob after 5 minutes.
         threading.Timer(300, blob_client.delete_blob).start()
 
-        return download_url
+        return f"Here is your Chart:\n{download_url}"
 
     except Exception as e:
         return f"Chart Generation Error: {str(e)}"
@@ -505,7 +505,7 @@ Data:
         # Schedule automatic deletion
         threading.Timer(300, blob_client.delete_blob).start()
 
-        return download_url
+        return f"Here is your Document:\n{download_url}"
 
     except Exception as e:
         return f"Document Generation Error: {str(e)}"
@@ -521,15 +521,15 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
 
     # Helper function: PowerPoint generation
     def generate_ppt():
-        return f"Here are your Slides:\n{Call_PPT(latest_question, latest_answer, chat_history, instructions)}"
+        return Call_PPT(latest_question, latest_answer, chat_history, instructions)
 
     # Helper function: Word document generation
     def generate_doc():
-        return f"Here is your Document:\n{Call_DOC(latest_question, latest_answer, chat_history, instructions)}"
+        return Call_DOC(latest_question, latest_answer, chat_history, instructions)
 
     # Helper function: Chart generation
     def generate_chart():
-        return f"Here is your Chart:\n{Call_CHART(latest_question, latest_answer, chat_history, instructions)}"
+        return Call_CHART(latest_question, latest_answer, chat_history, instructions)
 
     # Decide what to generate based on keywords in instructions
     instructions_lower = instructions.lower()
