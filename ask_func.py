@@ -595,7 +595,29 @@ def agent_answer(user_question):
 
 def Ask_Question(question):
     global chat_history
+    # 1) Check if it's an export request
+    if question.lower().startswith("export"):
+        from Export_Agent import Call_Export
 
+        # Extract instructions after "export"
+        instructions = question[6:].strip()
+
+        if len(chat_history) < 2:
+            return "Error: Not enough Information to perform export."
+
+        result = Call_Export(
+            latest_question=chat_history[-1],
+            latest_answer=chat_history[-2],
+            chat_history=chat_history,
+            instructions=instructions
+        )
+        return result  # If export worked, stop here
+    # 2) Check if user wants to restart the chat
+    if question.lower() == "restart chat":
+        chat_history = []
+        return "The chat has been restarted."
+
+    # 3) For normal questions, continue as usual
     chat_history.append(f"User: {question}")
 
     number_of_messages = 10
@@ -607,7 +629,7 @@ def Ask_Question(question):
     chat_history.append(f"Assistant: {answer}")
     chat_history = chat_history[-max_entries:]
 
-    # logging
+    # Logging
     account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
     sas_token = (
         "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
