@@ -582,9 +582,9 @@ def agent_answer(user_question):
     # If entire phrase is basically a greeting
     if is_entirely_greeting_or_punc(user_question_stripped):
         if len(chat_history) < 4:
-            return "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"
+            return "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n-To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         else:
-            return "Hello! How may I assist you?"
+            return "Hello! How may I assist you?\n-To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
 
     # Otherwise, proceed with normal logic:
     index_dict = tool_1_index_search(user_question)
