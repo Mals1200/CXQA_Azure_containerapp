@@ -602,7 +602,7 @@ def Ask_Question(question):
         # Extract instructions after "export"
         instructions = question[6:].strip()
 
-        if len(chat_history) < 2:
+        if len(chat_history) > 2:
             return "Error: Not enough Information to perform export."
 
         result = Call_Export(
@@ -611,7 +611,7 @@ def Ask_Question(question):
             chat_history=chat_history,
             instructions=instructions
         )
-     return chat_history"  # If export worked, stop here
+     return result  # If export worked, stop here
     # 2) Check if user wants to restart the chat
     if question.lower() == "restart chat":
         chat_history = []
