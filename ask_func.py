@@ -611,7 +611,7 @@ def Ask_Question(question):
             chat_history=chat_history,
             instructions=instructions
         )
-     return f"{result}\n chat_history:{chat_history}\n Question:{question}"  # If export worked, stop here
+     return chat_history"  # If export worked, stop here
     # 2) Check if user wants to restart the chat
     if question.lower() == "restart chat":
         chat_history = []
