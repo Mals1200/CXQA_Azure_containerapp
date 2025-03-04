@@ -4,18 +4,9 @@ import json
 import io
 import threading
 from datetime import datetime
-from pptx import Presentation
-from pptx.util import Pt
-from pptx.dml.color import RGBColor
-from pptx.enum.text import PP_ALIGN
+
+# Azure Blob Storage
 from azure.storage.blob import BlobServiceClient
-from docx import Document
-from docx.shared import Pt, RGBColor, Inches  # <-- ADDED Inches
-from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
-from docx.oxml.ns import nsdecls
-from docx.oxml import parse_xml
-import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator
 
 
 
@@ -24,6 +15,11 @@ from matplotlib.ticker import MaxNLocator
     # Generate PowerPoint function
     ##################################################
 def Call_PPT(latest_question, latest_answer, chat_history, instructions):
+    # PowerPoint imports
+    from pptx import Presentation
+    from pptx.util import Pt
+    from pptx.dml.color import RGBColor as PPTRGBColor  # Alias for PowerPoint
+    from pptx.enum.text import PP_ALIGN
   
     # (A) IMPROVED AZURE OPENAI CALL
     def generate_slide_content():
@@ -89,9 +85,9 @@ Data:
     try:
         prs = Presentation()
         
-        # Design configuration
-        BG_COLOR = RGBColor(234, 215, 194)  # #ead7c2
-        TEXT_COLOR = RGBColor(193, 114, 80)  # #c17250
+        # Design configuration - USE PPTRGBColor instead of generic RGBColor
+        BG_COLOR = PPTRGBColor(234, 215, 194)  # Beige background #ead7c2
+        TEXT_COLOR = PPTRGBColor(193, 114, 80)  # Dark reddish text #c17250
         FONT_NAME = "Cairo"
         
         # Process slides
@@ -153,11 +149,11 @@ Data:
         # Schedule cleanup
         threading.Timer(300, blob_client.delete_blob).start()
 
-        return download_url
+        return f"Here are your Slides:\n{download_url}"
 
     except Exception as e:
         return f"Presentation Generation Error: {str(e)}"
-        
+
 
 
 
@@ -166,6 +162,10 @@ Data:
     # Generate Charts function
     ##################################################
 def Call_CHART(latest_question, latest_answer, chat_history, instructions):
+    # Charting imports
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import MaxNLocator
+
 
     # (A) CHART COLOR PALETTE
     #     Use tuples directly for Matplotlib.
@@ -376,6 +376,12 @@ Data:
     # Generate Documents function
     ##################################################
 def Call_DOC(latest_question, latest_answer, chat_history, instructions_doc):
+    # Word Document imports
+    from docx import Document
+    from docx.shared import Pt as DocxPt, Inches, RGBColor as DocxRGBColor  # Alias for Word
+    from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+    from docx.oxml.ns import nsdecls
+    from docx.oxml import parse_xml
 
     # (A) AZURE OPENAI CONTENT GENERATION
     def generate_doc_content():
@@ -434,7 +440,7 @@ Data:
         doc = Document()
         
         # ===== DESIGN CONFIGURATION =====
-        BG_COLOR = (234, 215, 194)  # #ead7c2 as RGB tuple
+        BG_COLOR = RGBColor(234, 215, 194)  # #ead7c2 as RGB tuple
         TITLE_COLOR = RGBColor(193, 114, 80)  # #c17250
         BODY_COLOR = RGBColor(0, 0, 0)       # Black
         FONT_NAME = "Cairo"
@@ -534,7 +540,7 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
     # Decide what to generate based on keywords in instructions
     instructions_lower = instructions.lower()
 
-    if re.search(r"\b(presentation|slide|slideshow|powerpoint|deck)\b", instructions_lower):
+    if re.search(r"\b(presentation|slide|slideshow|powerpoint|deck|ppt|power point)\b", instructions_lower):
         return generate_ppt()
     elif re.search(r"\b(chart|graph|diagram|bar chart|line chart|pie chart)\b", instructions_lower):
         return generate_chart()
