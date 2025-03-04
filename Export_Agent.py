@@ -1,18 +1,27 @@
+import re
+import requests
+import json
+import io
+import threading
+from datetime import datetime
+from pptx import Presentation
+from pptx.util import Pt
+from pptx.dml.color import RGBColor
+from pptx.enum.text import PP_ALIGN
+from azure.storage.blob import BlobServiceClient
+from docx import Document
+from docx.shared import Pt, RGBColor
+from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+from docx.oxml.ns import nsdecls
+from docx.oxml import parse_xml
+import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator    
+
+
     ##################################################
     # Generate PowerPoint function
     ##################################################
 def Call_PPT(latest_question, latest_answer, chat_history, instructions):
-    import requests
-    import json
-    import io
-    import threading
-    from datetime import datetime
-    from pptx import Presentation
-    from pptx.util import Pt
-    from pptx.dml.color import RGBColor
-    from pptx.enum.text import PP_ALIGN
-    from azure.storage.blob import BlobServiceClient
-
   
     # (A) IMPROVED AZURE OPENAI CALL
     def generate_slide_content():
@@ -155,18 +164,6 @@ Data:
     # Generate Charts function
     ##################################################
 def Call_CHART(latest_question, latest_answer, chat_history, instructions):
-    import requests
-    import json
-    import io
-    import threading
-    import re
-    import matplotlib.pyplot as plt
-    from datetime import datetime
-    from docx import Document
-    from docx.shared import Pt, Inches
-    from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
-    from matplotlib.ticker import MaxNLocator
-    from azure.storage.blob import BlobServiceClient
 
     # (A) CHART COLOR PALETTE
     #     Use tuples directly for Matplotlib.
@@ -377,17 +374,6 @@ Data:
     # Generate Documents function
     ##################################################
 def Call_DOC(latest_question, latest_answer, chat_history, instructions_doc):
-    import requests
-    import json
-    import io
-    import threading
-    from datetime import datetime
-    from docx import Document
-    from docx.shared import Pt, RGBColor
-    from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
-    from docx.oxml.ns import nsdecls
-    from docx.oxml import parse_xml
-    from azure.storage.blob import BlobServiceClient
 
     # (A) AZURE OPENAI CONTENT GENERATION
     def generate_doc_content():
@@ -521,8 +507,6 @@ Data:
 
     except Exception as e:
         return f"Document Generation Error: {str(e)}"
-print(Call_DOC(latest_question, latest_answer, chat_history, instructions_doc))
-
 
 
 
