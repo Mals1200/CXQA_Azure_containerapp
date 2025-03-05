@@ -604,8 +604,9 @@ def Ask_Question(question):
         latest_question = chat_history[-1] if len(chat_history) >= 1 else ""
         latest_answer = chat_history[-2] if len(chat_history) >= 2 else ""
 
-        if len(chat_history) < 2:
-            return "Error: Not enough Information to perform export."
+        # Breaks the code fore some reason
+        # if len(chat_history) < 2:
+        #     return "Error: Not enough Information to perform export."
 
         result = Call_Export(
             latest_question=chat_history[-1],
