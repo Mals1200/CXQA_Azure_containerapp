@@ -539,12 +539,50 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
 
     # Decide what to generate based on keywords in instructions
     instructions_lower = instructions.lower()
+    instructions_lower = instructions.lower()
 
-    if re.search(r"\b(presentation|slide|slideshow|powerpoint|deck|ppt|power point)\b", instructions_lower):
+    # (A) Detect PowerPoint / Presentation-related instructions
+    if re.search(
+        r"\b("
+        r"presentation[s]?|slide[s]?|slideshow[s]?|"
+        r"power[-\s]?point|deck[s]?|pptx?|keynote|"
+        r"pitch[-\s]?deck|talk[-\s]?deck|slide[-\s]?deck|"
+        r"seminar|webinar|conference[-\s]?slides|training[-\s]?materials|"
+        r"meeting[-\s]?slides|workshop[-\s]?slides|lecture[-\s]?slides|"
+        r"presenation|presentaion"  # Common misspellings
+        r")\b", instructions_lower, re.IGNORECASE
+    ):
         return generate_ppt()
-    elif re.search(r"\b(chart|graph|diagram|bar chart|line chart|pie chart)\b", instructions_lower):
+
+    # (B) Detect Chart / Graph / Data Visualization instructions
+    elif re.search(
+        r"\b("
+        r"chart[s]?|graph[s]?|diagram[s]?|"
+        r"bar[-\s]?chart[s]?|line[-\s]?chart[s]?|pie[-\s]?chart[s]?|"
+        r"scatter[-\s]?plot[s]?|trend[-\s]?analysis|visualization[s]?|"
+        r"infographic[s]?|data[-\s]?graph[s]?|report[-\s]?chart[s]?|"
+        r"heatmap[s]?|time[-\s]?series|distribution[-\s]?plot|"
+        r"statistical[-\s]?graph[s]?|data[-\s]?plot[s]?|"
+        r"char|grph|daigram"  # Common misspellings
+        r")\b", instructions_lower, re.IGNORECASE
+    ):
         return generate_chart()
-    elif re.search(r"\b(document|report|word|policy paper|pages|introduction|guidelines|conclusion)\b", instructions_lower):
+
+    # (C) Detect Document / Report / Text-Based instructions
+    elif re.search(
+        r"\b("
+        r"document[s]?|report[s]?|word[-\s]?doc[s]?|"
+        r"policy[-\s]?paper[s]?|manual[s]?|write[-\s]?up[s]?|"
+        r"summary|white[-\s]?paper[s]?|memo[s]?|contract[s]?|"
+        r"business[-\s]?plan[s]?|research[-\s]?paper[s]?|"
+        r"proposal[s]?|guideline[s]?|introduction|conclusion|"
+        r"terms[-\s]?of[-\s]?service|agreement|"
+        r"contract[-\s]?draft|standard[-\s]?operating[-\s]?procedure|"
+        r"documnt|repot|worddoc|proposel"  # Common misspellings
+        r")\b", instructions_lower, re.IGNORECASE
+    ):
         return generate_doc()
+
+    # (D) Fallback: If no match is found
     else:
         return "Error: Unable to determine what to generate based on instructions."
