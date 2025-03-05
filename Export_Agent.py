@@ -165,7 +165,10 @@ def Call_CHART(latest_question, latest_answer, chat_history, instructions):
     # Charting imports
     import matplotlib.pyplot as plt
     from matplotlib.ticker import MaxNLocator
-
+    # DOCX IMPORTS
+    from docx import Document
+    from docx.shared import Inches
+    from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 
     # (A) CHART COLOR PALETTE
     #     Use tuples directly for Matplotlib.
