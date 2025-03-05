@@ -151,7 +151,7 @@ Data:
         threading.Timer(300, blob_client.delete_blob).start()
 
         # SINGLE-LINE RETURN
-        return f"Here is your PowerPoint: {download_url}"
+        return download_url
 
     except Exception as e:
         return f"Presentation Generation Error: {str(e)}"
