@@ -32,7 +32,7 @@ Rules:
 2. Output ready-to-use slide text
 3. Format: Slide Title\\n- Bullet 1\\n- Bullet 2
 4. Separate slides with \\n\\n
-5. If insufficient information, say: "NOT_ENOUGH_INFO"
+5. If insufficient information, say: "Not enough Information to perform export."
 
 Data:
 - Instructions: {instructions}
@@ -394,7 +394,7 @@ Rules:
 3. Format: 
    Section Heading\\n- Bullet 1\\n- Bullet 2
 4. Separate sections with \\n\\n
-5. If insufficient information, say: "NOT_ENOUGH_INFO"
+5. If insufficient information, say: "Not enough Information to perform export."
 
 Data:
 - Instructions: {instructions_doc}
