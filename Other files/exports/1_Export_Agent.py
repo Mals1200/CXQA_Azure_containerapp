@@ -16,7 +16,7 @@ def Call_PPT(latest_question, latest_answer, chat_history, instructions):
     # PowerPoint imports
     from pptx import Presentation
     from pptx.util import Pt
-    from pptx.dml.color import RGBColor as PPTRGBColor  # Alias for PowerPoint
+    from pptx.dml.color import RGBColor as PPTRGBColor
     from pptx.enum.text import PP_ALIGN
     
     ##################################################
@@ -25,7 +25,6 @@ def Call_PPT(latest_question, latest_answer, chat_history, instructions):
     def generate_slide_content():
         chat_history_str = str(chat_history)
         
-        # Fixed prompt with proper spelling
         ppt_prompt = f"""You are a PowerPoint presentation expert. Use this information to create slides:
 Rules:
 1. Use ONLY the provided information
@@ -40,7 +39,6 @@ Data:
 - Answer: {latest_answer}
 - History: {chat_history_str}"""
 
-        # Azure OpenAI configuration
         endpoint = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
         headers = {
             "Content-Type": "application/json",
@@ -65,7 +63,6 @@ Data:
         except Exception as e:
             return f"API_ERROR: {str(e)}"
 
-
     ##################################################
     # (B) ROBUST CONTENT HANDLING
     ##################################################
@@ -74,53 +71,44 @@ Data:
     # Handle error cases
     if slides_text.startswith("API_ERROR:"):
         return f"OpenAI API Error: {slides_text[10:]}"
-        
     if "NOT_ENOUGH_INFO" in slides_text:
         return "Error: Insufficient information to generate slides"
-        
-    if len(slides_text) < 20:  # Minimum viable content length
+    if len(slides_text) < 20:
         return "Error: Generated content too short or invalid"
-
 
     ##################################################
     # (C) SLIDE GENERATION WITH DESIGN
     ##################################################
     try:
         prs = Presentation()
-        
-        # Design configuration
-        BG_COLOR = PPTRGBColor(234, 215, 194)  # Beige background #ead7c2
-        TEXT_COLOR = PPTRGBColor(193, 114, 80) # Dark reddish text #c17250
+
+        BG_COLOR = PPTRGBColor(234, 215, 194)  # #EAD7C2
+        TEXT_COLOR = PPTRGBColor(193, 114, 80) # #C17250
         FONT_NAME = "Cairo"
         
-        # Process each slide chunk
         for slide_content in slides_text.split('\n\n'):
             lines = [line.strip() for line in slide_content.split('\n') if line.strip()]
             if not lines:
                 continue
                 
-            # Create slide with custom background
             slide = prs.slides.add_slide(prs.slide_layouts[6])
             slide.background.fill.solid()
             slide.background.fill.fore_color.rgb = BG_COLOR
             
-            # Add title
+            # Title
             title_box = slide.shapes.add_textbox(Pt(50), Pt(50), prs.slide_width - Pt(100), Pt(60))
             title_frame = title_box.text_frame
             title_frame.text = lines[0]
-            
-            # Style title
             for paragraph in title_frame.paragraphs:
                 paragraph.font.color.rgb = TEXT_COLOR
                 paragraph.font.name = FONT_NAME
                 paragraph.font.size = Pt(36)
                 paragraph.alignment = PP_ALIGN.CENTER
                 
-            # Add content if available
+            # Bullets
             if len(lines) > 1:
                 content_box = slide.shapes.add_textbox(Pt(100), Pt(150), prs.slide_width - Pt(200), prs.slide_height - Pt(250))
                 content_frame = content_box.text_frame
-                
                 for bullet in lines[1:]:
                     p = content_frame.add_paragraph()
                     p.text = bullet.replace('- ', '').strip()
@@ -130,7 +118,7 @@ Data:
                     p.space_after = Pt(12)
 
         ##################################################
-        # (D) FILE UPLOAD WITH ERROR HANDLING
+        # (D) FILE UPLOAD
         ##################################################
         blob_config = {
             "account_url": "https://cxqaazureaihub8779474245.blob.core.windows.net",
@@ -142,22 +130,31 @@ Data:
         prs.save(ppt_buffer)
         ppt_buffer.seek(0)
 
-        blob_service = BlobServiceClient(account_url=blob_config["account_url"], credential=blob_config["sas_token"])
-        blob_client = blob_service.get_container_client(blob_config["container"]).get_blob_client(
+        blob_service = BlobServiceClient(
+            account_url=blob_config["account_url"],
+            credential=blob_config["sas_token"]
+        )
+        blob_client = blob_service.get_container_client(
+            blob_config["container"]
+        ).get_blob_client(
             f"presentation_{datetime.now().strftime('%Y%m%d%H%M%S')}.pptx"
         )
         
         blob_client.upload_blob(ppt_buffer, overwrite=True)
-        download_url = f"{blob_config['account_url']}/{blob_config['container']}/{blob_client.blob_name}?{blob_config['sas_token']}"
+        download_url = (
+            f"{blob_config['account_url']}/"
+            f"{blob_config['container']}/"
+            f"{blob_client.blob_name}?"
+            f"{blob_config['sas_token']}"
+        )
 
-        # Schedule cleanup after 5 minutes
         threading.Timer(300, blob_client.delete_blob).start()
 
-        return f"Here are your Slides:\n{download_url}"
+        # SINGLE-LINE RETURN
+        return download_url
 
     except Exception as e:
         return f"Presentation Generation Error: {str(e)}"
-
 
 
 
@@ -240,14 +237,13 @@ Data:
     ##################################################
     def create_chart_image(chart_data):
         try:
-            # Remove any style references
             plt.rcParams['axes.titleweight'] = 'bold'
             plt.rcParams['axes.titlesize'] = 12
 
             fig, ax = plt.subplots(figsize=(8, 4.5))
             color_cycle = CHART_COLORS
 
-            # Identify chart type
+            # Decide plot function
             if chart_data['chart_type'] in ['bar', 'column']:
                 handle = ax.bar
             elif chart_data['chart_type'] == 'line':
@@ -255,7 +251,6 @@ Data:
             else:
                 return None
 
-            # Plot data
             for idx, series in enumerate(chart_data['series']):
                 color = color_cycle[idx % len(color_cycle)]
                 if chart_data['chart_type'] in ['bar', 'column']:
@@ -266,7 +261,7 @@ Data:
                         color=color,
                         width=0.6
                     )
-                else:  # line chart
+                else:  # line
                     handle(
                         chart_data['categories'],
                         series['values'],
@@ -298,48 +293,38 @@ Data:
     try:
         chart_response = generate_chart_data()
 
-        # Check for API error
         if chart_response.startswith("API_ERROR:"):
             return f"OpenAI Error: {chart_response[10:]}"
-
-        # Check if the model says data isn't suitable
         if chart_response.strip() == "Information is not suitable for a chart":
             return "Information is not suitable for a chart"
 
-        # Extract JSON
         match = re.search(r'(\{.*\})', chart_response, re.DOTALL)
         if match:
             json_str = match.group(1)
         else:
             return "Invalid chart data format: No JSON object found"
 
-        # Parse the JSON
         try:
             chart_data = json.loads(json_str)
-            if not all(key in chart_data for key in ['chart_type', 'title', 'categories', 'series']):
+            if not all(k in chart_data for k in ['chart_type', 'title', 'categories', 'series']):
                 raise ValueError("Missing keys in chart data")
         except Exception as e:
             return f"Invalid chart data format: {str(e)}"
 
-        # Create doc and add the chart
+        # Build the doc with the chart image
         doc = Document()
         img_buffer = create_chart_image(chart_data)
-        if img_buffer:
-            doc.add_heading(chart_data['title'], level=1)
-            doc.add_picture(img_buffer, width=Inches(6))
-            para = doc.add_paragraph("Source: Generated from provided data")
-            para.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
-        else:
+        if not img_buffer:
             return "Failed to generate chart from data"
 
-        # (E) AZURE STORAGE UPLOAD
+        doc.add_heading(chart_data['title'], level=1)
+        doc.add_picture(img_buffer, width=Inches(6))
+        para = doc.add_paragraph("Source: Generated from provided data")
+        para.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
+
         blob_config = {
             "account_url": "https://cxqaazureaihub8779474245.blob.core.windows.net",
-            "sas_token": (
-                "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
-                "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
-                "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
-            ),
+            "sas_token": "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D",
             "container": "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
         }
 
@@ -365,19 +350,18 @@ Data:
             f"{blob_config['sas_token']}"
         )
 
-        # Auto-delete after 5 minutes
         threading.Timer(300, blob_client.delete_blob).start()
 
-        return f"Here is your Chart:\n{download_url}"
+        # SINGLE-LINE RETURN
+        return download_url
 
     except Exception as e:
         return f"Chart Generation Error: {str(e)}"
 
 
 
-
 ##################################################
-# Generate Documents function (FIXED)
+# Generate Documents function
 ##################################################
 def Call_DOC(latest_question, latest_answer, chat_history, instructions_doc):
     from docx import Document
@@ -386,7 +370,6 @@ def Call_DOC(latest_question, latest_answer, chat_history, instructions_doc):
     from docx.oxml.ns import nsdecls
     from docx.oxml import parse_xml
 
-    # (A) AZURE OPENAI CONTENT GENERATION
     def generate_doc_content():
         chat_history_str = str(chat_history)
         
@@ -427,9 +410,8 @@ Data:
         except Exception as e:
             return f"API_ERROR: {str(e)}"
 
-    # (B) CONTENT VALIDATION
+    # Get the doc text
     doc_text = generate_doc_content()
-    
     if doc_text.startswith("API_ERROR:"):
         return f"OpenAI API Error: {doc_text[10:]}"
     if "NOT_ENOUGH_INFO" in doc_text.upper():
@@ -437,38 +419,32 @@ Data:
     if len(doc_text) < 20:
         return "Error: Generated content too short or invalid"
 
-    # (C) DOCUMENT GENERATION
     try:
         doc = Document()
         
-        # ===== DESIGN CONFIGURATION =====
-        # 1ST OPTION: Use a plain hex string for the background shading
-        BG_COLOR_HEX = "EAD7C2"                     # #EAD7C2
-        TITLE_COLOR = DocxRGBColor(193, 114, 80)    # #c17250
-        BODY_COLOR = DocxRGBColor(0, 0, 0)          # #000000
+        BG_COLOR_HEX = "EAD7C2"
+        TITLE_COLOR = DocxRGBColor(193, 114, 80)
+        BODY_COLOR = DocxRGBColor(0, 0, 0)
         FONT_NAME = "Cairo"
         TITLE_SIZE = DocxPt(16)
         BODY_SIZE = DocxPt(12)
 
-        # Set base document styles
         style = doc.styles['Normal']
         style.font.name = FONT_NAME
         style.font.size = BODY_SIZE
         style.font.color.rgb = BODY_COLOR
 
-        # Add background color to all sections
         for section in doc.sections:
             sectPr = section._sectPr
             shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{BG_COLOR_HEX}"/>')
             sectPr.append(shd)
 
-        # Process content sections
+        # Split into sections
         for section_content in doc_text.split('\n\n'):
             lines = [line.strip() for line in section_content.split('\n') if line.strip()]
             if not lines:
                 continue
 
-            # Add title
             heading = doc.add_heading(level=1)
             heading.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
             heading_run = heading.add_run(lines[0])
@@ -476,16 +452,15 @@ Data:
             heading_run.font.size = TITLE_SIZE
             heading_run.bold = True
 
-            # Add body bullets
+            # Bullets
             if len(lines) > 1:
                 for bullet in lines[1:]:
                     para = doc.add_paragraph(style='ListBullet')
                     run = para.add_run(bullet.replace('- ', '').strip())
                     run.font.color.rgb = BODY_COLOR
 
-            doc.add_paragraph()  # Add spacing between sections
+            doc.add_paragraph()
 
-        # (D) AZURE STORAGE UPLOAD
         blob_config = {
             "account_url": "https://cxqaazureaihub8779474245.blob.core.windows.net",
             "sas_token": "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D",
@@ -507,12 +482,17 @@ Data:
         )
         
         blob_client.upload_blob(doc_buffer, overwrite=True)
-        download_url = f"{blob_config['account_url']}/{blob_config['container']}/{blob_client.blob_name}?{blob_config['sas_token']}"
+        download_url = (
+            f"{blob_config['account_url']}/"
+            f"{blob_config['container']}/"
+            f"{blob_client.blob_name}?"
+            f"{blob_config['sas_token']}"
+        )
 
-        # Schedule automatic deletion
         threading.Timer(300, blob_client.delete_blob).start()
 
-        return f"Here is your Document:\n{download_url}"
+        # SINGLE-LINE RETURN
+        return download_url
 
     except Exception as e:
         return f"Document Generation Error: {str(e)}"
@@ -521,26 +501,22 @@ Data:
 
 ##################################################
 # Calling the export function
-# Based on keywords 
 ##################################################
 def Call_Export(latest_question, latest_answer, chat_history, instructions):
     import re
 
-    # Helper function: PowerPoint generation
     def generate_ppt():
         return Call_PPT(latest_question, latest_answer, chat_history, instructions)
 
-    # Helper function: Word document generation
     def generate_doc():
         return Call_DOC(latest_question, latest_answer, chat_history, instructions)
 
-    # Helper function: Chart generation
     def generate_chart():
         return Call_CHART(latest_question, latest_answer, chat_history, instructions)
 
     instructions_lower = instructions.lower()
 
-    # (A) PowerPoint / Presentation?
+    # PPT?
     if re.search(
         r"\b("
         r"presentation[s]?|slide[s]?|slideshow[s]?|"
@@ -553,7 +529,7 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
     ):
         return generate_ppt()
 
-    # (B) Chart / Graph / Visualization?
+    # Chart?
     elif re.search(
         r"\b("
         r"chart[s]?|graph[s]?|diagram[s]?|"
@@ -567,7 +543,7 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
     ):
         return generate_chart()
 
-    # (C) Document / Report / Text?
+    # Document?
     elif re.search(
         r"\b("
         r"document[s]?|report[s]?|word[-\s]?doc[s]?|"
@@ -582,5 +558,5 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
     ):
         return generate_doc()
 
-    # (D) Fallback if no match
+    # Fallback
     return "Not enough Information to perform export."
