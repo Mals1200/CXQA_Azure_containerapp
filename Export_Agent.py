@@ -382,7 +382,7 @@ Data:
 def Call_DOC(latest_question, latest_answer, chat_history, instructions_doc):
     # Word Document imports
     from docx import Document
-    from docx.shared import Pt as DocxPt, Inches, RGBColor as DocxRGBColor  # Alias for Word
+    from docx.shared import Pt as DocxPt, Inches, RGBColor as DocxRGBColor
     from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
     from docx.oxml.ns import nsdecls
     from docx.oxml import parse_xml
@@ -398,7 +398,7 @@ Rules:
 3. Format: 
    Section Heading\\n- Bullet 1\\n- Bullet 2
 4. Separate sections with \\n\\n
-5. If insufficient information, say: "NOT_ENOUGH_INFO"
+5. If insufficient information, say: "Not enough Information to perform export."
 
 Data:
 - Instructions: {instructions_doc}
@@ -438,18 +438,17 @@ Data:
     if len(doc_text) < 20:
         return "Error: Generated content too short or invalid"
 
- 
     # (C) DOCUMENT GENERATION
     try:
         doc = Document()
         
         # ===== DESIGN CONFIGURATION =====
-        BG_COLOR = RGBColor(234, 215, 194)  # #ead7c2 as RGB tuple
-        TITLE_COLOR = RGBColor(193, 114, 80)  # #c17250
-        BODY_COLOR = RGBColor(0, 0, 0)       # Black
+        BG_COLOR = DocxRGBColor(234, 215, 194)  # #ead7c2
+        TITLE_COLOR = DocxRGBColor(193, 114, 80)  # #c17250
+        BODY_COLOR = DocxRGBColor(0, 0, 0)       # Black
         FONT_NAME = "Cairo"
-        TITLE_SIZE = Pt(16)
-        BODY_SIZE = Pt(12)
+        TITLE_SIZE = DocxPt(16)
+        BODY_SIZE = DocxPt(12)
 
         # Set base document styles
         style = doc.styles['Normal']
@@ -457,10 +456,11 @@ Data:
         style.font.size = BODY_SIZE
         style.font.color.rgb = BODY_COLOR
 
-        # Add background color to all sections (FIXED HERE)
+        # Add background color to all sections
         for section in doc.sections:
             sectPr = section._sectPr
-            hex_color = f"{BG_COLOR[0]:02x}{BG_COLOR[1]:02x}{BG_COLOR[2]:02x}"
+            # Properly access RGB components through .rgb attribute
+            hex_color = f"{BG_COLOR.rgb[0]:02x}{BG_COLOR.rgb[1]:02x}{BG_COLOR.rgb[2]:02x}"
             shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{hex_color}"/>')
             sectPr.append(shd)
 
@@ -487,7 +487,6 @@ Data:
 
             doc.add_paragraph()  # Add spacing between sections
 
- 
         # (D) AZURE STORAGE UPLOAD
         blob_config = {
             "account_url": "https://cxqaazureaihub8779474245.blob.core.windows.net",
