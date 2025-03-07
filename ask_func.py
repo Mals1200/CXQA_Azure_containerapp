@@ -514,15 +514,11 @@ You are a helpful assistant. The user asked a (possibly multi-part) question, an
 2) Python data: (PYTHON_DATA)
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
-At the end of your final answer, put EXACTLY one line with 'Source: X.' (with a space after the colon) where X can be:
+At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
 - "Index" if only index data was used,
 - "Python" if only python data was used,
 - "Index & Python" if both were used,
 - or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
-
-**Examples of Correct Formatting:**
-"The average footfalls were 3000.\\nSource: Python."
-"Based on documents: ...\\nSource: Index & Python."
 
 Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
 Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
@@ -652,7 +648,7 @@ def agent_answer(user_question):
         if len(chat_history) < 4:
             yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         else:
-            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+            yield "Hello! How may I assist you?\n-To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         return
 
     # ✅ Check cache before doing any work
