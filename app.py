@@ -31,25 +31,23 @@ def home():
 @app.route('/ask', methods=['POST'])
 def ask():
     """
-    Simple REST endpoint for non-Bot calls:
+    Simple REST endpoint for non-Bot calls.
     Accepts JSON: {"question": "..."}
     Returns JSON: {"answer": "..."}
+    (Note: This endpoint still collects the full answer before returning.)
     """
     data = request.get_json()
     if not data or 'question' not in data:
         return jsonify({'error': 'Invalid request, "question" field is required.'}), 400
-
     question = data['question']
-
-    # Ask_Question(...) returns a generator, so consume it with "".join(...)
+    # Here we still join the tokens for a single response:
     answer_text = "".join(Ask_Question(question))
-
     return jsonify({'answer': answer_text})
 
 @app.route("/api/messages", methods=["POST"])
 def messages():
     """
-    Bot Framework endpoint (e.g., Azure Bot Service).
+    Bot Framework endpoint (for Microsoft Teams, etc.).
     """
     if "application/json" not in request.headers.get("Content-Type", ""):
         return Response(status=415)
@@ -68,64 +66,30 @@ def messages():
 
 async def _bot_logic(turn_context: TurnContext):
     """
-    Logic for handling incoming Bot messages.
+    Bot logic that streams the answer token-by-token by sending each token as its own message.
+    This simulates streaming to the user (each token is sent as a separate Activity).
     """
     conversation_id = turn_context.activity.conversation.id
 
     # Initialize conversation-specific history if needed
     if conversation_id not in conversation_histories:
         conversation_histories[conversation_id] = []
-
-    # Override global chat_history in ask_func.py with conversation-specific history
+    
+    # Override global chat_history in ask_func.py with conversation-specific history.
     import ask_func
     ask_func.chat_history = conversation_histories[conversation_id]
 
     user_message = turn_context.activity.text or ""
 
-    # Again, Ask_Question(...) returns a generator—consume it
-    answer_generator = Ask_Question(user_message)
-    answer_text = "".join(answer_generator)
+    # Instead of collecting all tokens and sending a single message, we send each token separately.
+    for token in Ask_Question(user_message):
+        # Optional: Uncomment the following line to add a small delay between tokens.
+        # await asyncio.sleep(0.1)
+        await turn_context.send_activity(Activity(type="message", text=token))
 
-    # Update the conversation-specific history
+    # Update conversation history after processing.
     conversation_histories[conversation_id] = ask_func.chat_history
 
-    # If the answer contains a "Source:" marker, show an Adaptive Card with toggle
-    if "\n\nSource:" in answer_text:
-        parts = answer_text.split("\n\nSource:", 1)
-        main_answer = parts[0].strip()
-        source_details = "Source:" + parts[1].strip()
-
-        adaptive_card = {
-            "type": "AdaptiveCard",
-            "body": [
-                {"type": "TextBlock", "text": main_answer, "wrap": True},
-                {
-                    "type": "TextBlock",
-                    "text": source_details,
-                    "wrap": True,
-                    "id": "sourceBlock",
-                    "isVisible": False
-                }
-            ],
-            "actions": [
-                {
-                    "type": "Action.ToggleVisibility",
-                    "title": "Show Source",
-                    "targetElements": ["sourceBlock"]
-                }
-            ],
-            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-            "version": "1.2"
-        }
-        message = Activity(
-            type="message",
-            attachments=[{"contentType": "application/vnd.microsoft.card.adaptive", "content": adaptive_card}]
-        )
-        await turn_context.send_activity(message)
-    else:
-        # If no Source marker, send as plain text
-        await turn_context.send_activity(Activity(type="message", text=answer_text))
-
 if __name__ == '__main__':
-    # Runs on port 80 by default. Change to another port if needed.
+    # Runs on port 80 by default. Change the port if needed.
     app.run(host='0.0.0.0', port=80)
