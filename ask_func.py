@@ -514,7 +514,7 @@ You are a helpful assistant. The user asked a (possibly multi-part) question, an
 2) Python data: (PYTHON_DATA)
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
-At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
+At the end of your final answer, put EXACTLY one line with 'Source: X' (with a space after the colon) where X can be:
 - "Index" if only index data was used,
 - "Python" if only python data was used,
 - "Index & Python" if both were used,
