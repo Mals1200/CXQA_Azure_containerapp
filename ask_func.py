@@ -13,6 +13,49 @@ from azure.storage.blob import BlobServiceClient
 from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
 import csv
+from tenacity import retry, stop_after_attempt, wait_fixed #retrying
+from functools import lru_cache #caching
+import re
+import difflib
+
+def clean_repeated_patterns(text):
+    # Remove repeated words like: "TheThe", "total total"
+    text = re.sub(r'\b(\w+)( \1\b)+', r'\1', text, flags=re.IGNORECASE)
+    
+    # Remove repeated characters within a word: e.g., "footfallsfalls"
+    text = re.sub(r'\b(\w{3,})\1\b', r'\1', text, flags=re.IGNORECASE)
+
+    # Remove excessive punctuation or spaces
+    text = re.sub(r'\s{2,}', ' ', text)
+    text = re.sub(r'\.{3,}', '...', text)
+    
+    return text.strip()
+
+def is_repeated_phrase(last_text, new_text, threshold=0.98):
+    """
+    Detect if new_text is highly similar to the end of last_text.
+    """
+    if not last_text or not new_text:
+        return False
+    comparison_length = min(len(last_text), 100)
+    recent_text = last_text[-comparison_length:]
+    similarity = difflib.SequenceMatcher(None, recent_text, new_text).ratio()
+    return similarity > threshold
+
+def deduplicate_streaming_tokens(last_tokens, new_token):
+    if last_tokens.endswith(new_token):
+        return ""
+    return new_token
+
+def clean_repeated_phrases(text):
+    """
+    Removes repeated words like 'TheThe' or 'total total'.
+    """
+    return re.sub(r'\b(\w+)( \1\b)+', r'\1', text, flags=re.IGNORECASE)
+
+tool_cache = {}
+
+
 
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
 logging.getLogger("azure").setLevel(logging.WARNING)
@@ -156,22 +199,32 @@ def is_text_relevant(question, snippet):
         data = response.json()
         content = data["choices"][0]["message"]["content"].strip().upper()
         return content.startswith("YES")
-    except:
+    except Exception as e:
+        logging.error(f"Error during relevance check: {e}")
         return False
 
 def references_tabular_data(question, tables_text):
     llm_system_message = (
-        "You are a helpful agent. Decide if the user's question references or requires the tabular data.\n"
-        "Return ONLY 'YES' or 'NO' (in all caps)."
+        "You are a strict YES/NO classifier. Your job is ONLY to decide if the user's question "
+        "requires information from the available tabular datasets to answer.\n"
+        "You must respond with EXACTLY one word: 'YES' or 'NO'.\n"
+        "Do NOT add explanations or uncertainty. Be strict and consistent."
     )
     llm_user_message = f"""
-    User question: {question}
+    User Question:
+    {question}
 
-    We have these tables: {tables_text}
+    Available Tables:
+    {tables_text}
 
-    Does the user need the data from these tables to answer their question?
-    The tables are not exclusive to the data it has, this is just a sample. **dont use the content of the sample table as the complete content. There are other rows the you were not shown**.
-    Return ONLY 'YES' if it does, or ONLY 'NO' if it does not.
+    Decision Rules:
+    1. Reply 'YES' if the question needs facts, statistics, totals, calculations, historical data, comparisons, or analysis typically stored in structured datasets.
+    2. Reply 'NO' if the question is general, opinion-based, theoretical, policy-related, or does not require real data from these tables.
+    3. Completely ignore the sample rows of the tables. Assume full datasets exist beyond the samples.
+    4. Be STRICT: only reply 'NO' if you are CERTAIN the tables are not needed.
+    5. Do NOT create or assume data. Only decide if the tabular data is NEEDED to answer.
+
+    Final instruction: Reply ONLY with 'YES' or 'NO'.
     """
 
     payload = {
@@ -179,24 +232,28 @@ def references_tabular_data(question, tables_text):
             {"role": "system", "content": llm_system_message},
             {"role": "user", "content": llm_user_message}
         ],
-        "max_tokens": 50,
+        "max_tokens": 5,
         "temperature": 0.0,
         "stream": True
     }
 
-    llm_response = stream_azure_chat_completion(
-        endpoint="https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview",
-        headers={
-            "Content-Type": "application/json",
-            "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
-        },
-        payload=payload,
-        print_stream=False
-    )
+    try:
+        llm_response = stream_azure_chat_completion(
+            endpoint="https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview",
+            headers={
+                "Content-Type": "application/json",
+                "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+            },
+            payload=payload,
+            print_stream=False
+        )
+        clean_response = llm_response.strip().upper()
+        return "YES" in clean_response
+    except Exception as e:
+        logging.error(f"Error in references_tabular_data: {e}")
+        return False
 
-    clean_response = llm_response.strip().upper()
-    return "YES" in clean_response
-
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def tool_1_index_search(user_question, top_k=5):
     SEARCH_SERVICE_NAME = "cxqa-azureai-search"
     SEARCH_ENDPOINT = f"https://{SEARCH_SERVICE_NAME}.search.windows.net"
@@ -240,8 +297,10 @@ def tool_1_index_search(user_question, top_k=5):
         return {"top_k": combined}
 
     except Exception as e:
+        logging.error(f"Error in Tool1 (Index Search): {e}")  # 🔄 Added logging
         return {"top_k": f"Error in Tool1 (Index Search): {str(e)}"}
 
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def tool_2_code_run(user_question):
     if not references_tabular_data(user_question, TABLES):
         return {"result": "No information", "code": ""}
@@ -315,13 +374,14 @@ Chat_history:
                             pass
 
         code_str = code_str.strip()
-        if not code_str or "404" in code_str:
+        if not code_str or code_str == "404":  # ✅ FIX: Exact match for "404"
             return {"result": "No information", "code": ""}
 
         execution_result = execute_generated_code(code_str)
         return {"result": execution_result, "code": code_str}
 
     except Exception as ex:
+        logging.error(f"Error in tool_2_code_run: {ex}")  # 🔄 CHANGE: Added error logging
         return {
             "result": f"Error in Tool2 (Code Generation/Execution): {str(ex)}",
             "code": ""
@@ -437,7 +497,8 @@ def final_answer_llm(user_question, index_dict, python_dict):
 
     if index_top_k.lower() == "no information" and python_result.lower() == "no information":
         fallback_text = tool_3_llm_fallback(user_question)
-        return f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
+        yield f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
+        return
 
     LLM_ENDPOINT = (
         "https://cxqaazureaihub2358016269.openai.azure.com/"
@@ -490,6 +551,8 @@ Chat_history:
     }
 
     final_text = ""
+    recent_output = ""
+
     try:
         with requests.post(LLM_ENDPOINT, headers=headers, json=payload, stream=True) as response:
             response.raise_for_status()
@@ -508,17 +571,18 @@ Chat_history:
                                 and "delta" in data_json["choices"][0]
                             ):
                                 content_piece = data_json["choices"][0]["delta"].get("content", "")
-                                final_text += content_piece
+                                if content_piece:
+                                    recent_output += content_piece
+                                    cleaned_piece = clean_repeated_patterns(recent_output)
+                                    new_text = cleaned_piece[len(final_text):]
+                                    if new_text:
+                                        yield new_text
+                                        final_text = cleaned_piece
                         except json.JSONDecodeError:
                             pass
     except:
-        final_text = "An error occurred while processing your request."
+        yield "\n\nAn error occurred while processing your request."
 
-    final_text = final_text.strip()
-    if not final_text:
-        return "No information was found in the Data. Can I help you with anything else?"
-
-    return final_text
 
 def post_process_source(final_text, index_dict, python_dict):
     text_lower = final_text.lower()
@@ -557,7 +621,7 @@ The Files:
 def agent_answer(user_question):
     # If question is empty at first usage
     if user_question.strip() == "" and len(chat_history) < 2:
-        return ""
+        yield ""
 
     # A function to see if entire user input is basically a greeting
     def is_entirely_greeting_or_punc(phrase):
@@ -582,57 +646,121 @@ def agent_answer(user_question):
     # If entire phrase is basically a greeting
     if is_entirely_greeting_or_punc(user_question_stripped):
         if len(chat_history) < 4:
-            return "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         else:
-            return "Hello! How may I assist you?\n-To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+            yield "Hello! How may I assist you?\n-To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+        return
 
+    # ✅ Check cache before doing any work
+    cache_key = user_question_stripped.lower()
+    if cache_key in tool_cache:
+        _, _, cached_answer = tool_cache[cache_key]
+        yield cached_answer
+        return    
+    ####################################################
+    # ✅ ENHANCED TOOL SELECTION LOGIC STARTS HERE
+    ####################################################
+
+    needs_tabular_data = references_tabular_data(user_question, TABLES)    
     # Otherwise, proceed with normal logic:
+    index_dict = {"top_k": "No information"}
+    python_dict = {"result": "No information", "code": ""}
+
+    # Conditionally run Python tool if needed
+    if needs_tabular_data:
+        python_dict = tool_2_code_run(user_question)
+
+    # Always run index search
     index_dict = tool_1_index_search(user_question)
-    python_dict = tool_2_code_run(user_question)
-    final_ans = final_answer_llm(user_question, index_dict, python_dict)
-    final_ans_with_src = post_process_source(final_ans, index_dict, python_dict)
-    return final_ans_with_src
+
+    ####################################################
+    # ✅ TOOL SELECTION LOGIC ENDS HERE
+    ####################################################
+
+    full_answer = ""
+
+    # ✅ Stream the answer while collecting it
+    for token in final_answer_llm(user_question, index_dict, python_dict):
+        print(token, end='', flush=True)  # Optional: stream to console
+        yield token
+        full_answer += token
+
+    # ✅ Clean repeated phrases
+    full_answer = clean_repeated_phrases(full_answer)
+
+    # ✅ After streaming completes, apply post-processing to add source, files, and code
+    final_answer_with_source = post_process_source(full_answer, index_dict, python_dict)
+
+    # ✅ Cache the result for reuse
+    tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
+
+    # ✅ Yield any extra content (source, files, code) added by post-processing
+    extra_part = final_answer_with_source[len(full_answer):]
+    if extra_part.strip():
+        yield "\n\n" + extra_part
 
 def Ask_Question(question):
     global chat_history
-    # 1) Check if it's an export request
-    if question.lower().startswith("export"):
+    question_lower = question.lower().strip()
+
+    # 1️⃣ Handle export requests
+    if question_lower.startswith("export"):
         from Export_Agent import Call_Export
 
-        # Extract instructions after "export"
         instructions = question[6:].strip()
-        latest_question = chat_history[-1] if len(chat_history) >= 1 else ""
-        latest_answer = chat_history[-2] if len(chat_history) >= 2 else ""
 
-        # Breaks the code fore some reason
-        # if len(chat_history) < 2:
-        #     return "Error: Not enough Information to perform export."
-
-        result = Call_Export(
-            latest_question=chat_history[-1],
-            latest_answer=chat_history[-2],
+        if len(chat_history) >= 2:
+            latest_question = chat_history[-1]
+            latest_answer = chat_history[-2]
+        else:
+            yield "Error: Not enough conversation history to perform export. Please ask at least one question first."
+            return
+        for message in Call_Export(
+            latest_question=latest_question,
+            latest_answer=latest_answer,
             chat_history=chat_history,
             instructions=instructions
-        )
-        return result  # If export worked, stop here
-    # 2) Check if user wants to restart the chat
-    if question.lower() == "restart chat":
-        chat_history = []
-        return "The chat has been restarted."
+        ):
+            yield message 
+        return        # Stop here after export
 
-    # 3) For normal questions, continue as usual
+    # 2️⃣ Handle chat restart
+    if question_lower == "restart chat":
+        chat_history = []
+        tool_cache.clear()  # ✅ Clear cache when restarting
+        yield "The chat has been restarted."
+        return
+
+    # 3️⃣ Handle greetings
+    greetings = ["hello", "hi", "hey", "good morning", "good afternoon", "good evening"]
+    if any(greet in question_lower for greet in greetings):
+        if len(chat_history) <= 1:
+            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"
+        else:
+            yield "Hello! How may I assist you?"
+        return    
+
+    # 4️⃣ Normal question handling
     chat_history.append(f"User: {question}")
 
     number_of_messages = 10
     max_pairs = number_of_messages // 2
     max_entries = max_pairs * 2
 
-    answer = agent_answer(question)
+    answer_collected = ""  # To store the full answer
 
-    chat_history.append(f"Assistant: {answer}")
+    try:
+        for token in agent_answer(question):
+            yield token
+            answer_collected += token
+    except Exception as e:
+        yield f"\n\n❌ Error occurred while generating the answer: {str(e)}"
+        return
+
+    chat_history.append(f"Assistant: {answer_collected}")
     chat_history = chat_history[-max_entries:]
 
-    # Logging
+    # 5️⃣ Logging
     account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
     sas_token = (
         "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
@@ -660,8 +788,8 @@ def Ask_Question(question):
     current_time = datetime.now().strftime("%H:%M:%S")
     row = [
         current_time,
-        question.replace('"','""'),
-        answer.replace('"','""'),
+        question.replace('"', '""'),
+        answer_collected.replace('"', '""'),
         "anonymous"
     ]
     lines.append(",".join(f'"{x}"' for x in row))
@@ -669,4 +797,3 @@ def Ask_Question(question):
     new_csv_content = "\n".join(lines) + "\n"
     blob_client.upload_blob(new_csv_content, overwrite=True)
 
-    return answer
