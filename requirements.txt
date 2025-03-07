@@ -35,3 +35,6 @@ python-docx==1.1.2
 docx==0.2.4
 matplotlib==3.9.4
 pyvis==0.3.2
+
+# Retrying logic:
+tenacity==9.0.0
