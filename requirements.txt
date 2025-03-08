@@ -24,7 +24,7 @@ openpyxl
 azure-storage-blob==12.15.0
 azure-search-documents==11.4.0
 azure-core==1.29.0
-azure-identity==1.20.0
+azure-identity==1.14.0
 
 # Fixed Pandas & NumPy to resolve the dtype issue
 numpy==1.23.3
