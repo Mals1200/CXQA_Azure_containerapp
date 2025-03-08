@@ -105,7 +105,7 @@ async def _bot_logic(turn_context: TurnContext):
     await turn_context.send_activity(Activity(type="typing"))  # Start typing indicator
 
     try:
-        async for token in Ask_Question(user_message):
+        async for token in Ask_Question(user_message).__aiter__():
             partial_answer += token
             token_counter += 1
 
@@ -126,7 +126,7 @@ async def _bot_logic(turn_context: TurnContext):
         #  Split the answer into main content and source details.
         parts = partial_answer.split("\n\nSource:", 1)
         main_answer = parts[0].strip()
-        source_details = "Source: " + parts[1].strip()
+        source_details = "📌 **Source:** " + parts[1].strip()
 
         #  Define the Adaptive Card.
         adaptive_card = {
@@ -151,7 +151,7 @@ async def _bot_logic(turn_context: TurnContext):
             "actions": [
                 {
                     "type": "Action.ToggleVisibility",
-                    "title": "Show Source",
+                    "title": "🔎 Show Source",
                     "targetElements": ["sourceBlock"]
                 }
             ],
