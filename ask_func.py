@@ -653,10 +653,10 @@ def post_process_source(final_text, index_dict, python_dict):
         code_text = python_dict.get("code", "")
         return f"""{final_text}
 
-The Files:
+**📄 The Files:**
 {top_k_text}
 
-The code:
+**💻 The Code:**
 {code_text}
 """
     elif "source: python" in text_lower:
@@ -780,7 +780,7 @@ async def Ask_Question(question):
                 latest_answer=latest_answer,
                 chat_history=chat_history,
                 instructions=instructions
-        ):
+        ).__aiter__():
             yield message 
             await asyncio.sleep(0)
         return        # Stop here after export
