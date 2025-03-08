@@ -18,6 +18,7 @@ from functools import lru_cache #caching
 import re
 import difflib
 import asyncio
+import aiohttp
 
 def clean_repeated_patterns(text):
     # Remove repeated words like: "TheThe", "total total"
@@ -489,68 +490,72 @@ def execute_generated_code(code_str):
     except Exception as e:
         return f"An error occurred during code execution: {e}"
 
-def tool_3_llm_fallback(user_question):
-    LLM_ENDPOINT = (
-        "https://cxqaazureaihub2358016269.openai.azure.com/"
-        "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
-    )
-    LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+async def tool_3_llm_fallback(user_question):
+        LLM_ENDPOINT = (
+            "https://cxqaazureaihub2358016269.openai.azure.com/"
+            "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
+        )
+        LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
 
-    system_prompt = (
-        "You are a highly knowledgeable large language model. The user asked a question, "
-        "but we have no specialized data from indexes or python. Provide a concise, direct answer "
-        "using your general knowledge. Do not say 'No information was found'; just answer as best you can."
-    )
+        system_prompt = (
+            "You are a highly knowledgeable large language model. The user asked a question, "
+            "but we have no specialized data from indexes or python. Provide a concise, direct answer "
+            "using your general knowledge. Do not say 'No information was found'; just answer as best you can."
+        )
 
-    payload = {
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_question}
-        ],
-        "max_tokens": 500,
-        "temperature": 0.7,
-        "stream": True
-    }
+        payload = {
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_question}
+            ],
+            "max_tokens": 500,
+            "temperature": 0.7,
+            "stream": True
+        }
 
-    headers = {
-        "Content-Type": "application/json",
-        "api-key": LLM_API_KEY
-    }
+        headers = {
+            "Content-Type": "application/json",
+            "api-key": LLM_API_KEY
+        }
 
-    fallback_answer = ""
-    try:
-        with requests.post(LLM_ENDPOINT, headers=headers, json=payload, stream=True) as response:
-            response.raise_for_status()
-            for line in response.iter_lines():
-                if line:
-                    line_str = line.decode("utf-8", errors="ignore").strip()
-                    if line_str.startswith("data: "):
-                        data_str = line_str[len("data: "):]
-                        if data_str == "[DONE]":
-                            break
-                        try:
-                            data_json = json.loads(data_str)
-                            if (
-                                "choices" in data_json
-                                and data_json["choices"]
-                                and "delta" in data_json["choices"][0]
-                            ):
-                                content_piece = data_json["choices"][0]["delta"].get("content", "")
-                                fallback_answer += content_piece
-                        except json.JSONDecodeError:
-                            pass
-    except:
-        fallback_answer = "I'm sorry, but I couldn't retrieve a fallback answer."
+        fallback_answer = ""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(LLM_ENDPOINT, headers=headers, json=payload) as response:
+                    response.raise_for_status()
+                    async for line in response.content:
+                        line_str = line.decode("utf-8", errors="ignore").strip()
+                        if line_str.startswith("data: "):
+                            data_str = line_str[len("data: "):]
+                            if data_str == "[DONE]":
+                                break
+                            try:
+                                data_json = json.loads(data_str)
+                                if "choices" in data_json and data_json["choices"]:
+                                    content_piece = data_json["choices"][0]["delta"].get("content", "")
+                                    fallback_answer += content_piece
+                                    yield content_piece  # 🔥 Stream the response
+                            except json.JSONDecodeError:
+                                pass
+        except Exception as e:
+            yield f"Error retrieving fallback answer: {str(e)}"
 
-    return fallback_answer.strip()
+        yield fallback_answer.strip()
 
-def final_answer_llm(user_question, index_dict, python_dict):
+async def final_answer_llm(user_question, index_dict, python_dict):
     index_top_k = index_dict.get("top_k", "No information").strip()
     python_result = python_dict.get("result", "No information").strip()
 
     if index_top_k.lower() == "no information" and python_result.lower() == "no information":
-        fallback_text = tool_3_llm_fallback(user_question)
-        yield f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
+        generated_answer = []  # Collect full response
+
+        async for fallback_text in tool_3_llm_fallback(user_question):
+            generated_answer.append(fallback_text)
+            yield fallback_text  # Stream only the actual content
+
+        # ✅ Append Source only ONCE at the end
+        yield f"\n\nSource: Ai Generated"
+
         return
 
     LLM_ENDPOINT = (
@@ -572,9 +577,6 @@ At the end of your final answer, put EXACTLY one line with "Source: X" where X c
 - "Python" if only python data was used,
 - "Index & Python" if both were used,
 - or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
-
-Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
-Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
 
 User question:
 {user_question}
@@ -607,10 +609,9 @@ Chat_history:
     recent_output = ""
 
     try:
-        with requests.post(LLM_ENDPOINT, headers=headers, json=payload, stream=True) as response:
-            response.raise_for_status()
-            for line in response.iter_lines():
-                if line:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(LLM_ENDPOINT, headers=headers, json=payload) as response:
+                async for line in response.content:
                     line_str = line.decode("utf-8", errors="ignore").strip()
                     if line_str.startswith("data: "):
                         data_str = line_str[len("data: "):]
@@ -635,6 +636,7 @@ Chat_history:
                             pass
     except:
         yield "\n\nAn error occurred while processing your request."
+
 
 
 def post_process_source(final_text, index_dict, python_dict):
@@ -723,15 +725,13 @@ async def agent_answer(user_question):
 
     needs_tabular_data = references_tabular_data(user_question, TABLES)    
     # Otherwise, proceed with normal logic:
-    index_dict = {"top_k": "No information"}
+    index_dict = await asyncio.to_thread(tool_1_index_search, user_question)
     python_dict = {"result": "No information", "code": ""}
 
     # Conditionally run Python tool if needed
     if needs_tabular_data:
-        python_dict = tool_2_code_run(user_question)
+        python_dict = await asyncio.to_thread(tool_2_code_run, user_question)
 
-    # Always run index search
-    index_dict = tool_1_index_search(user_question)
 
     ####################################################
     # ✅ TOOL SELECTION LOGIC ENDS HERE
@@ -740,7 +740,7 @@ async def agent_answer(user_question):
     full_answer = ""
 
     # ✅ Stream the answer while collecting it
-    async for token in final_answer_llm(user_question, index_dict, python_dict):
+    async for token in final_answer_llm(user_question, index_dict, python_dict).__aiter__():
                 print(token, end='', flush=True)  # Optional: stream to console
                 yield token
                 full_answer += token
@@ -775,11 +775,11 @@ async def Ask_Question(question):
         else:
             yield "Error: Not enough conversation history to perform export. Please ask at least one question first."
             return
-        for message in Call_Export(
-            latest_question=latest_question,
-            latest_answer=latest_answer,
-            chat_history=chat_history,
-            instructions=instructions
+        async for message in Call_Export(
+                latest_question=latest_question,
+                latest_answer=latest_answer,
+                chat_history=chat_history,
+                instructions=instructions
         ):
             yield message 
             await asyncio.sleep(0)
@@ -811,7 +811,7 @@ async def Ask_Question(question):
     answer_collected = ""  # To store the full answer
 
     try:
-        async for token in agent_answer(question):
+        async for token in agent_answer(question).__aiter__():
                 yield token
                 answer_collected += token
     except Exception as e:
@@ -839,7 +839,8 @@ async def Ask_Question(question):
     blob_client = container_client.get_blob_client(blob_name)
 
     try:
-        existing_data = blob_client.download_blob().readall().decode("utf-8")
+        existing_data = await asyncio.to_thread(blob_client.download_blob().readall)
+        existing_data = existing_data.decode("utf-8")
         lines = existing_data.strip().split("\n")
         if not lines or not lines[0].startswith("time,question,answer,user_id"):
             lines = ["time,question,answer,user_id"]
@@ -856,5 +857,5 @@ async def Ask_Question(question):
     lines.append(",".join(f'"{x}"' for x in row))
 
     new_csv_content = "\n".join(lines) + "\n"
-    blob_client.upload_blob(new_csv_content, overwrite=True)
+    await asyncio.to_thread(blob_client.upload_blob, new_csv_content, overwrite=True)
 
