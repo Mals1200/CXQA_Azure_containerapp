@@ -3,7 +3,7 @@ import asyncio
 from flask import Flask, request, jsonify, Response
 import requests
 
-# Import Ask_Question and its global chat_history from your ask_func.py file
+# Import Ask_Question and its global chat_history from your unchanged ask_func.py
 from ask_func import Ask_Question, chat_history
 
 # Bot Framework imports
@@ -12,14 +12,16 @@ from botbuilder.schema import Activity
 
 app = Flask(__name__)
 
-# Read Bot credentials from environment variables (if using Azure Bot Service)
+# Read Bot credentials from environment variables
 MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
 MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 
+# Create settings & adapter for the Bot
 adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
 
-# Global dictionary for conversation-specific chat histories
+# Global dictionary to maintain conversation-specific chat histories.
+# Keys will be conversation IDs and values will be lists of chat history messages.
 conversation_histories = {}
 
 @app.route('/', methods=['GET'])
@@ -28,26 +30,31 @@ def home():
 
 @app.route('/ask', methods=['POST'])
 def ask():
-    """
-    REST endpoint for non-Bot calls.
-    (This endpoint collects the full answer before returning.)
-    """
     data = request.get_json()
     if not data or 'question' not in data:
         return jsonify({'error': 'Invalid request, "question" field is required.'}), 400
     question = data['question']
-    answer_text = "".join(Ask_Question(question))
-    return jsonify({'answer': answer_text})
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    answer = loop.run_until_complete(collect_answer(question))
+    return jsonify({'answer': answer})
+
+
+async def collect_answer(question):
+    full_answer = ""
+    async for token in Ask_Question(question):
+        full_answer += token
+    return full_answer
 
 @app.route("/api/messages", methods=["POST"])
 def messages():
-    """
-    Bot Framework endpoint (e.g., for Microsoft Teams).
-    """
     if "application/json" not in request.headers.get("Content-Type", ""):
         return Response(status=415)
+    # Deserialize incoming Activity
     body = request.json
     activity = Activity().deserialize(body)
+    # Get the Authorization header (for Bot Framework auth)
     auth_header = request.headers.get("Authorization", "")
     loop = asyncio.new_event_loop()
     try:
@@ -56,92 +63,96 @@ def messages():
         loop.close()
     return Response(status=200)
 
-async def _async_ask(question: str):
-    """
-    Wrap the synchronous Ask_Question generator as an async generator.
-    """
-    for token in Ask_Question(question):
-        yield token
-        await asyncio.sleep(0)  # yield control
-
 async def _bot_logic(turn_context: TurnContext):
-    """
-    Bot logic that streams a response by:
-      1. Sending an initial "informative" typing activity with streamSequence 1.
-      2. Updating that same activity periodically with accumulated tokens (using streamSequence increments and streamType "streaming").
-      3. Sending a final update with type "message" and streamType "final".
-    """
+    # Retrieve the conversation ID from the incoming activity.
     conversation_id = turn_context.activity.conversation.id
+
+    # Initialize conversation history for this conversation if it doesn't exist.
     if conversation_id not in conversation_histories:
         conversation_histories[conversation_id] = []
-    
-    # Set conversation-specific chat history in ask_func
+
+    # Before processing, override the chat_history in ask_func.py with this conversation's history.
     import ask_func
     ask_func.chat_history = conversation_histories[conversation_id]
 
     user_message = turn_context.activity.text or ""
-    
-    # --- 1. Start Streaming: Send initial informative update ---
-    initial_entity = {
-        "type": "streaminfo",
-        "streamType": "informative",  # informative update
-        "streamSequence": 1
-    }
-    initial_activity = Activity(
-        type="typing",
-        text="Searching through documents...",  # Informative loading message
-        entities=[initial_entity]
-    )
-    sent_activity = await turn_context.send_activity(initial_activity)
-    stream_id = sent_activity.id  # Use this as the streamId for subsequent updates
+    partial_answer = ""
+    update_interval = 20  # Every 20 tokens, send an update
 
-    accumulated_text = ""
-    sequence_number = 2  # Next sequence number for subsequent streaming updates
-    update_interval = 1.0  # Seconds between updates
-    loop = asyncio.get_event_loop()
-    next_update_time = loop.time() + update_interval
+    await turn_context.send_activity(Activity(type="typing"))  # Start typing indicator
 
-    # --- 2. Continue Streaming: Update with new tokens ---
-    async for token in _async_ask(user_message):
-        accumulated_text += token
-        current_time = loop.time()
-        if current_time >= next_update_time:
-            update_entity = {
-                "type": "streaminfo",
-                "streamId": stream_id,
-                "streamType": "streaming",  # streaming update
-                "streamSequence": sequence_number
-            }
-            update_activity = Activity(
-                id=stream_id,  # update the same activity
-                type="typing",
-                text=accumulated_text,
-                entities=[update_entity]
-            )
-            try:
-                await turn_context.update_activity(update_activity)
-            except Exception as e:
-                print(f"Error updating activity: {e}")
-            sequence_number += 1
-            next_update_time = current_time + update_interval
+    token_counter = 0
+    try:
+        async for token in Ask_Question(user_message):
+            partial_answer += token
+            token_counter += 1
 
-    # --- 3. Finalize Streaming: Send final message ---
-    final_entity = {
-        "type": "streaminfo",
-        "streamId": stream_id,
-        "streamType": "final"  # Mark final streaming update (no streamSequence)
-    }
-    final_activity = Activity(
-        id=stream_id,
-        type="message",  # Final message must be type "message"
-        text=accumulated_text,
-        entities=[final_entity]
-    )
-    await turn_context.update_activity(final_activity)
+            if token_counter % update_interval == 0:
+                await turn_context.send_activity(Activity(type="message", text=partial_answer))
 
-    # Update conversation history for this conversation
+        # Final complete message
+        await turn_context.send_activity(Activity(type="message", text=partial_answer))
+
+    except Exception as e:
+        await turn_context.send_activity(Activity(type="message", text=f"Error: {str(e)}"))
+
+    # After processing, update the conversation-specific history.
+    #  Update the conversation-specific history.
     conversation_histories[conversation_id] = ask_func.chat_history
 
+    #  Check for "Source:" in the full streamed answer.
+    if "\n\nSource:" in partial_answer:
+        #  Split the answer into main content and source details.
+        parts = partial_answer.split("\n\nSource:", 1)
+        main_answer = parts[0].strip()
+        source_details = "Source: " + parts[1].strip()
+
+        #  Define the Adaptive Card.
+        adaptive_card = {
+            "type": "AdaptiveCard",
+            "body": [
+                {
+                    "type": "TextBlock",
+                    "text": main_answer,
+                    "wrap": True,
+                    "weight": "Bolder",
+                    "size": "Medium"
+                },
+                {
+                    "type": "TextBlock",
+                    "text": source_details,
+                    "wrap": True,
+                    "id": "sourceBlock",
+                    "isVisible": False,
+                    "spacing": "Medium"
+                }
+            ],
+            "actions": [
+                {
+                    "type": "Action.ToggleVisibility",
+                    "title": "Show Source",
+                    "targetElements": ["sourceBlock"]
+                }
+            ],
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "version": "1.4"
+        }
+
+        #  Send the Adaptive Card as a response.
+        message = Activity(
+            type="message",
+            attachments=[{
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": adaptive_card
+            }]
+        )
+        await turn_context.send_activity(message)
+
+    else:
+        #  If no source exists, just send the full answer as plain text.
+        await turn_context.send_activity(Activity(type="message", text=partial_answer))
+
+
+
 if __name__ == '__main__':
-    # Runs on port 80 (adjust as needed)
     app.run(host='0.0.0.0', port=80)
