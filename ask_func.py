@@ -740,7 +740,7 @@ async def agent_answer(user_question):
     full_answer = ""
 
     # ✅ Stream the answer while collecting it
-    async for token in final_answer_llm(user_question, index_dict, python_dict).__aiter__():
+    async for token in final_answer_llm(user_question, index_dict, python_dict):
                 print(token, end='', flush=True)  # Optional: stream to console
                 yield token
                 full_answer += token
@@ -811,7 +811,7 @@ async def Ask_Question(question):
     answer_collected = ""  # To store the full answer
 
     try:
-        async for token in agent_answer(question).__aiter__():
+        async for token in agent_answer(question):
                 yield token
                 answer_collected += token
     except Exception as e:
