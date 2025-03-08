@@ -43,7 +43,7 @@ def ask():
 
 async def collect_answer(question):
     full_answer = ""
-    async for token in Ask_Question(question).__aiter__():
+    async for token in Ask_Question(question):
         full_answer += token
     return full_answer
 
@@ -94,7 +94,7 @@ async def _bot_logic(turn_context: TurnContext):
 
     user_message = turn_context.activity.text or ""
     partial_answer = ""
-    update_interval = 10  # Update every 10 tokens
+    update_interval = 15  # Update every 10 tokens
     token_counter = 0
 
     # **✅ Send initial "thinking..." message**
@@ -105,7 +105,7 @@ async def _bot_logic(turn_context: TurnContext):
     await turn_context.send_activity(Activity(type="typing"))  # Start typing indicator
 
     try:
-        async for token in Ask_Question(user_message).__aiter__():
+        async for token in Ask_Question(user_message):
             partial_answer += token
             token_counter += 1
 
@@ -171,11 +171,7 @@ async def _bot_logic(turn_context: TurnContext):
 
     else:
         #  If no source exists, just send the full answer as plain text.
-        if token_counter % update_interval == 0:
-            await turn_context.send_activity(Activity(type="message", text=partial_answer))
-
-        if token_counter > 0:  # Ensure final message is sent only once
-            await turn_context.send_activity(Activity(type="message", text=partial_answer))
+        await turn_context.send_activity(Activity(type="message", text=partial_answer))
 
 
 
