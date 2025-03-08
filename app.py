@@ -43,7 +43,7 @@ def ask():
 
 async def collect_answer(question):
     full_answer = ""
-    async for token in Ask_Question(question):
+    async for token in Ask_Question(question).__aiter__():
         full_answer += token
     return full_answer
 
@@ -63,6 +63,23 @@ def messages():
         loop.close()
     return Response(status=200)
 
+async def update_message(turn_context: TurnContext, message_id: str, content: str, final=False):
+    """ Updates a Teams message using the message ID. """
+    
+    # If final message, add Source formatting fix
+    if final and "\n\nSource:" in content:
+        parts = content.split("\n\nSource:", 1)
+        content = f"{parts[0].strip()}\n\n**Source:** {parts[1].strip()}"
+
+    update_activity = Activity(
+        type="message",
+        id=message_id,
+        text=content
+    )
+
+    await turn_context.update_activity(update_activity)
+
+
 async def _bot_logic(turn_context: TurnContext):
     # Retrieve the conversation ID from the incoming activity.
     conversation_id = turn_context.activity.conversation.id
@@ -77,27 +94,31 @@ async def _bot_logic(turn_context: TurnContext):
 
     user_message = turn_context.activity.text or ""
     partial_answer = ""
-    update_interval = 20  # Every 20 tokens, send an update
+    update_interval = 10  # Update every 10 tokens
+    token_counter = 0
+
+    # **✅ Send initial "thinking..." message**
+    thinking_activity = Activity(type="message", text="Thinking... ⏳")
+    response = await turn_context.send_activity(thinking_activity)
+    message_id = response.id  # Store the message ID for updates
 
     await turn_context.send_activity(Activity(type="typing"))  # Start typing indicator
 
-    token_counter = 0
     try:
-        async for token in Ask_Question(user_message):
+        async for token in Ask_Question(user_message).__aiter__():
             partial_answer += token
             token_counter += 1
 
+            # **✅ Update Teams message every `update_interval` tokens**
             if token_counter % update_interval == 0:
-                await turn_context.send_activity(Activity(type="message", text=partial_answer))
+                await update_message(turn_context, message_id, partial_answer)
 
-        # Final complete message
-        await turn_context.send_activity(Activity(type="message", text=partial_answer))
+        # **✅ Final update when streaming is complete**
+        await update_message(turn_context, message_id, partial_answer, final=True)
 
     except Exception as e:
         await turn_context.send_activity(Activity(type="message", text=f"Error: {str(e)}"))
 
-    # After processing, update the conversation-specific history.
-    #  Update the conversation-specific history.
     conversation_histories[conversation_id] = ask_func.chat_history
 
     #  Check for "Source:" in the full streamed answer.
