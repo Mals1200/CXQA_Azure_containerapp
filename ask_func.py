@@ -161,6 +161,58 @@ def split_question_into_subquestions(user_question):
     subqs = [p.strip() for p in parts if p.strip()]
     return subqs
 
+
+def semantic_split_question(user_question):
+    """
+    Takes a full user question and returns a list of semantically split sub-questions.
+    """
+    LLM_ENDPOINT = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
+    LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+
+    system_prompt = """
+    You are an expert in semantic parsing. Your task is to carefully split complex questions into their most meaningful sub-questions.
+    Rules:
+    1. Split only if the question has distinct, meaningful sub-questions.
+    2. Do NOT split phrases like "rainy and cloudy" which are part of the same meaning.
+    3. Return a valid JSON array of strings, where each string is a clean sub-question.
+    4. If no splitting is necessary, return the original question as a single-item list.
+    """
+
+    payload = {
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Question: {user_question}\n\nReturn the JSON array of sub-questions."}
+        ],
+        "max_tokens": 500,
+        "temperature": 0,
+    }
+
+    headers = {
+        "Content-Type": "application/json",
+        "api-key": LLM_API_KEY
+    }
+
+    try:
+        response = requests.post(LLM_ENDPOINT, headers=headers, json=payload, timeout=15)
+        response.raise_for_status()
+        result = response.json()
+        content = result["choices"][0]["message"]["content"].strip()
+        
+        # Try loading the result as JSON
+        subquestions = json.loads(content)
+        
+        # Validate it's a list of strings
+        if isinstance(subquestions, list) and all(isinstance(q, str) for q in subquestions):
+            return subquestions
+        else:
+            return [user_question]  # Fallback to the original question
+
+    except Exception as e:
+        print(f"Semantic parsing error: {e}")
+        return [user_question]
+
+
+
 def is_text_relevant(question, snippet):
     if not snippet.strip():
         return False
@@ -260,7 +312,7 @@ def tool_1_index_search(user_question, top_k=5):
     INDEX_NAME = "cxqa-ind-v6"
     ADMIN_API_KEY = "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv"
 
-    subquestions = split_question_into_subquestions(user_question)
+    subquestions = semantic_split_question(user_question)
 
     try:
         search_client = SearchClient(
@@ -585,6 +637,12 @@ Chat_history:
 
 
 def post_process_source(final_text, index_dict, python_dict):
+    # ✅ Normalize the source line format
+    final_text = final_text.replace("Source:Index", "\nSource: Index")
+    final_text = final_text.replace("Source:Python", "\nSource: Python")
+    final_text = final_text.replace("Source:Index & Python", "\nSource: Index & Python")
+    final_text = final_text.replace("Source:Ai Generated", "\nSource: Ai Generated")
+
     text_lower = final_text.lower()
 
     if "source: index & python" in text_lower:
@@ -614,6 +672,7 @@ The Files:
 """
     else:
         return final_text
+
 
 ####################################################
 #              GREETING HANDLING UPDATED           #
