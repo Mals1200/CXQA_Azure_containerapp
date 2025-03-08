@@ -17,6 +17,7 @@ from tenacity import retry, stop_after_attempt, wait_fixed #retrying
 from functools import lru_cache #caching
 import re
 import difflib
+import asyncio
 
 def clean_repeated_patterns(text):
     # Remove repeated words like: "TheThe", "total total"
@@ -677,7 +678,7 @@ The Files:
 ####################################################
 #              GREETING HANDLING UPDATED           #
 ####################################################
-def agent_answer(user_question):
+async def agent_answer(user_question):
     # If question is empty at first usage
     if user_question.strip() == "" and len(chat_history) < 2:
         yield ""
@@ -739,10 +740,10 @@ def agent_answer(user_question):
     full_answer = ""
 
     # ✅ Stream the answer while collecting it
-    for token in final_answer_llm(user_question, index_dict, python_dict):
-        print(token, end='', flush=True)  # Optional: stream to console
-        yield token
-        full_answer += token
+    async for token in final_answer_llm(user_question, index_dict, python_dict).__aiter__():
+                print(token, end='', flush=True)  # Optional: stream to console
+                yield token
+                full_answer += token
 
     # ✅ Clean repeated phrases
     full_answer = clean_repeated_phrases(full_answer)
@@ -758,7 +759,7 @@ def agent_answer(user_question):
     if extra_part.strip():
         yield "\n\n" + extra_part
 
-def Ask_Question(question):
+async def Ask_Question(question):
     global chat_history
     question_lower = question.lower().strip()
 
@@ -781,6 +782,7 @@ def Ask_Question(question):
             instructions=instructions
         ):
             yield message 
+            await asyncio.sleep(0)
         return        # Stop here after export
 
     # 2️⃣ Handle chat restart
@@ -809,9 +811,9 @@ def Ask_Question(question):
     answer_collected = ""  # To store the full answer
 
     try:
-        for token in agent_answer(question):
-            yield token
-            answer_collected += token
+        async for token in agent_answer(question).__aiter__():
+                yield token
+                answer_collected += token
     except Exception as e:
         yield f"\n\n❌ Error occurred while generating the answer: {str(e)}"
         return
@@ -855,4 +857,3 @@ def Ask_Question(question):
 
     new_csv_content = "\n".join(lines) + "\n"
     blob_client.upload_blob(new_csv_content, overwrite=True)
-
