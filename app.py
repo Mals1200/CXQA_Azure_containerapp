@@ -171,7 +171,12 @@ async def _bot_logic(turn_context: TurnContext):
 
     else:
         #  If no source exists, just send the full answer as plain text.
-        await turn_context.send_activity(Activity(type="message", text=partial_answer))
+        if token_counter % update_interval == 0:
+            await turn_context.send_activity(Activity(type="message", text=partial_answer))
+
+        if token_counter > 0:  # Ensure final message is sent only once
+            await turn_context.send_activity(Activity(type="message", text=partial_answer))
+
 
 
 
