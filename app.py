@@ -34,18 +34,9 @@ def ask():
     if not data or 'question' not in data:
         return jsonify({'error': 'Invalid request, "question" field is required.'}), 400
     question = data['question']
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    answer = loop.run_until_complete(collect_answer(question))
+    # For non-bot messages, we simply use the global chat_history.
+    answer = Ask_Question(question)
     return jsonify({'answer': answer})
-
-
-async def collect_answer(question):
-    full_answer = ""
-    async for token in Ask_Question(question):
-        full_answer += token
-    return full_answer
 
 @app.route("/api/messages", methods=["POST"])
 def messages():
@@ -76,83 +67,40 @@ async def _bot_logic(turn_context: TurnContext):
     ask_func.chat_history = conversation_histories[conversation_id]
 
     user_message = turn_context.activity.text or ""
-    partial_answer = ""
-    update_interval = 20  # Every 20 tokens, send an update
-
-    await turn_context.send_activity(Activity(type="typing"))  # Start typing indicator
-
-    token_counter = 0
-    try:
-        async for token in Ask_Question(user_message):
-            partial_answer += token
-            token_counter += 1
-
-            if token_counter % update_interval == 0:
-                await turn_context.send_activity(Activity(type="message", text=partial_answer))
-
-        # Final complete message
-        await turn_context.send_activity(Activity(type="message", text=partial_answer))
-
-    except Exception as e:
-        await turn_context.send_activity(Activity(type="message", text=f"Error: {str(e)}"))
+    answer = Ask_Question(user_message)
 
     # After processing, update the conversation-specific history.
-    #  Update the conversation-specific history.
     conversation_histories[conversation_id] = ask_func.chat_history
 
-    #  Check for "Source:" in the full streamed answer.
-    if "\n\nSource:" in partial_answer:
-        #  Split the answer into main content and source details.
-        parts = partial_answer.split("\n\nSource:", 1)
+    # Check if the answer contains a source section (using "\n\nSource:" as a marker)
+    if "\n\nSource:" in answer:
+        # Split into main answer and source details
+        parts = answer.split("\n\nSource:", 1)
         main_answer = parts[0].strip()
-        source_details = "Source: " + parts[1].strip()
+        # Optionally, prepend "Source:" to the details
+        source_details = "Source:" + parts[1].strip()
 
-        #  Define the Adaptive Card.
+        # Build an Adaptive Card with the main answer and a hidden block for the source details.
         adaptive_card = {
             "type": "AdaptiveCard",
             "body": [
-                {
-                    "type": "TextBlock",
-                    "text": main_answer,
-                    "wrap": True,
-                    "weight": "Bolder",
-                    "size": "Medium"
-                },
-                {
-                    "type": "TextBlock",
-                    "text": source_details,
-                    "wrap": True,
-                    "id": "sourceBlock",
-                    "isVisible": False,
-                    "spacing": "Medium"
-                }
+                {"type": "TextBlock", "text": main_answer, "wrap": True},
+                {"type": "TextBlock", "text": source_details, "wrap": True, "id": "sourceBlock", "isVisible": False}
             ],
             "actions": [
-                {
-                    "type": "Action.ToggleVisibility",
-                    "title": "Show Source",
-                    "targetElements": ["sourceBlock"]
-                }
+                {"type": "Action.ToggleVisibility", "title": "Show Source", "targetElements": ["sourceBlock"]}
             ],
             "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-            "version": "1.4"
+            "version": "1.2"
         }
-
-        #  Send the Adaptive Card as a response.
         message = Activity(
             type="message",
-            attachments=[{
-                "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": adaptive_card
-            }]
+            attachments=[{"contentType": "application/vnd.microsoft.card.adaptive", "content": adaptive_card}]
         )
         await turn_context.send_activity(message)
-
     else:
-        #  If no source exists, just send the full answer as plain text.
-        await turn_context.send_activity(Activity(type="message", text=partial_answer))
-
-
+        # Send plain text answer if no source section is detected.
+        await turn_context.send_activity(Activity(type="message", text=answer))
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=80)
