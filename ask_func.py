@@ -17,6 +17,7 @@ from tenacity import retry, stop_after_attempt, wait_fixed #retrying
 from functools import lru_cache #caching
 import re
 import difflib
+import asyncio
 
 def clean_repeated_patterns(text):
     # Remove repeated words like: "TheThe", "total total"
@@ -161,6 +162,58 @@ def split_question_into_subquestions(user_question):
     subqs = [p.strip() for p in parts if p.strip()]
     return subqs
 
+
+def semantic_split_question(user_question):
+    """
+    Takes a full user question and returns a list of semantically split sub-questions.
+    """
+    LLM_ENDPOINT = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
+    LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+
+    system_prompt = """
+    You are an expert in semantic parsing. Your task is to carefully split complex questions into their most meaningful sub-questions.
+    Rules:
+    1. Split only if the question has distinct, meaningful sub-questions.
+    2. Do NOT split phrases like "rainy and cloudy" which are part of the same meaning.
+    3. Return a valid JSON array of strings, where each string is a clean sub-question.
+    4. If no splitting is necessary, return the original question as a single-item list.
+    """
+
+    payload = {
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Question: {user_question}\n\nReturn the JSON array of sub-questions."}
+        ],
+        "max_tokens": 500,
+        "temperature": 0,
+    }
+
+    headers = {
+        "Content-Type": "application/json",
+        "api-key": LLM_API_KEY
+    }
+
+    try:
+        response = requests.post(LLM_ENDPOINT, headers=headers, json=payload, timeout=15)
+        response.raise_for_status()
+        result = response.json()
+        content = result["choices"][0]["message"]["content"].strip()
+        
+        # Try loading the result as JSON
+        subquestions = json.loads(content)
+        
+        # Validate it's a list of strings
+        if isinstance(subquestions, list) and all(isinstance(q, str) for q in subquestions):
+            return subquestions
+        else:
+            return [user_question]  # Fallback to the original question
+
+    except Exception as e:
+        print(f"Semantic parsing error: {e}")
+        return [user_question]
+
+
+
 def is_text_relevant(question, snippet):
     if not snippet.strip():
         return False
@@ -260,7 +313,7 @@ def tool_1_index_search(user_question, top_k=5):
     INDEX_NAME = "cxqa-ind-v6"
     ADMIN_API_KEY = "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv"
 
-    subquestions = split_question_into_subquestions(user_question)
+    subquestions = semantic_split_question(user_question)
 
     try:
         search_client = SearchClient(
@@ -514,7 +567,7 @@ You are a helpful assistant. The user asked a (possibly multi-part) question, an
 2) Python data: (PYTHON_DATA)
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
-At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:' (with a space after the colon) where X can be:
+At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
 - "Index" if only index data was used,
 - "Python" if only python data was used,
 - "Index & Python" if both were used,
@@ -585,6 +638,12 @@ Chat_history:
 
 
 def post_process_source(final_text, index_dict, python_dict):
+    # ✅ Normalize the source line format
+    final_text = final_text.replace("Source:Index", "\nSource: Index")
+    final_text = final_text.replace("Source:Python", "\nSource: Python")
+    final_text = final_text.replace("Source:Index & Python", "\nSource: Index & Python")
+    final_text = final_text.replace("Source:Ai Generated", "\nSource: Ai Generated")
+
     text_lower = final_text.lower()
 
     if "source: index & python" in text_lower:
@@ -615,10 +674,11 @@ The Files:
     else:
         return final_text
 
+
 ####################################################
 #              GREETING HANDLING UPDATED           #
 ####################################################
-def agent_answer(user_question):
+async def agent_answer(user_question):
     # If question is empty at first usage
     if user_question.strip() == "" and len(chat_history) < 2:
         yield ""
@@ -680,10 +740,10 @@ def agent_answer(user_question):
     full_answer = ""
 
     # ✅ Stream the answer while collecting it
-    for token in final_answer_llm(user_question, index_dict, python_dict):
-        print(token, end='', flush=True)  # Optional: stream to console
-        yield token
-        full_answer += token
+    async for token in final_answer_llm(user_question, index_dict, python_dict).__aiter__():
+                print(token, end='', flush=True)  # Optional: stream to console
+                yield token
+                full_answer += token
 
     # ✅ Clean repeated phrases
     full_answer = clean_repeated_phrases(full_answer)
@@ -699,7 +759,7 @@ def agent_answer(user_question):
     if extra_part.strip():
         yield "\n\n" + extra_part
 
-def Ask_Question(question):
+async def Ask_Question(question):
     global chat_history
     question_lower = question.lower().strip()
 
@@ -722,6 +782,7 @@ def Ask_Question(question):
             instructions=instructions
         ):
             yield message 
+            await asyncio.sleep(0)
         return        # Stop here after export
 
     # 2️⃣ Handle chat restart
@@ -750,9 +811,9 @@ def Ask_Question(question):
     answer_collected = ""  # To store the full answer
 
     try:
-        for token in agent_answer(question):
-            yield token
-            answer_collected += token
+        async for token in agent_answer(question).__aiter__():
+                yield token
+                answer_collected += token
     except Exception as e:
         yield f"\n\n❌ Error occurred while generating the answer: {str(e)}"
         return
