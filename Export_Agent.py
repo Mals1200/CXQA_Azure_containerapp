@@ -4,7 +4,6 @@ import json
 import io
 import threading
 from datetime import datetime
-import asyncio
 
 # Azure Blob Storage
 from azure.storage.blob import BlobServiceClient
@@ -503,71 +502,68 @@ Data:
 ##################################################
 # Calling the export function
 ##################################################
-async def Call_Export(latest_question, latest_answer, chat_history, instructions):
-        import re
+def Call_Export(latest_question, latest_answer, chat_history, instructions):
+    import re
 
-        async def generate_ppt():
-            yield "⏳ Generating PowerPoint presentation...\n"
-            result = await asyncio.to_thread(Call_PPT, latest_question, latest_answer, chat_history, instructions)
-            yield f"✅ PowerPoint created: {result}\n"
+    def generate_ppt():
+        yield "⏳ Generating PowerPoint presentation...\n"
+        result = Call_PPT(latest_question, latest_answer, chat_history, instructions)
+        yield f"✅ PowerPoint created: {result}\n"
 
-        async def generate_doc():
-            yield "⏳ Generating Word document...\n"
-            result = await asyncio.to_thread(Call_DOC, latest_question, latest_answer, chat_history, instructions)
-            yield f"✅ Document created: {result}\n"
+    def generate_doc():
+        yield "⏳ Generating Word document...\n"
+        result = Call_DOC(latest_question, latest_answer, chat_history, instructions)
+        yield f"✅ Document created: {result}\n"
 
-        async def generate_chart():
-            yield "⏳ Generating chart...\n"
-            result = await asyncio.to_thread(Call_CHART, latest_question, latest_answer, chat_history, instructions)
-            yield f"✅ Chart created: {result}\n"
+    def generate_chart():
+        yield "⏳ Generating chart...\n"
+        result = Call_CHART(latest_question, latest_answer, chat_history, instructions)
+        yield f"✅ Chart created: {result}\n"
 
-        instructions_lower = instructions.lower()
+    instructions_lower = instructions.lower()
 
-        # PPT?
-        if re.search(
-            r"\b(" 
-            r"presentation[s]?|slide[s]?|slideshow[s]?|" 
-            r"power[-\s]?point[s]?|deck[s]?|pptx?|keynote|" 
-            r"pitch[-\s]?deck[s]?|talk[-\s]?deck[s]?|slide[-\s]?deck[s]?|" 
-            r"seminar[s]?|webinar[s]?|conference[-\s]?slides?|training[-\s]?material[s]?|" 
-            r"meeting[-\s]?slides?|workshop[-\s]?slides?|lecture[-\s]?slides?|" 
-            r"presenation[s]?|presentaion[s]?|slideset[s]?|deck[-\s]?presentation[s]?" 
-            r")\b"
-            , instructions_lower, re.IGNORECASE
-        ):
-            async for msg in generate_ppt():
-                yield msg
-            return
-        # Chart?
-        elif re.search(
-                    r"\b("
-                    r"chart[s]?|graph[s]?|diagram[s]?|"
-                    r"bar[-\s]?chart[s]?|line[-\s]?chart[s]?|pie[-\s]?chart[s]?|"
-                    r"scatter[-\s]?plot[s]?|trend[-\s]?analysis|visualization[s]?|"
-                    r"infographic[s]?|data[-\s]?graph[s]?|report[-\s]?chart[s]?|"
-                    r"heatmap[s]?|time[-\s]?series|distribution[-\s]?plot|"
-                    r"statistical[-\s]?graph[s]?|data[-\s]?plot[s]?|"
-                    r"char|grph|daigram"
-                    r")\b", instructions_lower, re.IGNORECASE
-        ):
-            async for msg in generate_chart():
-                yield msg
-            return
-        # Document?
-        elif re.search(
-            r"\b("
-            r"document[s]?|report[s]?|word[-\s]?doc[s]?|"
-            r"policy[-\s]?paper[s]?|manual[s]?|write[-\s]?up[s]?|"
-            r"summary|white[-\s]?paper[s]?|memo[s]?|contract[s]?|"
-            r"business[-\s]?plan[s]?|research[-\s]?paper[s]?|"
-            r"proposal[s]?|guideline[s]?|introduction|conclusion|"
-            r"terms[-\s]?of[-\s]?service|agreement|"
-            r"contract[-\s]?draft|standard[-\s]?operating[-\s]?procedure|"
-            r"documnt|repot|worddoc|proposel"
-            r")\b", instructions_lower, re.IGNORECASE
-        ):
-            async for msg in generate_doc():
-                yield msg
-            return
-        # Fallback
-        yield "Not enough Information to perform export."
+    # PPT?
+    if re.search(
+        r"\b(" 
+        r"presentation[s]?|slide[s]?|slideshow[s]?|" 
+        r"power[-\s]?point[s]?|deck[s]?|pptx?|keynote|" 
+        r"pitch[-\s]?deck[s]?|talk[-\s]?deck[s]?|slide[-\s]?deck[s]?|" 
+        r"seminar[s]?|webinar[s]?|conference[-\s]?slides?|training[-\s]?material[s]?|" 
+        r"meeting[-\s]?slides?|workshop[-\s]?slides?|lecture[-\s]?slides?|" 
+        r"presenation[s]?|presentaion[s]?|slideset[s]?|deck[-\s]?presentation[s]?" 
+        r")\b"
+        , instructions_lower, re.IGNORECASE
+    ):
+        yield from generate_ppt()
+        return
+    # Chart?
+    elif re.search(
+                r"\b("
+                r"chart[s]?|graph[s]?|diagram[s]?|"
+                r"bar[-\s]?chart[s]?|line[-\s]?chart[s]?|pie[-\s]?chart[s]?|"
+                r"scatter[-\s]?plot[s]?|trend[-\s]?analysis|visualization[s]?|"
+                r"infographic[s]?|data[-\s]?graph[s]?|report[-\s]?chart[s]?|"
+                r"heatmap[s]?|time[-\s]?series|distribution[-\s]?plot|"
+                r"statistical[-\s]?graph[s]?|data[-\s]?plot[s]?|"
+                r"char|grph|daigram"
+                r")\b", instructions_lower, re.IGNORECASE
+    ):
+        yield from generate_chart()
+        return
+    # Document?
+    elif re.search(
+        r"\b("
+        r"document[s]?|report[s]?|word[-\s]?doc[s]?|"
+        r"policy[-\s]?paper[s]?|manual[s]?|write[-\s]?up[s]?|"
+        r"summary|white[-\s]?paper[s]?|memo[s]?|contract[s]?|"
+        r"business[-\s]?plan[s]?|research[-\s]?paper[s]?|"
+        r"proposal[s]?|guideline[s]?|introduction|conclusion|"
+        r"terms[-\s]?of[-\s]?service|agreement|"
+        r"contract[-\s]?draft|standard[-\s]?operating[-\s]?procedure|"
+        r"documnt|repot|worddoc|proposel"
+        r")\b", instructions_lower, re.IGNORECASE
+    ):
+        yield from generate_doc()
+        return
+    # Fallback
+    yield "Not enough Information to perform export."
