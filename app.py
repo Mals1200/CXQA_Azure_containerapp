@@ -74,6 +74,15 @@ async def _bot_logic(turn_context: TurnContext):
     ask_func.chat_history = conversation_histories[conversation_id]
 
     user_message = turn_context.activity.text or ""
+
+    # ✅ Step 1: Send "Thinking..." message BEFORE processing
+    thinking_activity = Activity(
+        type="message",
+        text="Thinking... ⏳"
+    )
+    await turn_context.send_activity(thinking_activity)
+
+
     answer_generator = Ask_Question(user_message)
     # Collect the chunks into a single string
     answer_text = ''.join(answer_generator)
@@ -82,11 +91,17 @@ async def _bot_logic(turn_context: TurnContext):
     conversation_histories[conversation_id] = ask_func.chat_history
 
     # Check for a source section to decide how to render the response:
-    if "\n\nSource:" in answer_text:
+    if "Source:" in answer_text or "Source\n" in answer_text:
         # Split into main answer and source details
-        parts = answer_text.split("\n\nSource:", 1)
-        main_answer = parts[0].strip()
-        source_details = "Source:" + parts[1].strip()
+        import re
+        source_match = re.split(r"\n*Source:\s*", answer_text, maxsplit=1)
+        
+        if len(source_match) > 1:
+            main_answer = source_match[0].strip()
+            source_details = "Source: " + source_match[1].strip()
+        else:
+            main_answer = answer_text.strip()
+            source_details = None  # No valid source found
 
         # Build an Adaptive Card with a toggle to show/hide sources
         adaptive_card = {
