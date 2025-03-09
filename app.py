@@ -34,18 +34,9 @@ def ask():
     if not data or 'question' not in data:
         return jsonify({'error': 'Invalid request, "question" field is required.'}), 400
     question = data['question']
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    answer = loop.run_until_complete(collect_answer(question))
+    # For non-bot messages, we simply use the global chat_history.
+    answer = Ask_Question(question)
     return jsonify({'answer': answer})
-
-
-async def collect_answer(question):
-    full_answer = ""
-    async for token in Ask_Question(question):
-        full_answer += token
-    return full_answer
 
 @app.route("/api/messages", methods=["POST"])
 def messages():
@@ -63,23 +54,6 @@ def messages():
         loop.close()
     return Response(status=200)
 
-async def update_message(turn_context: TurnContext, message_id: str, content: str, final=False):
-    """ Updates a Teams message using the message ID. """
-    
-    # If final message, add Source formatting fix
-    if final and "\n\nSource:" in content:
-        parts = content.split("\n\nSource:", 1)
-        content = f"{parts[0].strip()}\n\n**Source:** {parts[1].strip()}"
-
-    update_activity = Activity(
-        type="message",
-        id=message_id,
-        text=content
-    )
-
-    await turn_context.update_activity(update_activity)
-
-
 async def _bot_logic(turn_context: TurnContext):
     # Retrieve the conversation ID from the incoming activity.
     conversation_id = turn_context.activity.conversation.id
@@ -90,92 +64,43 @@ async def _bot_logic(turn_context: TurnContext):
 
     # Before processing, override the chat_history in ask_func.py with this conversation's history.
     import ask_func
-    ask_func.chat_history = conversation_histories.get(conversation_id, [])
-
+    ask_func.chat_history = conversation_histories[conversation_id]
 
     user_message = turn_context.activity.text or ""
-    partial_answer = ""
-    update_interval = 15  # Update every 10 tokens
-    token_counter = 0
+    answer = Ask_Question(user_message)
 
-    # **✅ Send initial "thinking..." message**
-    thinking_activity = Activity(type="message", text="Thinking... ⏳")
-    response = await turn_context.send_activity(thinking_activity)
-    message_id = response.id  # Store the message ID for updates
-
-    await turn_context.send_activity(Activity(type="typing"))  # Start typing indicator
-
-    try:
-        async for token in Ask_Question(user_message).__aiter__():
-            partial_answer += token
-            token_counter += 1
-
-            # **✅ Update Teams message every `update_interval` tokens**
-            if token_counter % update_interval == 0:
-                await update_message(turn_context, message_id, partial_answer)
-
-        # **✅ Final update when streaming is complete**
-        await update_message(turn_context, message_id, partial_answer, final=True)
-
-    except Exception as e:
-        await turn_context.send_activity(Activity(type="message", text=f"Error: {str(e)}"))
-
+    # After processing, update the conversation-specific history.
     conversation_histories[conversation_id] = ask_func.chat_history
 
-    #  Check for "Source:" in the full streamed answer.
-    if "\n\nSource:" in partial_answer:
-        #  Split the answer into main content and source details.
-        parts = partial_answer.split("\n\nSource:", 1)
+    # Check if the answer contains a source section (using "\n\nSource:" as a marker)
+    if "\n\nSource:" in answer:
+        # Split into main answer and source details
+        parts = answer.split("\n\nSource:", 1)
         main_answer = parts[0].strip()
-        source_details = "📌 **Source:** " + parts[1].strip()
+        # Optionally, prepend "Source:" to the details
+        source_details = "Source:" + parts[1].strip()
 
-        #  Define the Adaptive Card.
+        # Build an Adaptive Card with the main answer and a hidden block for the source details.
         adaptive_card = {
             "type": "AdaptiveCard",
             "body": [
-                {
-                    "type": "TextBlock",
-                    "text": main_answer,
-                    "wrap": True,
-                    "weight": "Bolder",
-                    "size": "Medium"
-                },
-                {
-                    "type": "TextBlock",
-                    "text": source_details,
-                    "wrap": True,
-                    "id": "sourceBlock",
-                    "isVisible": False,
-                    "spacing": "Medium"
-                }
+                {"type": "TextBlock", "text": main_answer, "wrap": True},
+                {"type": "TextBlock", "text": source_details, "wrap": True, "id": "sourceBlock", "isVisible": False}
             ],
             "actions": [
-                {
-                    "type": "Action.ToggleVisibility",
-                    "title": "🔎 Show Source",
-                    "targetElements": ["sourceBlock"]
-                }
+                {"type": "Action.ToggleVisibility", "title": "Show Source", "targetElements": ["sourceBlock"]}
             ],
             "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-            "version": "1.4"
+            "version": "1.2"
         }
-
-        #  Send the Adaptive Card as a response.
         message = Activity(
             type="message",
-            attachments=[{
-                "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": adaptive_card
-            }]
+            attachments=[{"contentType": "application/vnd.microsoft.card.adaptive", "content": adaptive_card}]
         )
         await turn_context.send_activity(message)
-
     else:
-        #  If no source exists, just send the full answer as plain text.
-        await turn_context.send_activity(Activity(type="message", text=partial_answer))
-
-
-
+        # Send plain text answer if no source section is detected.
+        await turn_context.send_activity(Activity(type="message", text=answer))
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=80)
