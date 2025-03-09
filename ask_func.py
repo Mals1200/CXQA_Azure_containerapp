@@ -17,8 +17,6 @@ from tenacity import retry, stop_after_attempt, wait_fixed #retrying
 from functools import lru_cache #caching
 import re
 import difflib
-import asyncio
-import aiohttp
 
 def clean_repeated_patterns(text):
     # Remove repeated words like: "TheThe", "total total"
@@ -163,58 +161,6 @@ def split_question_into_subquestions(user_question):
     subqs = [p.strip() for p in parts if p.strip()]
     return subqs
 
-
-def semantic_split_question(user_question):
-    """
-    Takes a full user question and returns a list of semantically split sub-questions.
-    """
-    LLM_ENDPOINT = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
-    LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
-
-    system_prompt = """
-    You are an expert in semantic parsing. Your task is to carefully split complex questions into their most meaningful sub-questions.
-    Rules:
-    1. Split only if the question has distinct, meaningful sub-questions.
-    2. Do NOT split phrases like "rainy and cloudy" which are part of the same meaning.
-    3. Return a valid JSON array of strings, where each string is a clean sub-question.
-    4. If no splitting is necessary, return the original question as a single-item list.
-    """
-
-    payload = {
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Question: {user_question}\n\nReturn the JSON array of sub-questions."}
-        ],
-        "max_tokens": 500,
-        "temperature": 0,
-    }
-
-    headers = {
-        "Content-Type": "application/json",
-        "api-key": LLM_API_KEY
-    }
-
-    try:
-        response = requests.post(LLM_ENDPOINT, headers=headers, json=payload, timeout=15)
-        response.raise_for_status()
-        result = response.json()
-        content = result["choices"][0]["message"]["content"].strip()
-        
-        # Try loading the result as JSON
-        subquestions = json.loads(content)
-        
-        # Validate it's a list of strings
-        if isinstance(subquestions, list) and all(isinstance(q, str) for q in subquestions):
-            return subquestions
-        else:
-            return [user_question]  # Fallback to the original question
-
-    except Exception as e:
-        print(f"Semantic parsing error: {e}")
-        return [user_question]
-
-
-
 def is_text_relevant(question, snippet):
     if not snippet.strip():
         return False
@@ -314,7 +260,7 @@ def tool_1_index_search(user_question, top_k=5):
     INDEX_NAME = "cxqa-ind-v6"
     ADMIN_API_KEY = "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv"
 
-    subquestions = semantic_split_question(user_question)
+    subquestions = split_question_into_subquestions(user_question)
 
     try:
         search_client = SearchClient(
@@ -490,72 +436,68 @@ def execute_generated_code(code_str):
     except Exception as e:
         return f"An error occurred during code execution: {e}"
 
-async def tool_3_llm_fallback(user_question):
-        LLM_ENDPOINT = (
-            "https://cxqaazureaihub2358016269.openai.azure.com/"
-            "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
-        )
-        LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+def tool_3_llm_fallback(user_question):
+    LLM_ENDPOINT = (
+        "https://cxqaazureaihub2358016269.openai.azure.com/"
+        "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
+    )
+    LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
 
-        system_prompt = (
-            "You are a highly knowledgeable large language model. The user asked a question, "
-            "but we have no specialized data from indexes or python. Provide a concise, direct answer "
-            "using your general knowledge. Do not say 'No information was found'; just answer as best you can."
-        )
+    system_prompt = (
+        "You are a highly knowledgeable large language model. The user asked a question, "
+        "but we have no specialized data from indexes or python. Provide a concise, direct answer "
+        "using your general knowledge. Do not say 'No information was found'; just answer as best you can."
+    )
 
-        payload = {
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_question}
-            ],
-            "max_tokens": 500,
-            "temperature": 0.7,
-            "stream": True
-        }
+    payload = {
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_question}
+        ],
+        "max_tokens": 500,
+        "temperature": 0.7,
+        "stream": True
+    }
 
-        headers = {
-            "Content-Type": "application/json",
-            "api-key": LLM_API_KEY
-        }
+    headers = {
+        "Content-Type": "application/json",
+        "api-key": LLM_API_KEY
+    }
 
-        fallback_answer = ""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(LLM_ENDPOINT, headers=headers, json=payload) as response:
-                    response.raise_for_status()
-                    async for line in response.content:
-                        line_str = line.decode("utf-8", errors="ignore").strip()
-                        if line_str.startswith("data: "):
-                            data_str = line_str[len("data: "):]
-                            if data_str == "[DONE]":
-                                break
-                            try:
-                                data_json = json.loads(data_str)
-                                if "choices" in data_json and data_json["choices"]:
-                                    content_piece = data_json["choices"][0]["delta"].get("content", "")
-                                    fallback_answer += content_piece
-                                    yield content_piece  # 🔥 Stream the response
-                            except json.JSONDecodeError:
-                                pass
-        except Exception as e:
-            yield f"Error retrieving fallback answer: {str(e)}"
+    fallback_answer = ""
+    try:
+        with requests.post(LLM_ENDPOINT, headers=headers, json=payload, stream=True) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if line:
+                    line_str = line.decode("utf-8", errors="ignore").strip()
+                    if line_str.startswith("data: "):
+                        data_str = line_str[len("data: "):]
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            data_json = json.loads(data_str)
+                            if (
+                                "choices" in data_json
+                                and data_json["choices"]
+                                and "delta" in data_json["choices"][0]
+                            ):
+                                content_piece = data_json["choices"][0]["delta"].get("content", "")
+                                fallback_answer += content_piece
+                        except json.JSONDecodeError:
+                            pass
+    except:
+        fallback_answer = "I'm sorry, but I couldn't retrieve a fallback answer."
 
-        yield fallback_answer.strip()
+    return fallback_answer.strip()
 
-async def final_answer_llm(user_question, index_dict, python_dict):
+def final_answer_llm(user_question, index_dict, python_dict):
     index_top_k = index_dict.get("top_k", "No information").strip()
     python_result = python_dict.get("result", "No information").strip()
 
     if index_top_k.lower() == "no information" and python_result.lower() == "no information":
-        generated_answer = []  # Collect full response
-
-        async for fallback_text in tool_3_llm_fallback(user_question):
-            generated_answer.append(fallback_text)
-            yield fallback_text  # Stream only the actual content
-
-        # ✅ Append Source only ONCE at the end
-        yield f"\n\nSource: Ai Generated"
-
+        fallback_text = tool_3_llm_fallback(user_question)
+        yield f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
         return
 
     LLM_ENDPOINT = (
@@ -577,6 +519,9 @@ At the end of your final answer, put EXACTLY one line with "Source: X" where X c
 - "Python" if only python data was used,
 - "Index & Python" if both were used,
 - or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
+
+Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
+Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
 
 User question:
 {user_question}
@@ -609,9 +554,10 @@ Chat_history:
     recent_output = ""
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(LLM_ENDPOINT, headers=headers, json=payload) as response:
-                async for line in response.content:
+        with requests.post(LLM_ENDPOINT, headers=headers, json=payload, stream=True) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if line:
                     line_str = line.decode("utf-8", errors="ignore").strip()
                     if line_str.startswith("data: "):
                         data_str = line_str[len("data: "):]
@@ -638,14 +584,7 @@ Chat_history:
         yield "\n\nAn error occurred while processing your request."
 
 
-
 def post_process_source(final_text, index_dict, python_dict):
-    # ✅ Normalize the source line format
-    final_text = final_text.replace("Source:Index", "\nSource: Index")
-    final_text = final_text.replace("Source:Python", "\nSource: Python")
-    final_text = final_text.replace("Source:Index & Python", "\nSource: Index & Python")
-    final_text = final_text.replace("Source:Ai Generated", "\nSource: Ai Generated")
-
     text_lower = final_text.lower()
 
     if "source: index & python" in text_lower:
@@ -653,10 +592,10 @@ def post_process_source(final_text, index_dict, python_dict):
         code_text = python_dict.get("code", "")
         return f"""{final_text}
 
-**📄 The Files:**
+The Files:
 {top_k_text}
 
-**💻 The Code:**
+The code:
 {code_text}
 """
     elif "source: python" in text_lower:
@@ -676,11 +615,10 @@ The Files:
     else:
         return final_text
 
-
 ####################################################
 #              GREETING HANDLING UPDATED           #
 ####################################################
-async def agent_answer(user_question):
+def agent_answer(user_question):
     # If question is empty at first usage
     if user_question.strip() == "" and len(chat_history) < 2:
         yield ""
@@ -725,13 +663,15 @@ async def agent_answer(user_question):
 
     needs_tabular_data = references_tabular_data(user_question, TABLES)    
     # Otherwise, proceed with normal logic:
-    index_dict = await asyncio.to_thread(tool_1_index_search, user_question)
+    index_dict = {"top_k": "No information"}
     python_dict = {"result": "No information", "code": ""}
 
     # Conditionally run Python tool if needed
     if needs_tabular_data:
-        python_dict = await asyncio.to_thread(tool_2_code_run, user_question)
+        python_dict = tool_2_code_run(user_question)
 
+    # Always run index search
+    index_dict = tool_1_index_search(user_question)
 
     ####################################################
     # ✅ TOOL SELECTION LOGIC ENDS HERE
@@ -740,10 +680,10 @@ async def agent_answer(user_question):
     full_answer = ""
 
     # ✅ Stream the answer while collecting it
-    async for token in final_answer_llm(user_question, index_dict, python_dict).__aiter__():
-                print(token, end='', flush=True)  # Optional: stream to console
-                yield token
-                full_answer += token
+    for token in final_answer_llm(user_question, index_dict, python_dict):
+        print(token, end='', flush=True)  # Optional: stream to console
+        yield token
+        full_answer += token
 
     # ✅ Clean repeated phrases
     full_answer = clean_repeated_phrases(full_answer)
@@ -759,7 +699,7 @@ async def agent_answer(user_question):
     if extra_part.strip():
         yield "\n\n" + extra_part
 
-async def Ask_Question(question):
+def Ask_Question(question):
     global chat_history
     question_lower = question.lower().strip()
 
@@ -775,14 +715,13 @@ async def Ask_Question(question):
         else:
             yield "Error: Not enough conversation history to perform export. Please ask at least one question first."
             return
-        async for message in Call_Export(
-                latest_question=latest_question,
-                latest_answer=latest_answer,
-                chat_history=chat_history,
-                instructions=instructions
-        ).__aiter__():
+        for message in Call_Export(
+            latest_question=latest_question,
+            latest_answer=latest_answer,
+            chat_history=chat_history,
+            instructions=instructions
+        ):
             yield message 
-            await asyncio.sleep(0)
         return        # Stop here after export
 
     # 2️⃣ Handle chat restart
@@ -811,9 +750,9 @@ async def Ask_Question(question):
     answer_collected = ""  # To store the full answer
 
     try:
-        async for token in agent_answer(question).__aiter__():
-                yield token
-                answer_collected += token
+        for token in agent_answer(question):
+            yield token
+            answer_collected += token
     except Exception as e:
         yield f"\n\n❌ Error occurred while generating the answer: {str(e)}"
         return
@@ -839,8 +778,7 @@ async def Ask_Question(question):
     blob_client = container_client.get_blob_client(blob_name)
 
     try:
-        existing_data = await asyncio.to_thread(blob_client.download_blob().readall)
-        existing_data = existing_data.decode("utf-8")
+        existing_data = blob_client.download_blob().readall().decode("utf-8")
         lines = existing_data.strip().split("\n")
         if not lines or not lines[0].startswith("time,question,answer,user_id"):
             lines = ["time,question,answer,user_id"]
@@ -857,5 +795,5 @@ async def Ask_Question(question):
     lines.append(",".join(f'"{x}"' for x in row))
 
     new_csv_content = "\n".join(lines) + "\n"
-    await asyncio.to_thread(blob_client.upload_blob, new_csv_content, overwrite=True)
+    blob_client.upload_blob(new_csv_content, overwrite=True)
 
