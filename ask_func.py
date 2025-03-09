@@ -154,70 +154,12 @@ def stream_azure_chat_completion(endpoint, headers, payload, print_stream=False)
             print()
     return final_text
 
-import json
-import requests
-
 def split_question_into_subquestions(user_question):
-    """
-    Uses an LLM to determine if the question should be split into multiple sub-questions.
-    Returns a list of sub-questions if needed, otherwise returns the question as a single item list.
-    """
-
-    LLM_ENDPOINT = (
-        "https://cxqaazureaihub2358016269.openai.azure.com/"
-        "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
-    )
-    LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
-
-    system_prompt = """
-    You are an expert in semantic parsing. Your task is to carefully split complex questions into their most meaningful sub-questions.
-    
-    **Rules:**
-    1. Split **only** if the question has distinct, meaningful sub-questions.
-    2. Do **NOT** split phrases like "rainy and cloudy" which belong together.
-    3. Return a **valid JSON array of strings**, where each string is a well-formed sub-question.
-    4. If no splitting is necessary, return the original question as a **single-item list**.
-    """
-
-    payload = {
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Question: {user_question}\n\nReturn the JSON array of sub-questions."}
-        ],
-        "max_tokens": 500,
-        "temperature": 0,
-    }
-
-    headers = {
-        "Content-Type": "application/json",
-        "api-key": LLM_API_KEY
-    }
-
-    try:
-        response = requests.post(LLM_ENDPOINT, headers=headers, json=payload, timeout=15)
-        response.raise_for_status()
-        result = response.json()
-
-        # Ensure the response contains expected keys
-        if "choices" in result and result["choices"] and "message" in result["choices"][0]:
-            content = result["choices"][0]["message"]["content"].strip()
-        else:
-            raise ValueError("Invalid response structure from LLM")
-
-        # Try loading the result as JSON
-        subquestions = json.loads(content)
-
-        # Validate it's a list of strings
-        if isinstance(subquestions, list) and all(isinstance(q, str) for q in subquestions):
-            return subquestions
-        else:
-            return [user_question]  # Fallback to the original question
-
-    except (requests.RequestException, json.JSONDecodeError, ValueError) as e:
-        # Log error internally, but do not show it to the user
-        return [user_question]  # Return the full question unchanged if there's an error
-
-
+    text = re.sub(r"\s+and\s+", " ~SPLIT~ ", user_question, flags=re.IGNORECASE)
+    text = re.sub(r"\s*&\s*", " ~SPLIT~ ", text)
+    parts = text.split("~SPLIT~")
+    subqs = [p.strip() for p in parts if p.strip()]
+    return subqs
 
 def is_text_relevant(question, snippet):
     if not snippet.strip():
@@ -854,4 +796,3 @@ def Ask_Question(question):
 
     new_csv_content = "\n".join(lines) + "\n"
     blob_client.upload_blob(new_csv_content, overwrite=True)
-
