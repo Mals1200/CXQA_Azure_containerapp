@@ -55,12 +55,10 @@ def messages():
     return Response(status=200)
 
 async def _bot_logic(turn_context: TurnContext):
-    """Handles incoming messages from Teams and streams responses."""
-
     # Retrieve the conversation ID from the incoming activity.
     conversation_id = turn_context.activity.conversation.id
 
-    # Initialize conversation history if it doesn't exist.
+    # Initialize conversation history for this conversation if it doesn't exist.
     if conversation_id not in conversation_histories:
         conversation_histories[conversation_id] = []
 
@@ -69,43 +67,20 @@ async def _bot_logic(turn_context: TurnContext):
     ask_func.chat_history = conversation_histories[conversation_id]
 
     user_message = turn_context.activity.text or ""
+    answer = Ask_Question(user_message)
 
-    # ✅ (1) Send "Thinking..." message first (Informative Update)
-    thinking_activity = Activity(
-        type="message",
-        text="Thinking... ⏳",
-        entities=[{"type": "streaminfo", "streamType": "informative", "streamSequence": 1}]
-    )
-    await turn_context.send_activity(thinking_activity)
+    # After processing, update the conversation-specific history.
+    conversation_histories[conversation_id] = ask_func.chat_history
 
-    # ✅ (2) Stream partial responses
-    partial_answer = ""
-    stream_sequence = 2  # Streaming sequence starts at 2
-    async for token in Ask_Question(user_message):
-        partial_answer += token
-
-        # Send incremental updates
-        streaming_activity = Activity(
-            type="message",
-            text=partial_answer,
-            entities=[{
-                "type": "streaminfo",
-                "streamId": conversation_id,
-                "streamType": "streaming",
-                "streamSequence": stream_sequence
-            }]
-        )
-        await turn_context.send_activity(streaming_activity)
-        stream_sequence += 1  # Increase sequence for next update
-
-    # ✅ (3) Format and send the final message
-    if "\n\nSource:" in partial_answer:
+    # Check if the answer contains a source section (using "\n\nSource:" as a marker)
+    if "\n\nSource:" in answer:
         # Split into main answer and source details
-        parts = partial_answer.split("\n\nSource:", 1)
+        parts = answer.split("\n\nSource:", 1)
         main_answer = parts[0].strip()
-        source_details = "Source: " + parts[1].strip()  # ✅ Space after "Source:"
+        # Optionally, prepend "Source:" to the details
+        source_details = "Source:" + parts[1].strip()
 
-        # Adaptive Card for source display
+        # Build an Adaptive Card with the main answer and a hidden block for the source details.
         adaptive_card = {
             "type": "AdaptiveCard",
             "body": [
@@ -118,34 +93,14 @@ async def _bot_logic(turn_context: TurnContext):
             "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
             "version": "1.2"
         }
-
-        final_activity = Activity(
+        message = Activity(
             type="message",
-            attachments=[{"contentType": "application/vnd.microsoft.card.adaptive", "content": adaptive_card}],
-            entities=[{
-                "type": "streaminfo",
-                "streamId": conversation_id,
-                "streamType": "final"
-            }]
+            attachments=[{"contentType": "application/vnd.microsoft.card.adaptive", "content": adaptive_card}]
         )
-        await turn_context.send_activity(final_activity)
-
+        await turn_context.send_activity(message)
     else:
-        # Send final text message if there's no source.
-        final_activity = Activity(
-            type="message",
-            text=partial_answer,
-            entities=[{
-                "type": "streaminfo",
-                "streamId": conversation_id,
-                "streamType": "final"
-            }]
-        )
-        await turn_context.send_activity(final_activity)
-
-    # ✅ (4) Update conversation history
-    conversation_histories[conversation_id] = ask_func.chat_history
-
+        # Send plain text answer if no source section is detected.
+        await turn_context.send_activity(Activity(type="message", text=answer))
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=80)
