@@ -528,9 +528,15 @@ def Ask_Question(question):
         yield "The chat has been restarted."
         return
 
+    answer_text = agent_answer(question)
+
+    if "Hello!" in answer_text or "How may I assist you?" in answer_text:
+        yield answer_text  # Send greeting response
+        return
+    
+    
     # normal Q&A
     chat_history.append(f"User: {question}")
-    answer_text = agent_answer(question)
     chat_history.append(f"Assistant: {answer_text}")
 
     if len(chat_history) > 12:
