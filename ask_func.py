@@ -154,8 +154,6 @@ def stream_azure_chat_completion(endpoint, headers, payload, print_stream=False)
             print()
     return final_text
 
-import json
-import requests
 
 def split_question_into_subquestions(user_question):
     """
