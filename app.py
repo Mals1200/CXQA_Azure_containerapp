@@ -90,7 +90,8 @@ async def _bot_logic(turn_context: TurnContext):
 
     # Before processing, override the chat_history in ask_func.py with this conversation's history.
     import ask_func
-    ask_func.chat_history = conversation_histories[conversation_id]
+    ask_func.chat_history = conversation_histories.get(conversation_id, [])
+
 
     user_message = turn_context.activity.text or ""
     partial_answer = ""
