@@ -57,13 +57,9 @@ async def _bot_logic(turn_context: TurnContext):
 
     user_message = turn_context.activity.text or ""
 
-    # 1) typing indicator
+    # 1) built-in Teams typing indicator (ephemeral)
     typing_activity = Activity(type="typing")
     await turn_context.send_activity(typing_activity)
-
-    # 2) thinking symbol
-    thinking_message = Activity(type="message", text="🤔 (thinking...)")
-    await turn_context.send_activity(thinking_message)
 
     # get answer
     ans_gen = Ask_Question(user_message)
@@ -72,8 +68,7 @@ async def _bot_logic(turn_context: TurnContext):
     # update conversation history
     conversation_histories[conversation_id] = ask_func.chat_history
 
-    # If there's "Source:" in answer_text, we might also have appended details.
-    # We'll parse out the main answer, the "Source: ..." line, and appended details if present.
+    # If there's "Source:" in answer_text, parse out main answer, source line, and appended details if any
     import re
     source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
     match = re.search(source_pattern, answer_text, flags=re.DOTALL)
