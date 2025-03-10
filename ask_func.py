@@ -54,17 +54,55 @@ TABLES = """
 SAMPLE_TEXT = "(omitted for brevity)"
 SCHEMA_TEXT = "(omitted for brevity)"
 
+# def stream_azure_chat_completion(endpoint, headers, payload, print_stream=False):
+#     """
+#     A simple function for one-shot completions with Azure OpenAI.
+#     """
+#     response = requests.post(endpoint, headers=headers, json=payload, timeout=30)
+#     response.raise_for_status()
+#     data = response.json()
+#     if "choices" in data and data["choices"]:
+#         return data["choices"][0]["message"]["content"]
+#     return ""
+
 def stream_azure_chat_completion(endpoint, headers, payload, print_stream=False):
     """
-    A simple function for one-shot completions with Azure OpenAI.
+    A properly implemented streaming function for Azure OpenAI API.
     """
-    response = requests.post(endpoint, headers=headers, json=payload, timeout=30)
-    response.raise_for_status()
-    data = response.json()
-    if "choices" in data and data["choices"]:
-        return data["choices"][0]["message"]["content"]
-    return ""
+    try:
+        with requests.post(endpoint, headers=headers, json=payload, stream=True, timeout=30) as response:
+            response.raise_for_status()  # Raise error for bad status codes
+            
+            collected_text = ""
+            for line in response.iter_lines():
+                if line:
+                    line_str = line.decode("utf-8").strip()
+                    if line_str.startswith("data: "):
+                        data_str = line_str[len("data: "):]
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            data_json = json.loads(data_str)
+                            if (
+                                "choices" in data_json and 
+                                data_json["choices"] and 
+                                "delta" in data_json["choices"][0]
+                            ):
+                                content_piece = data_json["choices"][0]["delta"].get("content", "")
+                                collected_text += content_piece
+                                if print_stream:
+                                    print(content_piece, end="", flush=True)
+                        except json.JSONDecodeError:
+                            continue  # Skip bad JSON parts
+            
+            if collected_text.strip() == "":
+                return "⚠️ No response generated from OpenAI API."
 
+            return collected_text.strip()
+    
+    except requests.exceptions.RequestException as e:
+        return f"⚠️ API Request Failed: {e}"
+    
 def split_question_into_subquestions(user_question):
     """
     Break question into sub-questions. If none, return single item list.
@@ -529,12 +567,13 @@ def Ask_Question(question):
         return
 
     answer_text = agent_answer(question)
-
+    
+##################################################################################################################
     if "Hello!" in answer_text or "How may I assist you?" in answer_text:
         yield answer_text  # Send greeting response
         return
-    
-    
+##################################################################################################################   
+
     # normal Q&A
     chat_history.append(f"User: {question}")
     chat_history.append(f"Assistant: {answer_text}")
