@@ -501,42 +501,48 @@ def agent_answer(user_question):
 
 def Ask_Question(question):
     """
-    Top-level function: 
-    - If "export", do export
+    Top-level function:
+    - If "export", do export (Call_Export from Export_Agent.py)
     - If "restart chat", clear
-    - else normal answer
+    - Otherwise, normal Q&A logic
     """
     global chat_history
     q_lower = question.lower().strip()
 
+    # 1) Handle export requests
+    from Export_Agent import Call_Export
     if q_lower.startswith("export"):
-        from Export_Agent import Call_Export
+        # If not enough chat history, we can’t export
         if len(chat_history) < 2:
             yield "Error: Not enough conversation history to perform export."
             return
-        instructions = question[6:].strip()
+        
+        instructions = question[6:].strip()  # everything after "export"
         latest_question = chat_history[-1]
         latest_answer = chat_history[-2]
-        gen = Call_Export(latest_question, latest_answer, chat_history, instructions)
-        combined = ''.join(gen)
-        yield combined
+
+        # Call the unified export function from Export_Agent.py
+        export_result = Call_Export(latest_question, latest_answer, chat_history, instructions)
+        yield export_result
         return
 
+    # 2) Handle "restart chat"
     if q_lower == "restart chat":
         chat_history = []
         tool_cache.clear()
         yield "The chat has been restarted."
         return
 
-    # normal Q&A
+    # 3) Normal Q&A
     chat_history.append(f"User: {question}")
     answer_text = agent_answer(question)
     chat_history.append(f"Assistant: {answer_text}")
 
+    # Keep chat_history from growing infinitely
     if len(chat_history) > 12:
         chat_history = chat_history[-12:]
 
-    # Logging
+    # 4) Logging (exactly as before)
     account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
     sas_token = (
         "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
@@ -573,4 +579,6 @@ def Ask_Question(question):
     new_csv_content = "\n".join(lines) + "\n"
     blob_client.upload_blob(new_csv_content, overwrite=True)
 
+    # 5) Return the final answer
     yield answer_text
+
