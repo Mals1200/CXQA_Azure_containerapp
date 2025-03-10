@@ -369,6 +369,14 @@ def tool_3_llm_fallback(user_question):
     """
     If neither index nor python has data, answer from general knowledge
     (or return short statement).
+    Always start each generated statment with the string "AI Generated:\n"
+
+    Important Rules:
+    - Be very Polite
+    - Be very proffesional
+    - Do not use profanity or rudness
+    - Do not produce any hateful messages or comments
+    - If asked about Saudi arabia always be posotive and respectful.
     """
     LLM_ENDPOINT = (
         "https://cxqaazureaihub2358016269.openai.azure.com/"
