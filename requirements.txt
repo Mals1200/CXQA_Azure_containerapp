@@ -25,6 +25,7 @@ azure-storage-blob==12.15.0
 azure-search-documents==11.4.0
 azure-core==1.29.0
 azure-identity==1.14.0
+azure-cognitiveservices-speech
 
 # Fixed Pandas & NumPy to resolve the dtype issue
 numpy==1.23.3
@@ -39,3 +40,6 @@ pyvis==0.3.2
 
 # Retrying logic:
 tenacity==9.0.0
+
+# voice ui
+PyQt5==5.15.11
