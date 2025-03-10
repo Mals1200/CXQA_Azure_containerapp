@@ -57,25 +57,24 @@ async def _bot_logic(turn_context: TurnContext):
 
     user_message = turn_context.activity.text or ""
 
-    # typing indicator
+    # 1) typing indicator
     typing_activity = Activity(type="typing")
     await turn_context.send_activity(typing_activity)
+
+    # 2) thinking symbol
+    thinking_message = Activity(type="message", text="🤔 (thinking...)")
+    await turn_context.send_activity(thinking_message)
 
     # get answer
     ans_gen = Ask_Question(user_message)
     answer_text = "".join(ans_gen)
 
-    # update conversation
+    # update conversation history
     conversation_histories[conversation_id] = ask_func.chat_history
 
-    # If there's "Source:" in answer_text, we also might have appended 
-    # ---SOURCE_DETAILS--- with index snippet/code. We'll put that behind a toggle.
-    # We'll parse out the main answer, the "Source: ..." line, 
-    # and the appended details if present.
+    # If there's "Source:" in answer_text, we might also have appended details.
+    # We'll parse out the main answer, the "Source: ..." line, and appended details if present.
     import re
-
-    # Regex to find final "Source: ...", plus any appended '---SOURCE_DETAILS---'
-    # We'll capture them to show/hide.
     source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
     match = re.search(source_pattern, answer_text, flags=re.DOTALL)
     if match:
@@ -87,15 +86,23 @@ async def _bot_logic(turn_context: TurnContext):
         source_line = ""
         appended_details = ""
 
-    # We'll embed the appended_details in the card with an ID=sourceBlock
-    # if source_line is present.
     if source_line:
+        # Hide both the source line and appended details behind the same toggle
         body_blocks = [
-            {"type": "TextBlock", "text": main_answer, "wrap": True},
-            {"type": "TextBlock", "text": source_line, "wrap": True},
+            {
+                "type": "TextBlock",
+                "text": main_answer,
+                "wrap": True
+            },
+            {
+                "type": "TextBlock",
+                "text": source_line,
+                "wrap": True,
+                "id": "sourceLineBlock",
+                "isVisible": False
+            }
         ]
 
-        # If we have appended details, we show them in a hidden block
         if appended_details:
             body_blocks.append({
                 "type": "TextBlock",
@@ -106,12 +113,12 @@ async def _bot_logic(turn_context: TurnContext):
             })
 
         actions = []
-        if appended_details:
+        if appended_details or source_line:
             actions = [
                 {
                     "type": "Action.ToggleVisibility",
                     "title": "Show Source",
-                    "targetElements": ["sourceBlock"]
+                    "targetElements": ["sourceLineBlock", "sourceBlock"]
                 }
             ]
 
@@ -131,7 +138,7 @@ async def _bot_logic(turn_context: TurnContext):
         )
         await turn_context.send_activity(message)
     else:
-        # no source line
+        # No "Source:" line, just return the plain text
         await turn_context.send_activity(Activity(type="message", text=main_answer))
 
 if __name__ == "__main__":
