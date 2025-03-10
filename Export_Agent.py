@@ -140,26 +140,63 @@ Data:
 
 
 ##################################################
-# Calling the export function (MISSING EARLIER)
+# Calling the export function
 ##################################################
 def Call_Export(latest_question, latest_answer, chat_history, instructions):
-    """
-    Determines the export type (PPT, DOC, or CHART) based on user instructions
-    and calls the appropriate function.
-    """
-    instructions_lower = instructions.lower().strip()
+    import re
 
-    # Handle PowerPoint Exports
-    if re.search(r"\b(presentation|slide|pptx?|deck|talk|webinar|lecture|seminar)\b", instructions_lower, re.IGNORECASE):
+    def generate_ppt():
         return Call_PPT(latest_question, latest_answer, chat_history, instructions)
 
-    # Handle Chart Exports
-    elif re.search(r"\b(chart|graph|visualization|plot|diagram|trend)\b", instructions_lower, re.IGNORECASE):
-        return "Error: Chart export is not yet implemented."
+    def generate_doc():
+        return Call_DOC(latest_question, latest_answer, chat_history, instructions)
 
-    # Handle Document Exports
-    elif re.search(r"\b(document|report|policy|paper|manual|summary|memo|proposal)\b", instructions_lower, re.IGNORECASE):
-        return "Error: Document export is not yet implemented."
+    def generate_chart():
+        return Call_CHART(latest_question, latest_answer, chat_history, instructions)
 
-    # If no valid export type is found
-    return "Error: Could not determine export type. Please specify if you need a presentation, document, or chart."
+    instructions_lower = instructions.lower()
+
+    # PPT?
+    if re.search(
+        r"\b("
+        r"presentation[s]?|slide[s]?|slideshow[s]?|"
+        r"power[-\s]?point|deck[s]?|pptx?|keynote|"
+        r"pitch[-\s]?deck|talk[-\s]?deck|slide[-\s]?deck|"
+        r"seminar|webinar|conference[-\s]?slides|training[-\s]?materials|"
+        r"meeting[-\s]?slides|workshop[-\s]?slides|lecture[-\s]?slides|"
+        r"presenation|presentaion"
+        r")\b", instructions_lower, re.IGNORECASE
+    ):
+        return generate_ppt()
+
+    # Chart?
+    elif re.search(
+        r"\b("
+        r"chart[s]?|graph[s]?|diagram[s]?|"
+        r"bar[-\s]?chart[s]?|line[-\s]?chart[s]?|pie[-\s]?chart[s]?|"
+        r"scatter[-\s]?plot[s]?|trend[-\s]?analysis|visualization[s]?|"
+        r"infographic[s]?|data[-\s]?graph[s]?|report[-\s]?chart[s]?|"
+        r"heatmap[s]?|time[-\s]?series|distribution[-\s]?plot|"
+        r"statistical[-\s]?graph[s]?|data[-\s]?plot[s]?|"
+        r"char|grph|daigram"
+        r")\b", instructions_lower, re.IGNORECASE
+    ):
+        return generate_chart()
+
+    # Document?
+    elif re.search(
+        r"\b("
+        r"document[s]?|report[s]?|word[-\s]?doc[s]?|"
+        r"policy[-\s]?paper[s]?|manual[s]?|write[-\s]?up[s]?|"
+        r"summary|white[-\s]?paper[s]?|memo[s]?|contract[s]?|"
+        r"business[-\s]?plan[s]?|research[-\s]?paper[s]?|"
+        r"proposal[s]?|guideline[s]?|introduction|conclusion|"
+        r"terms[-\s]?of[-\s]?service|agreement|"
+        r"contract[-\s]?draft|standard[-\s]?operating[-\s]?procedure|"
+        r"documnt|repot|worddoc|proposel"
+        r")\b", instructions_lower, re.IGNORECASE
+    ):
+        return generate_doc()
+
+    # Fallback
+    return "Not enough Information to perform export."
