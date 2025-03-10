@@ -508,9 +508,18 @@ def agent_answer(user_question):
         return True
 
     q_stripped = user_question.strip()
-    # FIX #1: Greetings also generate an answer from the LLM on top of the fixed message.
+    # If user is greeting
     if is_entirely_greeting(q_stripped):
+        # 1) Get the fallback LLM greeting
         greeting_llm_answer = tool_3_llm_fallback(user_question)
+        # 2) Remove any leading "Hello", "Hi", etc. from that fallback to avoid double greeting
+        greeting_llm_answer = re.sub(
+            r'^(hello|hi|hey|greetings|howdy|morning|evening|assalam|salam|hola)[^.\n]*[.]*\s*',
+            '',
+            greeting_llm_answer,
+            flags=re.IGNORECASE
+        ).strip()
+
         if len(chat_history) < 4:
             return (
                 "Hello! I'm The CXQA AI Assistant. I'm here to help. "
@@ -527,6 +536,7 @@ def agent_answer(user_question):
                 + greeting_llm_answer
             )
 
+    # If not greeting, proceed normally
     q_stripped = user_question.strip()
     # Check if we have a cached answer
     cache_key = q_stripped.lower()
@@ -546,6 +556,7 @@ def agent_answer(user_question):
 
     tool_cache[cache_key] = (index_dict, python_dict, final_answer)
     return final_answer
+
 
 def Ask_Question(question):
     """
