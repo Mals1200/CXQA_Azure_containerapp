@@ -494,39 +494,31 @@ def agent_answer(user_question):
 
     q_stripped = user_question.strip().lower()
 
-    # Handle greeting logic (removing duplication):
-    if q_stripped in greet_words:
-        if len(chat_history) < 4:
-            return (
-                "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n"
-                "- To reset the conversation type 'restart chat'.\n"
-                "- To generate Slides, Charts or Document, type 'export followed by your requirements."
-            )
-        else:
-            return (
-                "Hello! How may I assist you?\n"
-                "-To reset the conversation type 'restart chat'.\n"
-                "-To generate Slides, Charts or Document, type 'export followed by your requirements."
-            )
+    # 1) If no question or greeting, return no message at all.
+    if not q_stripped or q_stripped in greet_words:
+        return ""
 
-    # Check if we have a cached answer
+    # 2) Check if we have a cached answer
     cache_key = user_question.strip().lower()
     if cache_key in tool_cache:
         return tool_cache[cache_key][2]
 
-    # run python data
+    # 3) run python data
     python_dict = tool_2_code_run(user_question)
-    # run index
+
+    # 4) run index
     index_dict = tool_1_index_search(user_question)
 
+    # 5) final LLM
     final_text = final_answer_llm(user_question, index_dict, python_dict)
     final_text = clean_repeated_phrases(final_text)
 
-    # attach top_k or code if "Source" calls for it
+    # 6) attach top_k or code if "Source" calls for it
     final_answer = post_process_source(final_text, index_dict, python_dict)
 
     tool_cache[cache_key] = (index_dict, python_dict, final_answer)
     return final_answer
+
 
 def Ask_Question(question):
     """
@@ -605,5 +597,8 @@ def Ask_Question(question):
     blob_client.upload_blob(new_csv_content, overwrite=True)
 
     # 5) Return the final answer
-    yield answer_text
+    # Only yield if there is a non-empty answer
+    if answer_text.strip():
+        yield answer_text
+
 
