@@ -374,7 +374,7 @@ Chat_history:
                             pass
 
         code_str = code_str.strip()
-        if not code_str or code_str == "404":  # ✅ FIX: Exact match for "404"
+        if not code_str or code_str == "404":  # FIX: Exact match for "404"
             return {"result": "No information", "code": ""}
 
         execution_result = execute_generated_code(code_str)
@@ -522,6 +522,7 @@ At the end of your final answer, put EXACTLY one line with "Source: X" where X c
 
 Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
 Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
+Always make your answer presentable and easy to look at using an appropriate format. (paragraphs, lists, bullet points and numbering)
 
 User question:
 {user_question}
@@ -651,14 +652,14 @@ def agent_answer(user_question):
             yield "Hello! How may I assist you?\n-To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         return
 
-    # ✅ Check cache before doing any work
+    #  Check cache before doing any work
     cache_key = user_question_stripped.lower()
     if cache_key in tool_cache:
         _, _, cached_answer = tool_cache[cache_key]
         yield cached_answer
         return    
     ####################################################
-    # ✅ ENHANCED TOOL SELECTION LOGIC STARTS HERE
+    #  ENHANCED TOOL SELECTION LOGIC STARTS HERE
     ####################################################
 
     needs_tabular_data = references_tabular_data(user_question, TABLES)    
@@ -674,27 +675,27 @@ def agent_answer(user_question):
     index_dict = tool_1_index_search(user_question)
 
     ####################################################
-    # ✅ TOOL SELECTION LOGIC ENDS HERE
+    #  TOOL SELECTION LOGIC ENDS HERE
     ####################################################
 
     full_answer = ""
 
-    # ✅ Stream the answer while collecting it
+    #  Stream the answer while collecting it
     for token in final_answer_llm(user_question, index_dict, python_dict):
         print(token, end='', flush=True)  # Optional: stream to console
         yield token
         full_answer += token
 
-    # ✅ Clean repeated phrases
+    #  Clean repeated phrases
     full_answer = clean_repeated_phrases(full_answer)
 
-    # ✅ After streaming completes, apply post-processing to add source, files, and code
+    #  After streaming completes, apply post-processing to add source, files, and code
     final_answer_with_source = post_process_source(full_answer, index_dict, python_dict)
 
-    # ✅ Cache the result for reuse
+    #  Cache the result for reuse
     tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
 
-    # ✅ Yield any extra content (source, files, code) added by post-processing
+    #  Yield any extra content (source, files, code) added by post-processing
     extra_part = final_answer_with_source[len(full_answer):]
     if extra_part.strip():
         yield "\n\n" + extra_part
@@ -727,7 +728,7 @@ def Ask_Question(question):
     # 2️⃣ Handle chat restart
     if question_lower == "restart chat":
         chat_history = []
-        tool_cache.clear()  # ✅ Clear cache when restarting
+        tool_cache.clear()  # Clear cache when restarting
         yield "The chat has been restarted."
         return
 
