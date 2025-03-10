@@ -543,8 +543,8 @@ def Ask_Question(question):
     q_lower = question.lower().strip()
 
     # 1) Handle export requests
-    from Export_Agent import Call_Export
     if q_lower.startswith("export"):
+        from Export_Agent import Call_Export
         instructions = question[6:].strip()  # everything after "export"
 
         # Handle cases where chat_history is too short
