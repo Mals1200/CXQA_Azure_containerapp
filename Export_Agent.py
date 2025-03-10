@@ -31,7 +31,7 @@ Rules:
 2. Output ready-to-use slide text
 3. Format: Slide Title\\n- Bullet 1\\n- Bullet 2
 4. Separate slides with \\n\\n
-5. If insufficient information, say: "NOT_ENOUGH_INFO"
+5. If insufficient information, say: "The Information is not enough to generate Slides"
 
 Data:
 - Instructions: {instructions}
@@ -152,7 +152,7 @@ Data:
         threading.Timer(300, blob_client.delete_blob).start()
 
         # SINGLE-LINE RETURN
-        return download_url
+        return "The link to your Slides:\n", download_url
 
     except Exception as e:
         return f"Presentation Generation Error: {str(e)}"
@@ -200,8 +200,8 @@ Either return exactly one valid JSON object like:
   ]
 }}
 
-OR return the EXACT string:
-"Information is not suitable for a chart"
+If insufficient information, say: **"The Information is not enough to generate Chart"**
+OR If the data is not suitable, return the EXACT string: **"Information is not suitable for a chart"**
 
 Nothing else.
 
@@ -209,7 +209,9 @@ Data:
 - Instructions: {instructions}
 - Question: {latest_question}
 - Answer: {latest_answer}
-- History: {chat_history_str}"""
+- History: {chat_history_str}
+
+"""
 
         endpoint = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
         headers = {
@@ -354,7 +356,7 @@ Data:
         threading.Timer(300, blob_client.delete_blob).start()
 
         # SINGLE-LINE RETURN
-        return download_url
+        return "The link to your Chart:\n", download_url
 
     except Exception as e:
         return f"Chart Generation Error: {str(e)}"
@@ -381,7 +383,7 @@ Rules:
 3. Format: 
    Section Heading\\n- Bullet 1\\n- Bullet 2
 4. Separate sections with \\n\\n
-5. If insufficient information, say: "Not enough Information to perform export."
+5. If insufficient information, say: "The Information is not enough to generate a Document"
 
 Data:
 - Instructions: {instructions_doc}
@@ -493,7 +495,7 @@ Data:
         threading.Timer(300, blob_client.delete_blob).start()
 
         # SINGLE-LINE RETURN
-        return download_url
+        return "The link to your Document:\n", download_url
 
     except Exception as e:
         return f"Document Generation Error: {str(e)}"
