@@ -16,6 +16,7 @@ import csv
 from tenacity import retry, stop_after_attempt, wait_fixed  # retrying
 from functools import lru_cache  # caching
 import difflib
+import string
 
 def clean_repeated_patterns(text):
     text = re.sub(r'\b(\w+)( \1\b)+', r'\1', text, flags=re.IGNORECASE)
@@ -474,50 +475,61 @@ def post_process_source(final_text, index_dict, python_dict):
         final_text += "\n\n---SOURCE_DETAILS---\n" + "\n".join(to_append)
         return final_text
 
+import string
+
 def agent_answer(user_question):
     """
     Orchestrate the final answer. 
-    - Possibly get python data
-    - get index data
-    - final LLM
-    - attach source if relevant
+    - Handle greetings and empty questions upfront
+    - Proceed to tools only for valid data queries
     """
-    # Full set of greetings:
+    # Handle empty question
+    stripped_question = user_question.strip()
+    if not stripped_question:
+        return "Please provide a question."
+
+    # Enhanced greeting check (removes punctuation & spaces, checks against expanded list)
+    translator = str.maketrans('', '', string.punctuation + ' ')
+    q_clean = stripped_question.translate(translator).lower()
+
     greet_words = {
-        "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "good evening",
-        "goodevening", "assalam", "hayo", "hola", "salam", "alsalam",
-        "alsalamualaikum", "al salam", "assalamualaikum",
-        "greetings", "howdy", "what's up", "yo", "sup", "namaste", "shalom",
-        "bonjour", "ciao", "konichiwa", "ni hao", "marhaba", "ahlan", "sawubona",
-        "hallo", "salut", "hola amigo", "hey there", "good day", "good morning", "Good morning"
+        "hello", "hi", "hey", "morning", "evening", "goodmorning", "goodevening",
+        "assalam", "hayo", "hola", "salam", "alsalam", "alsalamualaikum", "assalamualaikum",
+        "greetings", "howdy", "whatsup", "sup", "namaste", "shalom", "bonjour", "ciao",
+        "konichiwa", "nihao", "marhaba", "ahlan", "sawubona", "hallo", "salut", "holaamigo",
+        "heythere", "goodday", "goodafternoon", "yo"
     }
 
-    q_stripped = user_question.strip().lower()
+    if q_clean in greet_words:
+        if len(chat_history) < 4:
+            return (
+                "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n"
+                "- To reset the conversation type 'restart chat'.\n"
+                "- To generate Slides, Charts or Document, type 'export followed by your requirements."
+            )
+        else:
+            return (
+                "Hello! How may I assist you?\n"
+                "-To reset the conversation type 'restart chat'.\n"
+                "-To generate Slides, Charts or Document, type 'export followed by your requirements."
+            )
 
-    # 1) If no question or greeting, return no message at all.
-    if not q_stripped or q_stripped in greet_words:
-        return ""
-
-    # 2) Check if we have a cached answer
-    cache_key = user_question.strip().lower()
+    # Check cache before proceeding to tools
+    cache_key = stripped_question.lower()
     if cache_key in tool_cache:
         return tool_cache[cache_key][2]
 
-    # 3) run python data
-    python_dict = tool_2_code_run(user_question)
+    # Proceed with data tools only for valid questions
+    python_dict = tool_2_code_run(stripped_question)
+    index_dict = tool_1_index_search(stripped_question)
 
-    # 4) run index
-    index_dict = tool_1_index_search(user_question)
-
-    # 5) final LLM
-    final_text = final_answer_llm(user_question, index_dict, python_dict)
+    final_text = final_answer_llm(stripped_question, index_dict, python_dict)
     final_text = clean_repeated_phrases(final_text)
-
-    # 6) attach top_k or code if "Source" calls for it
     final_answer = post_process_source(final_text, index_dict, python_dict)
 
     tool_cache[cache_key] = (index_dict, python_dict, final_answer)
     return final_answer
+
 
 
 def Ask_Question(question):
@@ -597,8 +609,7 @@ def Ask_Question(question):
     blob_client.upload_blob(new_csv_content, overwrite=True)
 
     # 5) Return the final answer
-    # Only yield if there is a non-empty answer
-    if answer_text.strip():
-        yield answer_text
+    yield answer_text
+
 
 
