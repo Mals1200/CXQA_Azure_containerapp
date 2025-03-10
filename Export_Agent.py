@@ -80,11 +80,7 @@ History: {c_hist}
 
             # Bullets
             if len(lines) > 1:
-                content_box = slide.shapes.add_textbox(
-                    Pt(100), Pt(150),
-                    prs.slide_width - Pt(200),
-                    prs.slide_height - Pt(250)
-                )
+                content_box = slide.shapes.add_textbox(Pt(100), Pt(150), prs.slide_width - Pt(200), prs.slide_height - Pt(250))
                 content_frame = content_box.text_frame
                 for bullet in lines[1:]:
                     para = content_frame.add_paragraph()
@@ -95,11 +91,7 @@ History: {c_hist}
 
         blob_conf = {
             "account_url": "https://cxqaazureaihub8779474245.blob.core.windows.net",
-            "sas_token": (
-                "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
-                "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
-                "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
-            ),
+            "sas_token": "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D",
             "container": "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
         }
         ppt_buf = io.BytesIO()
@@ -116,7 +108,6 @@ History: {c_hist}
         return url
     except Exception as e:
         return f"Presentation Generation Error: {str(e)}"
-
 
 def Call_CHART(latest_question, latest_answer, chat_history, instructions):
     import matplotlib.pyplot as plt
@@ -153,10 +144,7 @@ A: {latest_answer}
 History: {c_hist}
 """
         endpoint = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
-        headers = {
-            "Content-Type": "application/json",
-            "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
-        }
+        headers = {"Content-Type":"application/json","api-key":"Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"}
         payload = {
             "messages": [
                 {"role": "system", "content": "Return only valid JSON or 'Information is not suitable for a chart'."},
@@ -180,27 +168,13 @@ History: {c_hist}
             if chart_data["chart_type"] in ["bar","column"]:
                 for idx, series in enumerate(chart_data["series"]):
                     color = CHART_COLORS[idx % len(CHART_COLORS)]
-                    ax.bar(
-                        chart_data["categories"],
-                        series["values"],
-                        label=series["name"],
-                        color=color,
-                        width=0.6
-                    )
+                    ax.bar(chart_data["categories"], series["values"], label=series["name"], color=color, width=0.6)
             elif chart_data["chart_type"] == "line":
                 for idx, series in enumerate(chart_data["series"]):
                     color = CHART_COLORS[idx % len(CHART_COLORS)]
-                    ax.plot(
-                        chart_data["categories"],
-                        series["values"],
-                        label=series["name"],
-                        color=color,
-                        marker="o",
-                        linewidth=2.5
-                    )
+                    ax.plot(chart_data["categories"], series["values"], label=series["name"], color=color, marker="o", linewidth=2.5)
             else:
                 return None
-
             ax.set_title(chart_data["title"])
             ax.yaxis.set_major_locator(MaxNLocator(integer=True))
             plt.xticks(rotation=45, ha="right")
@@ -247,11 +221,7 @@ History: {c_hist}
 
     blob_conf = {
         "account_url": "https://cxqaazureaihub8779474245.blob.core.windows.net",
-        "sas_token": (
-            "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
-            "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
-            "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
-        ),
+        "sas_token": "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D",
         "container": "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
     }
     doc_buf = io.BytesIO()
@@ -266,7 +236,6 @@ History: {c_hist}
     url = f"{blob_conf['account_url']}/{blob_conf['container']}/{bc.blob_name}?{blob_conf['sas_token']}"
     threading.Timer(300, bc.delete_blob).start()
     return url
-
 
 def Call_DOC(latest_question, latest_answer, chat_history, instructions_doc):
     from docx import Document
@@ -291,10 +260,7 @@ A: {latest_answer}
 History: {c_hist}
 """
         endpoint = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
-        headers = {
-            "Content-Type": "application/json",
-            "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
-        }
+        headers = {"Content-Type":"application/json","api-key":"Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"}
         payload = {
             "messages": [
                 {"role": "system", "content": "Generate structured doc content."},
@@ -358,11 +324,7 @@ History: {c_hist}
 
         blob_conf = {
             "account_url": "https://cxqaazureaihub8779474245.blob.core.windows.net",
-            "sas_token": (
-                "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
-                "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
-                "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
-            ),
+            "sas_token": "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D",
             "container": "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
         }
         doc_buf = io.BytesIO()
@@ -379,7 +341,6 @@ History: {c_hist}
         return url
     except Exception as e:
         return f"Document Generation Error: {str(e)}"
-
 
 def Call_Export(latest_question, latest_answer, chat_history, instructions):
     def generate_ppt():
