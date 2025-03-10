@@ -486,7 +486,7 @@ def agent_answer(user_question):
     # Handle empty question
     stripped_question = user_question.strip()
     if not stripped_question:
-        return "Please provide a question."
+        return ""
 
     # Enhanced greeting check (removes punctuation & spaces, checks against expanded list)
     translator = str.maketrans('', '', string.punctuation + ' ')
