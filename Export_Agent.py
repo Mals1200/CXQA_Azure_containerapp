@@ -152,7 +152,7 @@ Data:
         threading.Timer(300, blob_client.delete_blob).start()
 
         # SINGLE-LINE RETURN
-        return "The link to your Slides:\n", download_url
+        return f"The link to your Slides:\n{download_url}"
 
     except Exception as e:
         return f"Presentation Generation Error: {str(e)}"
@@ -356,7 +356,7 @@ Data:
         threading.Timer(300, blob_client.delete_blob).start()
 
         # SINGLE-LINE RETURN
-        return "The link to your Chart:\n", download_url
+        return f"The link to your Chart:\n\n{download_url}"
 
     except Exception as e:
         return f"Chart Generation Error: {str(e)}"
@@ -495,7 +495,7 @@ Data:
         threading.Timer(300, blob_client.delete_blob).start()
 
         # SINGLE-LINE RETURN
-        return "The link to your Document:\n", download_url
+        return f"The link to your Document:\n{download_url}"
 
     except Exception as e:
         return f"Document Generation Error: {str(e)}"
