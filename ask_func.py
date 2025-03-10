@@ -541,13 +541,11 @@ def Ask_Question(question):
     # 1) Handle export requests
     from Export_Agent import Call_Export
     if q_lower.startswith("export"):
-        if len(chat_history) < 2:
-            yield "Error: Not enough conversation history to perform export."
-            return
-        
         instructions = question[6:].strip()  # everything after "export"
-        latest_question = chat_history[-1]
-        latest_answer = chat_history[-2]
+
+        # Handle cases where chat_history is too short
+        latest_question = chat_history[-1] if len(chat_history) >= 1 else "No previous question available."
+        latest_answer = chat_history[-2] if len(chat_history) >= 2 else "No previous answer available."
 
         export_result = Call_Export(latest_question, latest_answer, chat_history, instructions)
         yield export_result
@@ -608,3 +606,4 @@ def Ask_Question(question):
 
     # 5) Return the final answer
     yield answer_text
+
