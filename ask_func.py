@@ -235,7 +235,8 @@ def references_tabular_data(question, tables_text):
 
     system_prompt = (
         "You are a helpful agent. Decide if the user's question references or requires the tabular data.\n"
-        "Return ONLY 'YES' or 'NO' (in all caps)."
+        "Return ONLY 'YES' or 'NO' (in all caps).\n"
+       "The tables are not exclusive to the data it has, this is just a sample. **dont use the content of the sample table as the complete content. There are other rows the you were not shown**."
     )
     user_prompt = (
         f"User question: {question}\n\n"
