@@ -631,6 +631,9 @@ def agent_answer(user_question):
     # Check for repeated question in cache
     if user_question in tool_cache:
         return tool_cache[user_question]
+       
+   if (user_question == "") or (user_question == " "):
+      result = "Heloooooooooooo!"
 
     # Quick greeting check
     if is_entirely_greeting_or_punc(user_question.strip()):
