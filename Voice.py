@@ -4,7 +4,7 @@ import azure.cognitiveservices.speech as speechsdk
 
 app = Flask(__name__)
 
-
+# TEMPORARY TESTING VALUES ONLY - ROTATE AFTER TESTING!
 AZURE_SPEECH_KEY = "DRk2PVURFbNIpb3OtRaLzOklMME1hIPhMI4fHhBxX0jwpdIHR7qtJQQJ99BCACYeBjFXJ3w3AAAYACOGIdjJ"
 AZURE_SERVICE_REGION = "eastus"
 ENDPOINT_URL = "cxqacontainerapp.bluesmoke-a2e4a52c.germanywestcentral.azurecontainerapps.io"
@@ -35,12 +35,56 @@ HTML_TEMPLATE = f"""
             "{AZURE_SERVICE_REGION}"
         );
         
-        // Configure service endpoints
         speechConfig.speechRecognitionEndpoint = "wss://{ENDPOINT_URL}/speech/recognition/conversation/cognitiveservices/v1";
         
         let recognizer;
         const recordButton = document.getElementById("recordButton");
-        // ... [rest of the JavaScript code remains identical] ...
+        const statusDiv = document.getElementById("status");
+        const resultDiv = document.getElementById("result");
+
+        async function startRecognition() {{
+            recognizer = new SpeechSDK.SpeechRecognizer(speechConfig);
+            
+            recognizer.recognizing = (s, e) => {{
+                statusDiv.innerHTML = `Listening: ${{e.result.text}}`;
+                statusDiv.className = "status listening";
+            }};
+
+            recognizer.recognized = async (s, e) => {{
+                if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {{
+                    statusDiv.className = "status";
+                    resultDiv.innerHTML = `Processing: ${{e.result.text}}`;
+                    
+                    try {{
+                        const response = await fetch('/ask', {{
+                            method: 'POST',
+                            headers: {{ 'Content-Type': 'application/json' }},
+                            body: JSON.stringify({{ question: e.result.text }})
+                        }});
+                        
+                        const data = await response.json();
+                        resultDiv.innerHTML = `
+                            <strong>Question:</strong> ${{e.result.text}}<br>
+                            <strong>Answer:</strong> ${{data.answer || data.error}}
+                        `;
+                    }} catch (error) {{
+                        resultDiv.innerHTML = `Error: ${{error.message}}`;
+                    }}
+                }}
+            }};
+
+            recognizer.startContinuousRecognitionAsync();
+        }}
+
+        recordButton.addEventListener('click', () => {{
+            if (recordButton.textContent === "Start Recording") {{
+                recordButton.textContent = "Stop Recording";
+                startRecognition();
+            }} else {{
+                recordButton.textContent = "Start Recording";
+                recognizer.stopContinuousRecognitionAsync();
+            }}
+        }});
     </script>
 </body>
 </html>
@@ -52,7 +96,7 @@ def voice_interface():
 
 @app.route("/ask", methods=["POST"])
 def handle_question():
-    try {
+    try:  # FIXED SYNTAX HERE (changed { to :)
         data = request.json
         answer = Ask_Question(data["question"])
         return jsonify({"answer": answer})
@@ -60,5 +104,4 @@ def handle_question():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    # Run with temporary self-signed certificate
     app.run(ssl_context='adhoc', host='0.0.0.0', port=443)
