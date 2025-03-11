@@ -5,25 +5,29 @@ FROM python:3.9-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
+# Install system dependencies for speech SDK
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libssl-dev \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy dependency file separately to leverage Docker caching
+# Copy requirements first to leverage Docker cache
 COPY requirements.txt .
 
-#  Install dependencies with no-cache to prevent conflicts
-RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy all application files
 COPY . .
 
-#  Ensure the container exposes the correct port
-EXPOSE 80
+# Expose ports for main app and voice app
+EXPOSE 80 8080
 
-#  Start Gunicorn on port 80
-CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:80", "--workers", "4"]
+# Start both services using supervisord
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:80", "--workers", "4"] & \
+    gunicorn app_voice:app --bind 0.0.0.0:8080 --workers 2
