@@ -627,15 +627,15 @@ def is_entirely_greeting_or_punc(phrase):
 # Main function to produce answer
 #########################################################################
 def agent_answer(user_question):
-   # Ensure question is not empty or just whitespace
-    user_question = user_question.strip()
-    if not user_question:
-       result = (
-          "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n"
-          "- To reset the conversation type 'restart chat'.\n"
-          "- To generate Slides, Charts or Document, type 'export followed by your requirements."
-            )
-        return result
+   # # Ensure question is not empty or just whitespace
+   #  user_question = user_question.strip()
+   #  if not user_question:
+   #     result = (
+   #        "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n"
+   #        "- To reset the conversation type 'restart chat'.\n"
+   #        "- To generate Slides, Charts or Document, type 'export followed by your requirements."
+   #          )
+   #      return result
        
     # Check for repeated question in cache
     if user_question in tool_cache:
