@@ -1,19 +1,27 @@
 import os
-from flask import Flask, request, render_template_string
+import asyncio
+from flask import Flask, request, jsonify, render_template_string
 import azure.cognitiveservices.speech as speechsdk
+from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
+from botbuilder.schema import Activity
 from ask_func import Ask_Question
 
 app = Flask(__name__)
 
-# Retrieve Azure Bot Service credentials from environment variables
+# Retrieve Azure Bot credentials from environment variables
 MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
 MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 
-# Retrieve Azure Speech credentials
+adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
+adapter = BotFrameworkAdapter(adapter_settings)
+
+# Azure Speech Credentials
 SPEECH_KEY = os.environ.get("AZURE_SPEECH_KEY", "YOUR_SPEECH_KEY_HERE")
 SPEECH_REGION = os.environ.get("AZURE_SPEECH_REGION", "eastus")
 
-# HTML template with recording UI
+conversation_histories = {}
+
+# HTML UI for Voice Assistant
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -62,7 +70,7 @@ function startRecording() {
             mediaRecorder.onstop = async () => {
                 document.getElementById('status').innerText = "Status: Uploading...";
                 const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
-                
+
                 const file = new File([audioBlob], "recording.wav", { type: 'audio/wav' });
                 const formData = new FormData();
                 formData.append('audio_data', file);
@@ -112,23 +120,53 @@ def voice_assistant():
         temp_path = "temp.wav"
         audio_file.save(temp_path)
 
-        # Configure Azure Speech
         speech_config = speechsdk.SpeechConfig(subscription=SPEECH_KEY, region=SPEECH_REGION)
         audio_input = speechsdk.AudioConfig(filename=temp_path)
         recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_input)
 
-        # Recognize speech
         result = recognizer.recognize_once_async().get()
         if result.reason == speechsdk.ResultReason.RecognizedSpeech:
-            question = result.text
+            question = result.text.strip()
             answer = "".join(Ask_Question(question))
         else:
-            question = "No speech recognized or an error occurred."
-            answer = ""
+            question = "Speech not recognized."
+            answer = "I couldn't understand you. Please try again."
 
-        os.remove(temp_path)  # Clean up temp file
+        os.remove(temp_path)
 
     return render_template_string(HTML_TEMPLATE, question=question, answer=answer)
 
+@app.route("/api/messages", methods=["POST"])
+def messages():
+    if "application/json" not in request.headers.get("Content-Type", ""):
+        return jsonify({"error": "Invalid content type"}), 415
+
+    body = request.json
+    activity = Activity().deserialize(body)
+    auth_header = request.headers.get("Authorization", "")
+
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(adapter.process_activity(activity, auth_header, _bot_logic))
+    finally:
+        loop.close()
+
+    return jsonify({"status": "Message received"}), 200
+
+async def _bot_logic(turn_context: TurnContext):
+    user_message = turn_context.activity.text or ""
+
+    if not user_message.strip():
+        await turn_context.send_activity("I didn't understand that.")
+        return
+
+    ans_gen = Ask_Question(user_message)
+    answer_text = "".join(ans_gen)
+
+    if not answer_text.strip():
+        answer_text = "I couldn't find an answer."
+
+    await turn_context.send_activity(Activity(type="message", text=answer_text))
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=3979, debug=True)
+    app.run(host="0.0.0.0", port=80)
