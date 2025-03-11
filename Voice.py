@@ -1,88 +1,112 @@
-import sys
-import azure.cognitiveservices.speech as speechsdk
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QPushButton, QVBoxLayout, QWidget, QLabel
-)
-from PyQt5.QtCore import Qt
-
-# Import your ask_func.py module's function:
-# Make sure ask_func.py is in the same directory.
+import os
+from flask import Flask, request, jsonify, render_template_string
 from ask_func import Ask_Question
+from dotenv import load_dotenv
+import azure.cognitiveservices.speech as speechsdk
 
-# Replace these with your actual Azure Speech key and region.
-AZURE_SPEECH_KEY = "DRk2PVURFbNIpb3OtRaLzOklMME1hIPhMI4fHhBxX0jwpdIHR7qtJQQJ99BCACYeBjFXJ3w3AAAYACOGIdjJ"
-AZURE_SERVICE_REGION = "eastus"
+load_dotenv()
 
+app = Flask(__name__)
 
-class VoiceApp(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Voice Assistant")
+# Azure Configuration - Use environment variables
+AZURE_SPEECH_KEY = os.getenv("SPEECH_KEY", "default-key-if-missing")
+AZURE_SERVICE_REGION = os.getenv("SPEECH_REGION", "eastus")
 
-        # Main layout
-        self.central_widget = QWidget()
-        self.layout = QVBoxLayout(self.central_widget)
-        self.setCentralWidget(self.central_widget)
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Voice Assistant</title>
+    <script src="https://aka.ms/csspeech/jsbrowserpackageraw"></script>
+    <style>
+        body { font-family: Segoe UI, sans-serif; max-width: 800px; margin: 20px auto; padding: 20px; }
+        button { padding: 12px 24px; font-size: 16px; background: #0078d4; color: white; border: none; border-radius: 4px; }
+        .status { margin: 20px 0; padding: 15px; border-radius: 5px; }
+        .listening { background: #e3f2fd; border: 1px solid #2196f3; }
+        .result { margin-top: 20px; padding: 15px; background: #f5f5f5; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>CXQA Voice Assistant</h1>
+    <button id="recordButton">Start Recording</button>
+    <div id="status" class="status"></div>
+    <div id="result" class="result"></div>
 
-        # Labels to show question and answer
-        self.question_label = QLabel("Question:", self)
-        self.answer_label = QLabel("Answer:", self)
-        self.question_label.setWordWrap(True)
-        self.answer_label.setWordWrap(True)
+    <script>
+        const speechConfig = SpeechSDK.SpeechConfig.fromSubscription(
+            "{{ speech_key }}", 
+            "{{ speech_region }}"
+        );
+        
+        let recognizer;
+        const recordButton = document.getElementById("recordButton");
+        const statusDiv = document.getElementById("status");
+        const resultDiv = document.getElementById("result");
 
-        # Record button
-        self.record_button = QPushButton("Record", self)
-        self.record_button.clicked.connect(self.handle_record)
+        async function startRecognition() {
+            recognizer = new SpeechSDK.SpeechRecognizer(speechConfig);
+            
+            recognizer.recognizing = (s, e) => {
+                statusDiv.innerHTML = `Listening: ${e.result.text}`;
+                statusDiv.className = "status listening";
+            };
 
-        # Add widgets to layout
-        self.layout.addWidget(self.record_button)
-        self.layout.addWidget(self.question_label)
-        self.layout.addWidget(self.answer_label)
+            recognizer.recognized = async (s, e) => {
+                if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
+                    statusDiv.className = "status";
+                    resultDiv.innerHTML = `Processing: ${e.result.text}`;
+                    
+                    try {
+                        const response = await fetch('/ask', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ question: e.result.text })
+                        });
+                        
+                        const data = await response.json();
+                        resultDiv.innerHTML = `
+                            <strong>Question:</strong> ${e.result.text}<br>
+                            <strong>Answer:</strong> ${data.answer || data.error}
+                        `;
+                    } catch (error) {
+                        resultDiv.innerHTML = `Error: ${error.message}`;
+                    }
+                }
+            };
 
-    def handle_record(self):
-        """Handles recording via microphone and converting speech to text."""
-        # Create a speech configuration
-        speech_config = speechsdk.SpeechConfig(
-            subscription=AZURE_SPEECH_KEY,
-            region=AZURE_SERVICE_REGION
-        )
+            recognizer.startContinuousRecognitionAsync();
+        }
 
-        # Set up the recognizer
-        audio_config = speechsdk.AudioConfig(use_default_microphone=True)
-        speech_recognizer = speechsdk.SpeechRecognizer(
-            speech_config=speech_config,
-            audio_config=audio_config
-        )
+        recordButton.addEventListener('click', () => {
+            if (recordButton.textContent === "Start Recording") {
+                recordButton.textContent = "Stop Recording";
+                startRecognition();
+            } else {
+                recordButton.textContent = "Start Recording";
+                recognizer.stopContinuousRecognitionAsync();
+            }
+        });
+    </script>
+</body>
+</html>
+"""
 
-        # Start speech recognition
-        self.question_label.setText("Question: (listening...)")
-        self.answer_label.setText("Answer:")
+@app.route("/voice")
+def voice_interface():
+    return render_template_string(
+        HTML_TEMPLATE,
+        speech_key=AZURE_SPEECH_KEY,
+        speech_region=AZURE_SERVICE_REGION
+    )
 
-        result = speech_recognizer.recognize_once_async().get()
-
-        if result.reason == speechsdk.ResultReason.RecognizedSpeech:
-            recognized_text = result.text
-            self.question_label.setText(f"Question: {recognized_text}")
-
-            # Send the recognized text to Ask_Question from ask_func.py
-            answer = Ask_Question(recognized_text)
-
-            # Display the answer
-            self.answer_label.setText(f"Answer: {answer}")
-
-        elif result.reason == speechsdk.ResultReason.NoMatch:
-            self.question_label.setText("Question: (No speech could be recognized)")
-        elif result.reason == speechsdk.ResultReason.Canceled:
-            cancellation_details = result.cancellation_details
-            self.question_label.setText(f"Question: (Canceled: {cancellation_details.reason})")
-
-
-def main():
-    app = QApplication(sys.argv)
-    window = VoiceApp()
-    window.show()
-    sys.exit(app.exec_())
-
+@app.route("/ask", methods=["POST"])
+def handle_question():
+    try:
+        data = request.json
+        answer = Ask_Question(data["question"])
+        return jsonify({"answer": answer})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    main()
+    app.run(ssl_context='adhoc', host='0.0.0.0', port=443)
