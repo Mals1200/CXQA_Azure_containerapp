@@ -1,36 +1,29 @@
-version: '3.8'
+# Use the official Python image as the base
+FROM python:3.9-slim
 
-services:
-  # Original Bot Service
-  main-bot:
-    build: .
-    ports:
-      - "3000:80"  # Original bot on port 3000
-    environment:
-      - MICROSOFT_APP_ID=OLD_APP_ID_HERE
-      - MICROSOFT_APP_PASSWORD=OLD_APP_PASSWORD_HERE
-      - FLASK_ENV=production
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
-  # New Voice Interface
-  voice-bot:
-    build: .
-    ports:
-      - "3001:8080"  # Voice interface on port 3001
-    command: gunicorn app_voice:app --bind 0.0.0.0:8080 --workers 2
-    environment:
-      - SPEECH_KEY=DASZPVLJFKpMzpbXDFkAuCQwDMZTHlHM4IehdaGlyapdHIKTqrQQWBCACvRgFU3vAAAAwKCQsfg
-      - BOT_ENDPOINT=http://main-bot:80/ask
+# Set working directory
+WORKDIR /app
 
-  # Reverse Proxy with SSL
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf
-      - ./certbot/conf:/etc/letsencrypt
-      - ./certbot/www:/var/www/certbot
-    depends_on:
-      - main-bot
-      - voice-bot
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy dependency file separately to leverage Docker caching
+COPY requirements.txt .
+
+#  Install dependencies with no-cache to prevent conflicts
+RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+#  Ensure the container exposes the correct port
+EXPOSE 80
+
+#  Start Gunicorn on port 80
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:80", "--workers", "4"]
