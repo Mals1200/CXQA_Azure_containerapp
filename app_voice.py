@@ -5,15 +5,15 @@ from ask_func import Ask_Question
 
 app = Flask(__name__)
 
-# Retrieve the same Azure Bot credentials used in app.py
+# Retrieve Azure Bot Service credentials from environment variables
 MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
 MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 
-# Azure Speech Credentials (Use ENV variables for security)
+# Retrieve Azure Speech credentials
 SPEECH_KEY = os.environ.get("AZURE_SPEECH_KEY", "YOUR_SPEECH_KEY_HERE")
 SPEECH_REGION = os.environ.get("AZURE_SPEECH_REGION", "eastus")
 
-# Simple HTML UI for voice interaction
+# HTML template with recording UI
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
