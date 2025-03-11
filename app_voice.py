@@ -1,23 +1,21 @@
 import os
 from flask import Flask, request, render_template_string
 import azure.cognitiveservices.speech as speechsdk
-# Import your Ask_Question function
 from ask_func import Ask_Question
 
 app = Flask(__name__)
 
-# =========================
+# ===================================
 # Azure Speech Credentials
-# =========================
+# (Replace with your actual resource info)
+# ===================================
 SPEECH_KEY = "DRk2PVURFbNIpb3OtRaLzOklMME1hIPhMI4fHhBxX0jwpdIHR7qtJQQJ99BCACYeBjFXJ3w3AAAYACOGIdjJ"
 SPEECH_REGION = "eastus"
 SPEECH_ENDPOINT = "https://eastus.api.cognitive.microsoft.com/"
 
-# =========================
-# HTML template
-# =========================
-# This template includes a button to start/stop recording using the MediaRecorder API.
-# It then sends the audio to the server for transcription and displays the recognized text + answer.
+# ===================================
+# Simple HTML + JS template
+# ===================================
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -29,6 +27,7 @@ HTML_TEMPLATE = """
     <button id="recordBtn" onclick="toggleRecording()">Start Recording</button>
     <p id="status">Status: Idle</p>
 
+    <!-- We'll POST an audio file to the same /voice endpoint -->
     <form id="uploadForm" method="POST" enctype="multipart/form-data" style="display:none;">
         <input type="file" name="audio_data" id="audioFile" />
     </form>
@@ -70,18 +69,18 @@ function startRecording() {
                 // Convert blob to File
                 const file = new File([audioBlob], "recording.wav", { type: 'audio/wav' });
 
-                // Create FormData and append
+                // Create FormData and append the file
                 const formData = new FormData();
                 formData.append('audio_data', file);
 
-                // Send the POST request
+                // Send the POST request to /voice
                 fetch('/voice', {
                     method: 'POST',
                     body: formData
                 })
                 .then(response => response.text())
                 .then(html => {
-                    // Replace the entire body with new HTML (quick way).
+                    // Replace the entire page with the newly rendered HTML
                     document.open();
                     document.write(html);
                     document.close();
@@ -92,6 +91,7 @@ function startRecording() {
                 });
             };
 
+            // Start recording
             mediaRecorder.start();
         })
         .catch(error => {
@@ -113,37 +113,43 @@ function stopRecording() {
 
 @app.route('/voice', methods=['GET', 'POST'])
 def voice_assistant():
+    """
+    GET  -> Returns the HTML UI
+    POST -> Receives audio file, calls Azure Speech, calls Ask_Question, renders updated UI
+    """
     question = None
     answer = None
 
     if request.method == 'POST':
-        # Handle uploaded audio
+        # If there's an uploaded file 'audio_data'
         if 'audio_data' in request.files:
             audio_file = request.files['audio_data']
             temp_path = "temp.wav"
             audio_file.save(temp_path)
 
-            # Setup Azure Speech
+            # Configure Azure Speech
             speech_config = speechsdk.SpeechConfig(subscription=SPEECH_KEY, endpoint=SPEECH_ENDPOINT)
-            # You could also do: speech_config = speechsdk.SpeechConfig(subscription=SPEECH_KEY, region=SPEECH_REGION)
+            # or: speechsdk.SpeechConfig(subscription=SPEECH_KEY, region=SPEECH_REGION)
             audio_input = speechsdk.AudioConfig(filename=temp_path)
-            speech_recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_input)
+            recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_input)
 
-            # Recognize once
-            result = speech_recognizer.recognize_once_async().get()
+            # Recognize speech (synchronous call)
+            result = recognizer.recognize_once_async().get()
             if result.reason == speechsdk.ResultReason.RecognizedSpeech:
                 question = result.text
-                # Call your custom Q&A function
-                answer = Ask_Question(question)
+                # Call your Q&A function from ask_func.py
+                ans_gen = Ask_Question(question)
+                answer = "".join(ans_gen)
             else:
                 question = "No speech recognized or an error occurred."
                 answer = ""
 
-            # Clean up temp file if you like
+            # Clean up temp audio
             os.remove(temp_path)
 
+    # On GET or after POST, render the template with the question/answer
     return render_template_string(HTML_TEMPLATE, question=question, answer=answer)
 
 if __name__ == "__main__":
-    # IMPORTANT: If you’re running this standalone, you can do:
-    app.run(host='0.0.0.0', port=3978, debug=True)
+    # Run this on a different port so it doesn't clash with your main bot on port 80
+    app.run(host="0.0.0.0", port=3979, debug=True)
