@@ -632,7 +632,12 @@ def agent_answer(user_question):
    # Ensure question is not empty or just whitespace
     user_question = user_question.strip()
     if not user_question:
-        return "Hellooo! It looks like you didn’t include a question. How can I help you today?"
+       result = (
+          "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n"
+          "- To reset the conversation type 'restart chat'.\n"
+          "- To generate Slides, Charts or Document, type 'export followed by your requirements."
+            )
+        return result
        
     # Check for repeated question in cache
     if user_question in tool_cache:
@@ -642,7 +647,7 @@ def agent_answer(user_question):
     # Quick greeting check
     if is_entirely_greeting_or_punc(user_question.strip()):
         # Return short greeting response
-        if len(chat_history) < 4:
+        if len(chat_history) < 2:
             result = (
                 "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n"
                 "- To reset the conversation type 'restart chat'.\n"
