@@ -18,13 +18,13 @@ def Call_PPT(latest_question, latest_answer, chat_history, instructions):
     from pptx.util import Pt
     from pptx.dml.color import RGBColor as PPTRGBColor
     from pptx.enum.text import PP_ALIGN
-
+    
     ##################################################
     # (A) IMPROVED AZURE OPENAI CALL
     ##################################################
     def generate_slide_content():
         chat_history_str = str(chat_history)
-
+        
         ppt_prompt = f"""You are a PowerPoint presentation expert. Use this information to create slides:
 Rules:
 1. Use ONLY the provided information
@@ -59,7 +59,7 @@ Data:
             response.raise_for_status()
             result = response.json()
             return result['choices'][0]['message']['content'].strip()
-
+        
         except Exception as e:
             return f"API_ERROR: {str(e)}"
 
@@ -67,7 +67,7 @@ Data:
     # (B) ROBUST CONTENT HANDLING
     ##################################################
     slides_text = generate_slide_content()
-
+    
     # Handle error cases
     if slides_text.startswith("API_ERROR:"):
         return f"OpenAI API Error: {slides_text[10:]}"
@@ -85,16 +85,16 @@ Data:
         BG_COLOR = PPTRGBColor(234, 215, 194)  # #EAD7C2
         TEXT_COLOR = PPTRGBColor(193, 114, 80) # #C17250
         FONT_NAME = "Cairo"
-
+        
         for slide_content in slides_text.split('\n\n'):
             lines = [line.strip() for line in slide_content.split('\n') if line.strip()]
             if not lines:
                 continue
-
+                
             slide = prs.slides.add_slide(prs.slide_layouts[6])
             slide.background.fill.solid()
             slide.background.fill.fore_color.rgb = BG_COLOR
-
+            
             # Title
             title_box = slide.shapes.add_textbox(Pt(50), Pt(50), prs.slide_width - Pt(100), Pt(60))
             title_frame = title_box.text_frame
@@ -104,7 +104,7 @@ Data:
                 paragraph.font.name = FONT_NAME
                 paragraph.font.size = Pt(36)
                 paragraph.alignment = PP_ALIGN.CENTER
-
+                
             # Bullets
             if len(lines) > 1:
                 content_box = slide.shapes.add_textbox(Pt(100), Pt(150), prs.slide_width - Pt(200), prs.slide_height - Pt(250))
@@ -139,7 +139,7 @@ Data:
         ).get_blob_client(
             f"presentation_{datetime.now().strftime('%Y%m%d%H%M%S')}.pptx"
         )
-
+        
         blob_client.upload_blob(ppt_buffer, overwrite=True)
         download_url = (
             f"{blob_config['account_url']}/"
@@ -151,7 +151,8 @@ Data:
         threading.Timer(300, blob_client.delete_blob).start()
 
         # SINGLE-LINE RETURN
-        return download_url
+        export_type = "slides"
+        return f"Here is your generated {export_type}:\n{download_url}"
 
     except Exception as e:
         return f"Presentation Generation Error: {str(e)}"
@@ -184,7 +185,7 @@ def Call_CHART(latest_question, latest_answer, chat_history, instructions):
     ##################################################
     def generate_chart_data():
         chat_history_str = str(chat_history)
-
+        
         chart_prompt = f"""You are a converter that outputs ONLY valid JSON.
 Do not include any explanations, code fences, or additional text.
 Either return exactly one valid JSON object like:
@@ -353,7 +354,8 @@ Data:
         threading.Timer(300, blob_client.delete_blob).start()
 
         # SINGLE-LINE RETURN
-        return download_url
+        export_type = "Chart"
+        return f"Here is your generated {export_type}:\n{download_url}"
 
     except Exception as e:
         return f"Chart Generation Error: {str(e)}"
@@ -372,7 +374,7 @@ def Call_DOC(latest_question, latest_answer, chat_history, instructions_doc):
 
     def generate_doc_content():
         chat_history_str = str(chat_history)
-
+        
         doc_prompt = f"""You are a professional document writer. Use this information to create content:
 Rules:
 1. Use ONLY the provided information
@@ -421,7 +423,7 @@ Data:
 
     try:
         doc = Document()
-
+        
         BG_COLOR_HEX = "EAD7C2"
         TITLE_COLOR = DocxRGBColor(193, 114, 80)
         BODY_COLOR = DocxRGBColor(0, 0, 0)
@@ -480,7 +482,7 @@ Data:
         ).get_blob_client(
             f"document_{datetime.now().strftime('%Y%m%d%H%M%S')}.docx"
         )
-
+        
         blob_client.upload_blob(doc_buffer, overwrite=True)
         download_url = (
             f"{blob_config['account_url']}/"
@@ -492,7 +494,8 @@ Data:
         threading.Timer(300, blob_client.delete_blob).start()
 
         # SINGLE-LINE RETURN
-        return download_url
+        export_type = "Document"
+        return f"Here is your generated {export_type}:\n{download_url}"
 
     except Exception as e:
         return f"Document Generation Error: {str(e)}"
@@ -506,50 +509,43 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
     import re
 
     def generate_ppt():
-        yield "⏳ Generating PowerPoint presentation...\n"
-        result = Call_PPT(latest_question, latest_answer, chat_history, instructions)
-        yield f"✅ PowerPoint created: {result}\n"
+        return Call_PPT(latest_question, latest_answer, chat_history, instructions)
 
     def generate_doc():
-        yield "⏳ Generating Word document...\n"
-        result = Call_DOC(latest_question, latest_answer, chat_history, instructions)
-        yield f"✅ Document created: {result}\n"
+        return Call_DOC(latest_question, latest_answer, chat_history, instructions)
 
     def generate_chart():
-        yield "⏳ Generating chart...\n"
-        result = Call_CHART(latest_question, latest_answer, chat_history, instructions)
-        yield f"✅ Chart created: {result}\n"
+        return Call_CHART(latest_question, latest_answer, chat_history, instructions)
 
     instructions_lower = instructions.lower()
 
     # PPT?
     if re.search(
-        r"\b(" 
-        r"presentation[s]?|slide[s]?|slideshow[s]?|" 
-        r"power[-\s]?point[s]?|deck[s]?|pptx?|keynote|" 
-        r"pitch[-\s]?deck[s]?|talk[-\s]?deck[s]?|slide[-\s]?deck[s]?|" 
-        r"seminar[s]?|webinar[s]?|conference[-\s]?slides?|training[-\s]?material[s]?|" 
-        r"meeting[-\s]?slides?|workshop[-\s]?slides?|lecture[-\s]?slides?|" 
-        r"presenation[s]?|presentaion[s]?|slideset[s]?|deck[-\s]?presentation[s]?" 
-        r")\b"
-        , instructions_lower, re.IGNORECASE
+        r"\b("
+        r"presentation[s]?|slide[s]?|slideshow[s]?|"
+        r"power[-\s]?point|deck[s]?|pptx?|keynote|"
+        r"pitch[-\s]?deck|talk[-\s]?deck|slide[-\s]?deck|"
+        r"seminar|webinar|conference[-\s]?slides|training[-\s]?materials|"
+        r"meeting[-\s]?slides|workshop[-\s]?slides|lecture[-\s]?slides|"
+        r"presenation|presentaion"
+        r")\b", instructions_lower, re.IGNORECASE
     ):
-        yield from generate_ppt()
-        return
+        return generate_ppt()
+
     # Chart?
     elif re.search(
-                r"\b("
-                r"chart[s]?|graph[s]?|diagram[s]?|"
-                r"bar[-\s]?chart[s]?|line[-\s]?chart[s]?|pie[-\s]?chart[s]?|"
-                r"scatter[-\s]?plot[s]?|trend[-\s]?analysis|visualization[s]?|"
-                r"infographic[s]?|data[-\s]?graph[s]?|report[-\s]?chart[s]?|"
-                r"heatmap[s]?|time[-\s]?series|distribution[-\s]?plot|"
-                r"statistical[-\s]?graph[s]?|data[-\s]?plot[s]?|"
-                r"char|grph|daigram"
-                r")\b", instructions_lower, re.IGNORECASE
+        r"\b("
+        r"chart[s]?|graph[s]?|diagram[s]?|"
+        r"bar[-\s]?chart[s]?|line[-\s]?chart[s]?|pie[-\s]?chart[s]?|"
+        r"scatter[-\s]?plot[s]?|trend[-\s]?analysis|visualization[s]?|"
+        r"infographic[s]?|data[-\s]?graph[s]?|report[-\s]?chart[s]?|"
+        r"heatmap[s]?|time[-\s]?series|distribution[-\s]?plot|"
+        r"statistical[-\s]?graph[s]?|data[-\s]?plot[s]?|"
+        r"char|grph|daigram"
+        r")\b", instructions_lower, re.IGNORECASE
     ):
-        yield from generate_chart()
-        return
+        return generate_chart()
+
     # Document?
     elif re.search(
         r"\b("
@@ -563,7 +559,7 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
         r"documnt|repot|worddoc|proposel"
         r")\b", instructions_lower, re.IGNORECASE
     ):
-        yield from generate_doc()
-        return
+        return generate_doc()
+
     # Fallback
-    yield "Not enough Information to perform export."
+    return "Not enough Information to perform export."
