@@ -629,12 +629,15 @@ def is_entirely_greeting_or_punc(phrase):
 # Main function to produce answer
 #########################################################################
 def agent_answer(user_question):
+   # Ensure question is not empty or just whitespace
+    user_question = user_question.strip()
+    if not user_question:
+        return "Hellooo! It looks like you didn’t include a question. How can I help you today?"
+       
     # Check for repeated question in cache
     if user_question in tool_cache:
         return tool_cache[user_question]
        
-   if (user_question == "") or (user_question == " "):
-      result = "Heloooooooooooo!"
 
     # Quick greeting check
     if is_entirely_greeting_or_punc(user_question.strip()):
