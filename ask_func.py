@@ -640,7 +640,7 @@ def agent_answer(user_question):
     # Quick greeting check
     if is_entirely_greeting_or_punc(user_question.strip()):
         # Return short greeting response
-        if len(chat_history) < 1:
+        if len(chat_history) < 2:
             result = (
                 "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n"
                 "- To reset the conversation type 'restart chat'.\n"
