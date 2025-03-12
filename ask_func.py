@@ -13,6 +13,7 @@ from azure.storage.blob import BlobServiceClient
 from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
 import csv
+
 # For retries
 from tenacity import retry, stop_after_attempt, wait_fixed
 
@@ -627,25 +628,19 @@ def is_entirely_greeting_or_punc(phrase):
 # Main function to produce answer
 #########################################################################
 def agent_answer(user_question):
-   # # Ensure question is not empty or just whitespace
-   #  user_question = user_question.strip()
-   #  if not user_question:
-   #     result = (
-   #        "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n"
-   #        "- To reset the conversation type 'restart chat'.\n"
-   #        "- To generate Slides, Charts or Document, type 'export followed by your requirements."
-   #          )
-   #      return result
-       
+    
+    # If user_question is empty or just whitespace
+    if not user_question.strip():
+        return "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+        
     # Check for repeated question in cache
     if user_question in tool_cache:
         return tool_cache[user_question]
-       
 
     # Quick greeting check
     if is_entirely_greeting_or_punc(user_question.strip()):
         # Return short greeting response
-        if len(chat_history) < 2:
+        if len(chat_history) < 1:
             result = (
                 "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n"
                 "- To reset the conversation type 'restart chat'.\n"
@@ -757,4 +752,3 @@ def Ask_Question(question):
 
     # 5) Return the final answer
     yield answer_text
-
