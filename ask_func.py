@@ -644,13 +644,13 @@ def agent_answer(user_question):
             result = (
                 "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n"
                 "- To reset the conversation type 'restart chat'.\n"
-                "- To generate Slides, Charts or Document, type 'export followed by your requirements."
+                "- To generate Slides, Charts or Documents, type 'export <followed by your requirements>'."
             )
         else:
             result = (
                 "Hello! How may I assist you?\n"
                 "- To reset the conversation type 'restart chat'.\n"
-                "- To generate Slides, Charts or Document, type 'export followed by your requirements."
+                "- To generate Slides, Charts or Documents, type 'export <followed by your requirements>'."
             )
         tool_cache[user_question] = result
         return result
