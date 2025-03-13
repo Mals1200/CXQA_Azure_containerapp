@@ -1,0 +1,60 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.12/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.12",
+  "version": "1.0.0",
+  
+  // Must be a valid GUID; here it matches your Azure Bot's App ID.
+  "id": "967196cb-96e9-4413-a791-00a0a2f42877",
+  
+  "packageName": "com.cxqa.bot",
+  "developer": {
+    "name": "DGCL",
+    "websiteUrl": "https://www.contoso.com",
+    "privacyUrl": "https://www.contoso.com/privacy",
+    "termsOfUseUrl": "https://www.contoso.com/termsofuse"
+  },
+  "name": {
+    "short": "CXQA Bot Demo",
+    "full": "CXQA AI Assistant Demo"
+  },
+  "description": {
+    "short": "AI Assistant for CXQA Data Analysis",
+    "full": "CXQA AI Assistant is designed to help users query and analyze CXQA-related data. It offers AI-driven insights from both indexed and tabular data sources. Users can interact with the bot to ask questions and receive detailed, data-driven responses, empowering them to make informed decisions in real time."
+  },
+  "icons": {
+    // Must match the file names in your .zip
+    "outline": "outline.png",
+    "color": "color.png"
+  },
+  "accentColor": "#eed9c4",
+
+  "bots": [
+    {
+      // Must match your Bot's Microsoft (MSA) App ID from Azure
+      "botId": "967196cb-96e9-4413-a791-00a0a2f42877",
+      "scopes": ["personal", "team"],
+      "isNotificationOnly": false,
+      "commandLists": [
+        {
+          "scopes": ["personal"],
+          "commands": [
+            {
+              "title": "Ask a question",
+              "description": "Ask your CXQA-related question"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+
+  "permissions": [
+    "identity",
+    "messageTeamMembers"
+  ],
+
+  "validDomains": [
+    "cxqacontainerapp.bluesmoke-a2e4a52c.germanywestcentral.azurecontainerapps.io",
+    "token.botframework.com"
+  ]
+}

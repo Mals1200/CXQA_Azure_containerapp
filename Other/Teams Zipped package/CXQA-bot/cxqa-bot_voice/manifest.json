@@ -1,0 +1,49 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.14/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.14",
+  "version": "2.1.0",
+  "id": "967196cb-96e9-4413-a791-00a0a2f42877",
+  "packageName": "com.voicebot.assistant",
+  
+  "developer": {
+    "name": "Your Company Name",
+    "websiteUrl": "https://cxgacontainerapp.com",
+    "privacyUrl": "https://cxgacontainerapp.com/privacy",
+    "termsOfUseUrl": "https://cxgacontainerapp.com/terms"
+  },
+
+  "name": {
+    "short": "CXQA Voice",
+    "full": "CXQA Voice Assistant"
+  },
+  
+  "description": {
+    "short": "Voice-enabled analytics",
+    "full": "Ask questions verbally and get answers from CXQA data systems."
+  },
+
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+
+  "accentColor": "#2D7D9A",
+
+  "staticTabs": [{
+    "entityId": "voiceTab",
+    "name": "Voice Assistant",
+    "contentUrl": "https://cxgacontainerapp.com/voice",
+    "websiteUrl": "https://cxgacontainerapp.com/voice",
+    "scopes": ["personal"]
+  }],
+
+  "validDomains": [
+    "cxgacontainerapp.com",
+    "token.botframework.com"
+  ],
+
+  "webApplicationInfo": {
+    "id": "6547f2e1-1234-5678-90ab-cdef01234567",
+    "resource": "api://cxgacontainerapp.com/6547f2e1-1234-5678-90ab-cdef01234567"
+  }
+}
