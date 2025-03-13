@@ -288,16 +288,16 @@ def tool_1_index_search(user_question, top_k=5):
     ADMIN_API_KEY = "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv"
 
     # 🔹 CHOOSE INDEX (Comment/Uncomment as needed)
-    INDEX_NAME = "vector-1741790186391-12-3-2025"  # ✅ Use new index
-    # INDEX_NAME = "cxqa-ind-v6"  # ✅ Use old index
+    # INDEX_NAME = "vector-1741790186391-12-3-2025"  # ✅ Use new index
+    INDEX_NAME = "cxqa-ind-v6"  # ✅ Use old index
 
     # 🔹 CHOOSE SEMANTIC CONFIGURATION (Comment/Uncomment as needed)
-    SEMANTIC_CONFIG_NAME = "vector-1741790186391-12-3-2025-semantic-configuration"  # ✅ Use for new index
-    # SEMANTIC_CONFIG_NAME = "azureml-default"  # ✅ Use for old index
+    # SEMANTIC_CONFIG_NAME = "vector-1741790186391-12-3-2025-semantic-configuration"  # ✅ Use for new index
+    SEMANTIC_CONFIG_NAME = "azureml-default"  # ✅ Use for old index
 
     # 🔹 CHOOSE CONTENT FIELD (Comment/Uncomment as needed)
-    CONTENT_FIELD = "chunk"  # ✅ Use for new index
-    # CONTENT_FIELD = "content"  # ✅ Use for old index
+    # CONTENT_FIELD = "chunk"  # ✅ Use for new index
+    CONTENT_FIELD = "content"  # ✅ Use for old index
 
     try:
         search_client = SearchClient(
