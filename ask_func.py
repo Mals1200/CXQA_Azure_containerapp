@@ -689,7 +689,7 @@ def agent_answer(user_question):
 #########################################################################
 # Public-facing function to handle Q&A and log
 #########################################################################
-def Ask_Question(question):
+def Ask_Question(question, user_email="anonymous"):
     """
     Top-level function:
     - If "export", do export (Call_Export from Export_Agent.py)
@@ -709,7 +709,6 @@ def Ask_Question(question):
         latest_answer = "No previous answer available."
         latest_question = "No previous question available."
         if len(chat_history) >= 2:
-            # Typically chat_history appends in order: [User: X, Assistant: Y, ...]
             latest_answer = chat_history[-1]
             latest_question = chat_history[-2]
         elif len(chat_history) == 1:
@@ -755,9 +754,11 @@ def Ask_Question(question):
     try:
         existing_data = blob_client.download_blob().readall().decode("utf-8")
         lines = existing_data.strip().split("\n")
+        # Make sure the CSV header is present
         if not lines or not lines[0].startswith("time,question,answer,user_id"):
             lines = ["time,question,answer,user_id"]
     except:
+        # If blob doesn't exist yet, create with CSV header
         lines = ["time,question,answer,user_id"]
 
     current_time = datetime.now().strftime("%H:%M:%S")
@@ -765,7 +766,7 @@ def Ask_Question(question):
         current_time,
         question.replace('"','""'),
         answer_text.replace('"','""'),
-        "anonymous"
+        user_email.replace('"','""')  # <-- Use user_email here
     ]
     lines.append(",".join(f'"{x}"' for x in row))
     new_csv_content = "\n".join(lines) + "\n"
