@@ -696,6 +696,7 @@ def Ask_Question(question, user_email="anonymous"):
     - If "restart chat", clear
     - Otherwise, normal Q&A logic
     Yields the final answer or export outcome.
+    Accepts 'user_email' to log the user's email in the CSV.
     """
     global chat_history
     q_lower = question.lower().strip()
@@ -754,11 +755,9 @@ def Ask_Question(question, user_email="anonymous"):
     try:
         existing_data = blob_client.download_blob().readall().decode("utf-8")
         lines = existing_data.strip().split("\n")
-        # Make sure the CSV header is present
         if not lines or not lines[0].startswith("time,question,answer,user_id"):
             lines = ["time,question,answer,user_id"]
     except:
-        # If blob doesn't exist yet, create with CSV header
         lines = ["time,question,answer,user_id"]
 
     current_time = datetime.now().strftime("%H:%M:%S")
@@ -766,7 +765,7 @@ def Ask_Question(question, user_email="anonymous"):
         current_time,
         question.replace('"','""'),
         answer_text.replace('"','""'),
-        user_email.replace('"','""')  # <-- Use user_email here
+        user_email.replace('"','""')  # <-- we log the user_email here
     ]
     lines.append(",".join(f'"{x}"' for x in row))
     new_csv_content = "\n".join(lines) + "\n"
