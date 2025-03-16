@@ -3,7 +3,10 @@ import asyncio
 from flask import Flask, request, jsonify, Response
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
 from botbuilder.schema import Activity
-from ask_func import Ask_Question, chat_history
+from ask_func import Ask_Question, chat_history  # updated ask_func, which logs user_email
+
+# 1) Import TeamsInfo to retrieve user emails
+from botbuilder.core.teams import TeamsInfo
 
 app = Flask(__name__)
 
@@ -21,17 +24,28 @@ def home():
 
 @app.route("/ask", methods=["POST"])
 def ask():
+    """
+    This route is for non-Teams usage.
+    If the caller provides 'user_email' in JSON, we will pass it to Ask_Question().
+    Otherwise default to 'anonymous'.
+    """
     data = request.get_json()
     if not data or "question" not in data:
         return jsonify({"error": 'Invalid request, "question" is required.'}), 400
-    question = data["question"]
 
-    ans_gen = Ask_Question(question)
+    question = data["question"]
+    # if they included a user_email, use it, else "anonymous"
+    user_email = data.get("user_email", "anonymous")
+
+    ans_gen = Ask_Question(question, user_email=user_email)
     answer_text = "".join(ans_gen)
     return jsonify({"answer": answer_text})
 
 @app.route("/api/messages", methods=["POST"])
 def messages():
+    """
+    This route is for Microsoft Teams messages.
+    """
     if "application/json" not in request.headers.get("Content-Type", ""):
         return Response(status=415)
 
@@ -57,15 +71,31 @@ async def _bot_logic(turn_context: TurnContext):
 
     user_message = turn_context.activity.text or ""
 
-    # 1) built-in Teams typing indicator (ephemeral)
-    typing_activity = Activity(type="typing")
-    await turn_context.send_activity(typing_activity)
+    # -----------------------------------------------------------
+    # 2) Retrieve the Teams user's email or default to "anonymous"
+    # -----------------------------------------------------------
+    user_email = "anonymous"
+    if turn_context.activity.channel_id == "msteams":
+        # Get the user's Teams ID
+        user_id = turn_context.activity.from_property.id
+        try:
+            # Attempt to get more info (including email) via TeamsInfo
+            member = await TeamsInfo.get_member(turn_context, user_id)
+            if member and member.email:
+                user_email = member.email
+            elif member and member.user_principal_name:
+                user_email = member.user_principal_name
+        except Exception as e:
+            # If we fail (permissions or otherwise), leave it as "anonymous"
+            print(f"Could not retrieve user email: {e}")
 
-    # get answer
-    ans_gen = Ask_Question(user_message)
+    # -----------------------------------------------------------
+    # 3) Pass user_email to Ask_Question so it gets logged
+    # -----------------------------------------------------------
+    ans_gen = Ask_Question(user_message, user_email=user_email)
     answer_text = "".join(ans_gen)
 
-    # update conversation history
+    # Update the conversation history
     conversation_histories[conversation_id] = ask_func.chat_history
 
     # If there's "Source:" in answer_text, parse out main answer, source line, and appended details if any
@@ -82,7 +112,7 @@ async def _bot_logic(turn_context: TurnContext):
         appended_details = ""
 
     if source_line:
-        # Hide both the source line and appended details behind the same toggle
+        # Hide the source line and appended details behind a toggle in an Adaptive Card
         body_blocks = [
             {
                 "type": "TextBlock",
@@ -133,7 +163,7 @@ async def _bot_logic(turn_context: TurnContext):
         )
         await turn_context.send_activity(message)
     else:
-        # No "Source:" line, just return the plain text
+        # If there's no "Source:", just send a normal text response
         await turn_context.send_activity(Activity(type="message", text=main_answer))
 
 if __name__ == "__main__":
