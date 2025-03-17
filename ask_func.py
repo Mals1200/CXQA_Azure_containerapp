@@ -682,64 +682,136 @@ def agent_answer(user_question):
     yield final_answer_with_source
 
 
+####################################################
+#         NEW HELPER FUNCTION: classify_topic      #
+####################################################
+def classify_topic(question, answer, recent_history):
+    """
+    Calls an LLM to classify the user's question+answer into one of the topics:
+    ["Policy", "SOP", "Report", "Analysis", "Exporting_file", "Other"].
+    Uses the last 4 messages of history as additional context.
+    Returns a single string that is exactly one of the allowed topics.
+    """
+    import logging
+    import requests
 
-def Ask_Question(question):
-    global chat_history
-    question_lower = question.lower().strip()
+    LLM_ENDPOINT = (
+        "https://cxqaazureaihub2358016269.openai.azure.com/"
+        "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
+    )
+    LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
 
-    if question_lower.startswith("export"):
-        from Export_Agent import Call_Export
+    system_prompt = """
+    You are a classification model. Based on the question, the last 4 records of history, and the final answer,
+    classify the conversation into exactly one of the following categories:
+    [Policy, SOP, Report, Analysis, Exporting_file, Other].
+    Respond ONLY with that single category name and nothing else.
+    """
 
-        instructions = question[6:].strip()
+    user_prompt = f"""
+    Question: {question}
+    Recent History: {recent_history}
+    Final Answer: {answer}
 
-        if len(chat_history) >= 2:
-            latest_question = chat_history[-1]
-            latest_answer = chat_history[-2]
-        else:
-            yield "Error: Not enough conversation history to perform export. Please ask at least one question first."
-            return
-        for message in Call_Export(
-            latest_question=latest_question,
-            latest_answer=latest_answer,
-            chat_history=chat_history,
-            instructions=instructions
-        ):
-            yield message 
-        return
+    Return only one topic from [Policy, SOP, Report, Analysis, Exporting_file, Other].
+    """
 
-    if question_lower == "restart chat":
-        chat_history = []
-        tool_cache.clear()
-        yield "The chat has been restarted."
-        return
-
-    greetings = ["hello", "hi", "hey", "good morning", "good afternoon", "good evening"]
-    if any(greet in question_lower for greet in greetings):
-        if len(chat_history) <= 1:
-            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?"
-        else:
-            yield "Hello! How may I assist you?"
-        return    
-
-    chat_history.append(f"User: {question}")
-
-    number_of_messages = 10
-    max_pairs = number_of_messages // 2
-    max_entries = max_pairs * 2
-
-    answer_collected = ""
+    headers = {"Content-Type": "application/json", "api-key": LLM_API_KEY}
+    payload = {
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "max_tokens": 20,
+        "temperature": 0
+    }
 
     try:
-        for token in agent_answer(question):
-            yield token
-            answer_collected += token
+        resp = requests.post(LLM_ENDPOINT, headers=headers, json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        choice_text = data["choices"][0]["message"].get("content", "").strip()
+        allowed_topics = ["Policy", "SOP", "Report", "Analysis", "Exporting_file", "Other"]
+        return choice_text if choice_text in allowed_topics else "Other"
     except Exception as e:
-        yield f"\n\n❌ Error occurred while generating the answer: {str(e)}"
-        return
+        logging.error(f"Error in classify_topic: {e}")
+        return "Other"
 
-    chat_history.append(f"Assistant: {answer_collected}")
-    chat_history = chat_history[-max_entries:]
 
+####################################################
+#         NEW HELPER FUNCTION: Log_Interaction     #
+####################################################
+def Log_Interaction(
+    question: str,
+    full_answer: str,
+    chat_history: list,
+    user_id: str,
+    index_dict=None,
+    python_dict=None
+):
+    """
+    Logs each interaction to a CSV in Azure Blob with the fields:
+      time, question, answer_text, source, source_material,
+      conversation_length, topic, user_id.
+
+    - answer_text: everything before 'Source:'
+    - source: one of [Python, Index, Index & Python, AI Generated]
+    - source_material: if Python => store the actual code;
+                      if Index => store the chunk(s);
+                      if both => concatenate them;
+                      else => 'N/A'.
+    - conversation_length: len(chat_history)
+    - topic: from classify_topic(...)
+    - user_id: the ID passed in
+    """
+    import re
+    import logging
+    from datetime import datetime
+    from azure.storage.blob import BlobServiceClient
+
+    if index_dict is None:
+        index_dict = {}
+    if python_dict is None:
+        python_dict = {}
+
+    # 1) Parse out answer_text and source
+    match = re.search(r"(.*?)(?:\s*Source:\s*)(.*)$", full_answer, flags=re.IGNORECASE | re.DOTALL)
+    if match:
+        answer_text = match.group(1).strip()
+        found_source = match.group(2).strip()
+        if found_source.lower().startswith("index & python"):
+            source = "Index & Python"
+        elif found_source.lower().startswith("index"):
+            source = "Index"
+        elif found_source.lower().startswith("python"):
+            source = "Python"
+        else:
+            source = "AI Generated"
+    else:
+        answer_text = full_answer
+        source = "AI Generated"
+
+    # 2) source_material now uses actual code / retrieved chunks
+    if source == "Index & Python":
+        source_material = f"INDEX CHUNKS:\n{index_dict.get('top_k', '')}\n\nPYTHON CODE:\n{python_dict.get('code', '')}"
+    elif source == "Index":
+        source_material = index_dict.get("top_k", "")
+    elif source == "Python":
+        source_material = python_dict.get("code", "")
+    else:
+        source_material = "N/A"
+
+    # 3) conversation_length
+    conversation_length = len(chat_history)
+
+    # 4) topic classification
+    recent_history = chat_history[-4:]
+    topic = classify_topic(question, full_answer, recent_history)
+
+    # 5) time
+    current_time = datetime.now().strftime("%H:%M:%S")
+
+    # 6) Write to Azure Blob CSV
     account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
     sas_token = (
         "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
@@ -747,6 +819,7 @@ def Ask_Question(question):
         "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
     )
     container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
+
     blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
     container_client = blob_service_client.get_container_client(container_name)
 
@@ -759,19 +832,131 @@ def Ask_Question(question):
     try:
         existing_data = blob_client.download_blob().readall().decode("utf-8")
         lines = existing_data.strip().split("\n")
-        if not lines or not lines[0].startswith("time,question,answer,user_id"):
-            lines = ["time,question,answer,user_id"]
+        if not lines or not lines[0].startswith(
+            "time,question,answer_text,source,source_material,conversation_length,topic,user_id"
+        ):
+            lines = ["time,question,answer_text,source,source_material,conversation_length,topic,user_id"]
     except:
-        lines = ["time,question,answer,user_id"]
+        lines = ["time,question,answer_text,source,source_material,conversation_length,topic,user_id"]
 
-    current_time = datetime.now().strftime("%H:%M:%S")
+    def esc_csv(val):
+        return val.replace('"', '""')
+
     row = [
         current_time,
-        question.replace('"', '""'),
-        answer_collected.replace('"', '""'),
-        "anonymous"
+        esc_csv(question),
+        esc_csv(answer_text),
+        esc_csv(source),
+        esc_csv(source_material),
+        str(conversation_length),
+        esc_csv(topic),
+        esc_csv(user_id),
     ]
     lines.append(",".join(f'"{x}"' for x in row))
-
     new_csv_content = "\n".join(lines) + "\n"
+
     blob_client.upload_blob(new_csv_content, overwrite=True)
+
+
+####################################################
+#          UPDATED FUNCTION: Ask_Question          #
+####################################################
+def Ask_Question(question, user_id="anonymous"):
+    """
+    Main user-facing function that:
+     1) generates an answer by calling agent_answer
+     2) logs the interaction via Log_Interaction
+     3) references the cached tool results to store code/chunks in logs
+    """
+    global chat_history
+    global tool_cache
+
+    question_lower = question.lower().strip()
+
+    # Handle "export" command
+    if question_lower.startswith("export"):
+        from Export_Agent import Call_Export
+        if len(chat_history) >= 2:
+            latest_question = chat_history[-1]
+            latest_answer = chat_history[-2]
+        else:
+            yield "Error: Not enough conversation history to perform export. Please ask at least one question first."
+            return
+        for message in Call_Export(
+            latest_question=latest_question,
+            latest_answer=latest_answer,
+            chat_history=chat_history,
+            instructions=question[6:].strip()
+        ):
+            yield message
+        return
+
+    # Handle "restart chat" command
+    if question_lower == "restart chat":
+        chat_history = []
+        tool_cache.clear()
+        yield "The chat has been restarted."
+        return
+
+    # Simple greeting responses
+    greetings = ["hello", "hi", "hey", "good morning", "good afternoon", "good evening"]
+    if any(greet in question_lower for greet in greetings):
+        if len(chat_history) <= 1:
+            yield (
+                "Hello! I'm The CXQA AI Assistant. I'm here to help you. "
+                "What would you like to know today?\n"
+                "- To reset the conversation type 'restart chat'.\n"
+                "- To generate Slides, Charts or Document, type 'export' followed by your requirements."
+            )
+        else:
+            yield (
+                "Hello! How may I assist you?\n"
+                "-To reset the conversation type 'restart chat'.\n"
+                "-To generate Slides, Charts or Document, type 'export' followed by your requirements."
+            )
+        return
+
+    # Add user question to chat history
+    chat_history.append(f"User: {question}")
+
+    number_of_messages = 10
+    max_pairs = number_of_messages // 2
+    max_entries = max_pairs * 2
+
+    answer_collected = ""
+
+    # Generate the answer by calling agent_answer (which yields tokens)
+    try:
+        for token in agent_answer(question):
+            yield token
+            answer_collected += token
+    except Exception as e:
+        yield f"\n\n❌ Error occurred while generating the answer: {str(e)}"
+        return
+
+    # Add assistant's final answer to chat history
+    chat_history.append(f"Assistant: {answer_collected}")
+
+    # Truncate history to avoid it growing too large
+    chat_history = chat_history[-max_entries:]
+
+    # --------------------------------------------------
+    # Pull the index_dict and python_dict from the cache
+    # --------------------------------------------------
+    cache_key = question_lower  # or use question_lower + <some other key if needed>
+    if cache_key in tool_cache:
+        index_dict, python_dict, _ = tool_cache[cache_key]
+    else:
+        index_dict, python_dict = {}, {}
+
+    # --------------------------------------------------
+    # Log the interaction with the actual code/chunks
+    # --------------------------------------------------
+    Log_Interaction(
+        question=question,
+        full_answer=answer_collected,
+        chat_history=chat_history,
+        user_id=user_id,
+        index_dict=index_dict,
+        python_dict=python_dict
+    )
