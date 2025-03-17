@@ -718,13 +718,14 @@ def agent_answer(user_question):
 #########################################################################
 # Public-facing function to handle Q&A and log
 #########################################################################
-def Ask_Question(question):
+def Ask_Question(question, user_email="anonymous"):
     """
     Top-level function:
     - If "export", do export (Call_Export from Export_Agent.py)
     - If "restart chat", clear
     - Otherwise, normal Q&A logic
     Yields the final answer or export outcome.
+    Accepts a user_email parameter for logging.
     """
     global chat_history
     q_lower = question.lower().strip()
@@ -749,7 +750,13 @@ def Ask_Question(question):
         return
 
     # 2) Handle "restart chat"
-    if (q_lower == "restart chat") or (q_lower == "reset chat") or (q_lower == "restart the chat") or (q_lower == "reset the chat") or (q_lower == "start over"):
+    if (
+        q_lower == "restart chat"
+        or q_lower == "reset chat"
+        or q_lower == "restart the chat"
+        or q_lower == "reset the chat"
+        or q_lower == "start over"
+    ):
         chat_history.clear()
         tool_cache.clear()
         yield "The chat has been restarted."
@@ -794,7 +801,7 @@ def Ask_Question(question):
         current_time,
         question.replace('"','""'),
         answer_text.replace('"','""'),
-        "anonymous"
+        user_email.replace('"','""')  # Store the actual user_email instead of "anonymous"
     ]
     lines.append(",".join(f'"{x}"' for x in row))
     new_csv_content = "\n".join(lines) + "\n"
@@ -802,3 +809,4 @@ def Ask_Question(question):
 
     # 5) Return the final answer
     yield answer_text
+
