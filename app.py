@@ -1,27 +1,32 @@
 import os
 import asyncio
 from flask import Flask, request, jsonify, Response
-from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
-from botbuilder.schema import Activity
-from ask_func import Ask_Question, chat_history  # updated ask_func, which logs user_email
 
-# 1) Import TeamsInfo to retrieve user emails
+from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
 from botbuilder.core.teams import TeamsInfo
+from botbuilder.schema import Activity, ActivityTypes
+
+# Import your ask_func with Ask_Question and chat_history
+from ask_func import Ask_Question, chat_history
 
 app = Flask(__name__)
 
+# Retrieve Microsoft Bot credentials from environment
 MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
 MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 
 adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
 
+# A dictionary to store conversation histories keyed by conversation_id
 conversation_histories = {}
 
+# 1) Health check route
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({"message": "API is running!"}), 200
 
+# 2) Non-Teams usage route
 @app.route("/ask", methods=["POST"])
 def ask():
     """
@@ -34,17 +39,18 @@ def ask():
         return jsonify({"error": 'Invalid request, "question" is required.'}), 400
 
     question = data["question"]
-    # if they included a user_email, use it, else "anonymous"
     user_email = data.get("user_email", "anonymous")
 
+    # Call your Ask_Question function
     ans_gen = Ask_Question(question, user_email=user_email)
     answer_text = "".join(ans_gen)
     return jsonify({"answer": answer_text})
 
+# 3) Microsoft Teams route for incoming messages
 @app.route("/api/messages", methods=["POST"])
 def messages():
     """
-    This route is for Microsoft Teams messages.
+    This route receives incoming Activities from Microsoft Teams.
     """
     if "application/json" not in request.headers.get("Content-Type", ""):
         return Response(status=415)
@@ -62,46 +68,62 @@ def messages():
     return Response(status=200)
 
 async def _bot_logic(turn_context: TurnContext):
+    """
+    The main logic for processing an incoming Teams message.
+    """
+    # Debug: confirm we reached this function
+    print("[DEBUG] _bot_logic invoked!")
+
+    # We track each conversation by ID
     conversation_id = turn_context.activity.conversation.id
     if conversation_id not in conversation_histories:
         conversation_histories[conversation_id] = []
 
+    # Sync chat_history in ask_func with this conversation's history
     import ask_func
     ask_func.chat_history = conversation_histories[conversation_id]
 
     user_message = turn_context.activity.text or ""
+    print(f"[DEBUG] user_message: {user_message}")
 
     # -----------------------------------------------------------
-    # 2) Retrieve the Teams user's email or default to "anonymous"
+    # 1) Retrieve the Teams user's email or default to "anonymous"
     # -----------------------------------------------------------
     user_email = "anonymous"
     if turn_context.activity.channel_id == "msteams":
-        # Get the user's Teams ID
         user_id = turn_context.activity.from_property.id
+        print(f"[DEBUG] user_id from Teams: {user_id}")
+
         try:
-            # Attempt to get more info (including email) via TeamsInfo
             member = await TeamsInfo.get_member(turn_context, user_id)
             if member and member.email:
                 user_email = member.email
             elif member and member.user_principal_name:
                 user_email = member.user_principal_name
+            print(f"[DEBUG] user_email from Teams: {user_email}")
         except Exception as e:
-            # If we fail (permissions or otherwise), leave it as "anonymous"
             print(f"Could not retrieve user email: {e}")
 
     # -----------------------------------------------------------
-    # 3) Pass user_email to Ask_Question so it gets logged
+    # 2) Show "typing" indicator, then call Ask_Question
     # -----------------------------------------------------------
+    await turn_context.send_activity(Activity(type=ActivityTypes.Typing))
+    await asyncio.sleep(1)  # optional short delay
+
     ans_gen = Ask_Question(user_message, user_email=user_email)
     answer_text = "".join(ans_gen)
+    print(f"[DEBUG] final answer: {answer_text}")
 
-    # Update the conversation history
+    # Update the conversation's history
     conversation_histories[conversation_id] = ask_func.chat_history
 
-    # If there's "Source:" in answer_text, parse out main answer, source line, and appended details if any
+    # -----------------------------------------------------------
+    # 3) Check if there's "Source:" in the answer
+    # -----------------------------------------------------------
     import re
     source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
     match = re.search(source_pattern, answer_text, flags=re.DOTALL)
+
     if match:
         main_answer = match.group(1).strip()
         source_line = match.group(2).strip()
@@ -111,8 +133,8 @@ async def _bot_logic(turn_context: TurnContext):
         source_line = ""
         appended_details = ""
 
+    # If there's a "Source:" line, hide it behind a toggle
     if source_line:
-        # Hide the source line and appended details behind a toggle in an Adaptive Card
         body_blocks = [
             {
                 "type": "TextBlock",
@@ -163,8 +185,11 @@ async def _bot_logic(turn_context: TurnContext):
         )
         await turn_context.send_activity(message)
     else:
-        # If there's no "Source:", just send a normal text response
+        # If there's no "Source:" line, just send the text
         await turn_context.send_activity(Activity(type="message", text=main_answer))
 
 if __name__ == "__main__":
+    # Make sure your environment has the correct port. 
+    # If running locally with ngrok, you might do something like:
+    # app.run(host="0.0.0.0", port=3978)
     app.run(host="0.0.0.0", port=80)
