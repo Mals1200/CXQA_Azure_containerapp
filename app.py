@@ -1,157 +1,75 @@
 import os
 import asyncio
 from flask import Flask, request, jsonify, Response
-from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
-from botbuilder.schema import Activity
+from botbuilder.core import (
+    BotFrameworkAdapter, 
+    BotFrameworkAdapterSettings, 
+    TurnContext
+)
+from botbuilder.schema import Activity, ActivityTypes
+from botbuilder.core.teams import TeamsInfo
 from ask_func import Ask_Question, chat_history
 
 app = Flask(__name__)
 
-MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
-MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
+# Azure Bot Service Credentials
+MICROSOFT_APP_ID = "YOUR_BOT_APP_ID"
+MICROSOFT_APP_PASSWORD = "YOUR_BOT_PASSWORD"
 
 adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
 
 conversation_histories = {}
 
-@app.route("/", methods=["GET"])
-def home():
-    return jsonify({"message": "API is running!"}), 200
-
-@app.route("/ask", methods=["POST"])
-def ask():
-    data = request.get_json()
-    if not data or "question" not in data:
-        return jsonify({"error": 'Invalid request, "question" is required.'}), 400
-    question = data["question"]
-
-    # Here we’re not capturing user_id from outside, so it remains "anonymous"
-    ans_gen = Ask_Question(question, user_id="anonymous")
-    answer_text = "".join(ans_gen)
-    return jsonify({"answer": answer_text})
-
-@app.route("/api/messages", methods=["POST"])
-def messages():
-    if "application/json" not in request.headers.get("Content-Type", ""):
-        return Response(status=415)
-
-    body = request.json
-    activity = Activity().deserialize(body)
-    auth_header = request.headers.get("Authorization", "")
-
-    loop = asyncio.new_event_loop()
-    try:
-        loop.run_until_complete(adapter.process_activity(activity, auth_header, _bot_logic))
-    finally:
-        loop.close()
-
-    return Response(status=200)
-
 async def _bot_logic(turn_context: TurnContext):
+    """Enhanced Teams integration with user email extraction"""
+    # Get user email from Teams
+    user_email = "anonymous"
+    try:
+        teams_member = await TeamsInfo.get_member(
+            turn_context, 
+            turn_context.activity.from_property.id
+        )
+        user_email = teams_member.email or teams_member.user_principal_name
+    except Exception as e:
+        print(f"Error getting user email: {e}")
+
+    # Process message with user email
+    ans_gen = Ask_Question(
+        turn_context.activity.text, 
+        user_id=user_email
+    )
+    answer_text = "".join(ans_gen)
+
+    # Send response back to Teams
+    await turn_context.send_activity(
+        Activity(type=ActivityTypes.message, text=answer_text)
+    
+    # Maintain conversation history
     conversation_id = turn_context.activity.conversation.id
     if conversation_id not in conversation_histories:
         conversation_histories[conversation_id] = []
+    conversation_histories[conversation_id].append({
+        "user": user_email,
+        "message": turn_context.activity.text,
+        "response": answer_text
+    })
 
-    import ask_func
-    ask_func.chat_history = conversation_histories[conversation_id]
+@app.route("/api/messages", methods=["POST"])
+async def messages():
+    """Enhanced message handler for Teams"""
+    if "application/json" not in request.headers["Content-Type"]:
+        return Response(status=415)
 
-    user_message = turn_context.activity.text or ""
+    activity = Activity().deserialize(request.json)
+    auth_header = request.headers["Authorization"]
 
-    # -----------------------------------------------------------------------------------
-    # EXTRACT USER EMAIL (or a fallback) FROM TEAMS ACTIVITY IF AVAILABLE:
-    # -----------------------------------------------------------------------------------
-    user_id = "anonymous"
-    from_prop = turn_context.activity.from_property
-    if from_prop:
-        # Attempt to get user_principal_name or fallback to other known fields
-        # (Adjust if your environment uses a different field for email)
-        if hasattr(from_prop, "user_principal_name") and from_prop.user_principal_name:
-            user_id = from_prop.user_principal_name
-        elif hasattr(from_prop, "aadObjectId") and from_prop.aadObjectId:
-            user_id = from_prop.aadObjectId
-        else:
-            user_id = from_prop.id or "anonymous"
-    # -----------------------------------------------------------------------------------
-
-    # 1) built-in Teams typing indicator (ephemeral)
-    typing_activity = Activity(type="typing")
-    await turn_context.send_activity(typing_activity)
-
-    # Pass user_id to Ask_Question, so it’s logged
-    ans_gen = Ask_Question(user_message, user_id=user_id)
-    answer_text = "".join(ans_gen)
-
-    # update conversation history
-    conversation_histories[conversation_id] = ask_func.chat_history
-
-    # If there's "Source:" in answer_text, parse out main answer, source line, and appended details if any
-    import re
-    source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
-    match = re.search(source_pattern, answer_text, flags=re.DOTALL)
-    if match:
-        main_answer = match.group(1).strip()
-        source_line = match.group(2).strip()
-        appended_details = match.group(3) if match.group(3) else ""
-    else:
-        main_answer = answer_text
-        source_line = ""
-        appended_details = ""
-
-    if source_line:
-        # Hide both the source line and appended details behind the same toggle
-        body_blocks = [
-            {
-                "type": "TextBlock",
-                "text": main_answer,
-                "wrap": True
-            },
-            {
-                "type": "TextBlock",
-                "text": source_line,
-                "wrap": True,
-                "id": "sourceLineBlock",
-                "isVisible": False
-            }
-        ]
-
-        if appended_details:
-            body_blocks.append({
-                "type": "TextBlock",
-                "text": appended_details.strip(),
-                "wrap": True,
-                "id": "sourceBlock",
-                "isVisible": False
-            })
-
-        actions = []
-        if appended_details or source_line:
-            actions = [
-                {
-                    "type": "Action.ToggleVisibility",
-                    "title": "Show Source",
-                    "targetElements": ["sourceLineBlock", "sourceBlock"]
-                }
-            ]
-
-        adaptive_card = {
-            "type": "AdaptiveCard",
-            "body": body_blocks,
-            "actions": actions,
-            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-            "version": "1.2"
-        }
-        message = Activity(
-            type="message",
-            attachments=[{
-                "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": adaptive_card
-            }]
-        )
-        await turn_context.send_activity(message)
-    else:
-        # No "Source:" line, just return the plain text
-        await turn_context.send_activity(Activity(type="message", text=main_answer))
+    await adapter.process_activity(
+        activity, 
+        auth_header, 
+        _bot_logic
+    )
+    return Response(status=200)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=80)
+    app.run(host="0.0.0.0", port=80, ssl_context="adhoc")
