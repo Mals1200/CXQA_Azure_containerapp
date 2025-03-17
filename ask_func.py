@@ -223,7 +223,7 @@ def is_text_relevant(question, snippet):
 # Decide if user question references tabular data
 #########################################################################
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def references_tabular_data(question, tables_text, recent_history):
+def references_tabular_data(question, tables_text):
     """
     Improved logic: We'll do a single request, no streaming, strict yes/no.
     """
@@ -236,11 +236,11 @@ def references_tabular_data(question, tables_text, recent_history):
     system_prompt = (
         "You are a helpful agent. Decide if the user's question references or requires the tabular data.\n"
         "Return ONLY 'YES' or 'NO' (in all caps).\n"
-        "The tables are not exclusive to the data it has, this is just a sample. **dont use the content of the sample table as the complete content. There are other rows the you were not shown**."
+       "The tables are not exclusive to the data it has, this is just a sample. **dont use the content of the sample table as the complete content. There are other rows the you were not shown**."
     )
     user_prompt = (
         f"User question: {question}\n\n"
-        f"Previous conversation:\n{recent_history[-4:]}\n\n"
+        f"Previous conversation:\n{chat_history[-4:]}\n\n"
         f"We have these tables: {tables_text}\n\n"
         "Does the user need the data from these tables to answer their question?\n"
         "Return ONLY 'YES' if it does, or ONLY 'NO' if it does not."
@@ -271,12 +271,34 @@ def references_tabular_data(question, tables_text, recent_history):
 #########################################################################
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def tool_1_index_search(user_question, top_k=5):
+    """
+    Searches the Azure AI Search index using semantic search and retrieves top_k results.
+    This function allows switching between `cxqa-ind-v6` (old) and `vector-1741790186391-12-3-2025` (new)
+    by **changing the index name, semantic configuration, and content field**.
+    
+    Parameters:
+        - user_question (str): The query to search.
+        - top_k (int): Number of top results to retrieve.
+
+    Returns:
+        - dict: A dictionary with the search results.
+    """
+
     SEARCH_SERVICE_NAME = "cxqa-azureai-search"
     SEARCH_ENDPOINT = f"https://{SEARCH_SERVICE_NAME}.search.windows.net"
-    INDEX_NAME = "cxqa-ind-v6"
     ADMIN_API_KEY = "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv"
 
-    subquestions = split_question_into_subquestions(user_question)
+    # 🔹 CHOOSE INDEX (Comment/Uncomment as needed)
+    INDEX_NAME = "vector-1741865904949"  # ✅ Use new index
+    # INDEX_NAME = "cxqa-ind-v6"  # ✅ Use old index
+
+    # 🔹 CHOOSE SEMANTIC CONFIGURATION (Comment/Uncomment as needed)
+    SEMANTIC_CONFIG_NAME = "vector-1741865904949-semantic-configuration"  # ✅ Use for new index
+    # SEMANTIC_CONFIG_NAME = "azureml-default"  # ✅ Use for old index
+
+    # 🔹 CHOOSE CONTENT FIELD (Comment/Uncomment as needed)
+    CONTENT_FIELD = "chunk"  # ✅ Use for new index
+    # CONTENT_FIELD = "content"  # ✅ Use for old index
 
     try:
         search_client = SearchClient(
@@ -285,33 +307,60 @@ def tool_1_index_search(user_question, top_k=5):
             credential=AzureKeyCredential(ADMIN_API_KEY)
         )
 
+        # 🔹 Perform the search with explicit field selection
+        logging.info(f"🔍 Searching in Index: {INDEX_NAME}")
         results = search_client.search(
             search_text=user_question,
             query_type="semantic",
-            semantic_configuration_name="azureml-default",
+            semantic_configuration_name=SEMANTIC_CONFIG_NAME,
             top=top_k,
+            select=["title", CONTENT_FIELD],  # ✅ Ensure the correct content field is retrieved
             include_total_count=False
         )
 
+        # Keep original logic of collecting snippets:
         relevant_texts = []
+        # Collect docs so we can do weighting:
+        docs = []
+
         for r in results:
-            snippet = r.get("content", "").strip()
-            keep_snippet = False
-            for sq in subquestions:
-                if is_text_relevant(sq, snippet):
-                    keep_snippet = True
-                    break
-            if keep_snippet:
+            snippet = r.get(CONTENT_FIELD, "").strip()
+            title = r.get("title", "").strip()
+            if snippet:  # Avoid empty results
                 relevant_texts.append(snippet)
+                docs.append({"title": title, "snippet": snippet})
 
         if not relevant_texts:
             return {"top_k": "No information"}
-        combined = "\n\n---\n\n".join(relevant_texts)
+
+        # 🔹 Apply weighting based on keywords in title (case-insensitive)
+        for doc in docs:
+            ttl = doc["title"].lower()
+            score = 0
+            if "policy" in ttl:
+                score += 10
+            if "report" in ttl:
+                score += 5
+            if "sop" in ttl:
+                score += 3
+            doc["weight_score"] = score
+
+        # 🔹 Sort docs by descending weight
+        docs_sorted = sorted(docs, key=lambda x: x["weight_score"], reverse=True)
+
+        # 🔹 Slice top_k after re-ranking
+        docs_top_k = docs_sorted[:top_k]
+
+        # Prepare final combined text as before:
+        re_ranked_texts = [d["snippet"] for d in docs_top_k]
+        combined = "\n\n---\n\n".join(re_ranked_texts)
+
         return {"top_k": combined}
 
     except Exception as e:
-        logging.error(f"Error in Tool1 (Index Search): {str(e)}")
+        logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}")
         return {"top_k": "No information"}
+
 
 #########################################################################
 # Execute Python code inside an isolated environment
@@ -377,7 +426,7 @@ def execute_generated_code(code_str):
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def tool_2_code_run(user_question):
     # Decide if user question references tabular data
-    need_data = references_tabular_data(user_question, TABLES, chat_history)
+    need_data = references_tabular_data(user_question, TABLES)
     if not need_data:
         return {"result": "No information", "code": ""}
 
@@ -632,7 +681,7 @@ def agent_answer(user_question):
     
     # If user_question is empty or just whitespace
     if not user_question.strip():
-        return "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+        return 
         
     # Check for repeated question in cache
     if user_question in tool_cache:
@@ -641,17 +690,17 @@ def agent_answer(user_question):
     # Quick greeting check
     if is_entirely_greeting_or_punc(user_question.strip()):
         # Return short greeting response
-        if len(chat_history) < 1:
+        if len(chat_history) < 2:
             result = (
                 "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n"
                 "- To reset the conversation type 'restart chat'.\n"
-                "- To generate Slides, Charts or Document, type 'export followed by your requirements."
+                "- To generate Slides, Charts or Documents, type 'export <followed by your requirements>'."
             )
         else:
             result = (
                 "Hello! How may I assist you?\n"
-                "-To reset the conversation type 'restart chat'.\n"
-                "-To generate Slides, Charts or Document, type 'export followed by your requirements."
+                "- To reset the conversation type 'restart chat'.\n"
+                "- To generate Slides, Charts or Documents, type 'export <followed by your requirements>'."
             )
         tool_cache[user_question] = result
         return result
