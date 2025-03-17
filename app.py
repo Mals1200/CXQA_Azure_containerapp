@@ -2,11 +2,9 @@ import os
 import asyncio
 from flask import Flask, request, jsonify, Response
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
-from botbuilder.schema import Activity, ActivityTypes
-from ask_func import Ask_Question, chat_history  # updated ask_func, which logs user_email
-
-# 1) Import TeamsInfo to retrieve user emails
 from botbuilder.core.teams import TeamsInfo
+from botbuilder.schema import Activity, ActivityTypes
+from ask_func import Ask_Question, chat_history
 
 app = Flask(__name__)
 
@@ -34,7 +32,6 @@ def ask():
         return jsonify({"error": 'Invalid request, "question" is required.'}), 400
 
     question = data["question"]
-    # If they included a user_email, use it; else "anonymous"
     user_email = data.get("user_email", "anonymous")
 
     ans_gen = Ask_Question(question, user_email=user_email)
@@ -62,52 +59,45 @@ def messages():
     return Response(status=200)
 
 async def _bot_logic(turn_context: TurnContext):
+    # Debug print to confirm we actually got here:
+    print("[DEBUG] _bot_logic called with message text:", turn_context.activity.text)
+
     conversation_id = turn_context.activity.conversation.id
     if conversation_id not in conversation_histories:
         conversation_histories[conversation_id] = []
 
+    # Sync ask_func's chat_history with this conversation's history
     import ask_func
     ask_func.chat_history = conversation_histories[conversation_id]
 
     user_message = turn_context.activity.text or ""
 
-    # -----------------------------------------------------------
-    # 1) Retrieve the Teams user's email or default to "anonymous"
-    # -----------------------------------------------------------
+    # 1) Retrieve the Teams user’s email or default to "anonymous"
     user_email = "anonymous"
     if turn_context.activity.channel_id == "msteams":
-        # Get the user's Teams ID
         user_id = turn_context.activity.from_property.id
         try:
-            # Attempt to get more info (including email) via TeamsInfo
             member = await TeamsInfo.get_member(turn_context, user_id)
             if member and member.email:
                 user_email = member.email
             elif member and member.user_principal_name:
                 user_email = member.user_principal_name
         except Exception as e:
-            # If we fail (permissions or otherwise), leave user_email as "anonymous"
-            print(f"Could not retrieve user email: {e}")
+            print(f"[DEBUG] Could not retrieve user email: {e}")
 
-    # -----------------------------------------------------------
-    # 2) Show the "typing" indicator before processing the question
-    # -----------------------------------------------------------
+    # 2) Show typing indicator
     await turn_context.send_activity(Activity(type=ActivityTypes.Typing))
-    # Optional short delay so user sees the typing spinner:
+    # Optional short pause so the user sees the spinner:
     await asyncio.sleep(1)
 
-    # -----------------------------------------------------------
-    # 3) Pass user_email to Ask_Question so it's logged
-    # -----------------------------------------------------------
+    # 3) Call Ask_Question, pass user_email
     ans_gen = Ask_Question(user_message, user_email=user_email)
     answer_text = "".join(ans_gen)
 
-    # Update the conversation history
+    # Update conversation history
     conversation_histories[conversation_id] = ask_func.chat_history
 
-    # -----------------------------------------------------------
-    # 4) Check if there's a "Source:" line in the answer
-    # -----------------------------------------------------------
+    # 4) Check if there's "Source:" in answer_text
     import re
     source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
     match = re.search(source_pattern, answer_text, flags=re.DOTALL)
@@ -121,9 +111,7 @@ async def _bot_logic(turn_context: TurnContext):
         source_line = ""
         appended_details = ""
 
-    # -----------------------------------------------------------
-    # 5) If there's a "Source:" line, hide it behind a toggle
-    # -----------------------------------------------------------
+    # 5) If there's a "Source:", hide it behind a toggle
     if source_line:
         body_blocks = [
             {
@@ -175,8 +163,10 @@ async def _bot_logic(turn_context: TurnContext):
         )
         await turn_context.send_activity(message)
     else:
-        # If there's no "Source:", just send a normal text response
+        # If no "Source:" line, just send plain text
         await turn_context.send_activity(Activity(type="message", text=main_answer))
 
 if __name__ == "__main__":
+    # If running locally, you might do a different port (e.g., 3978)
+    # but 80 is fine as well. Just make sure your tunneling is set up
     app.run(host="0.0.0.0", port=80)
