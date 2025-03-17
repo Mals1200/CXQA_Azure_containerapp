@@ -2,7 +2,7 @@ import os
 import asyncio
 from flask import Flask, request, jsonify, Response
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
-from botbuilder.schema import Activity
+from botbuilder.schema import Activity, ActivityTypes
 from ask_func import Ask_Question, chat_history  # updated ask_func, which logs user_email
 
 # 1) Import TeamsInfo to retrieve user emails
@@ -72,7 +72,7 @@ async def _bot_logic(turn_context: TurnContext):
     user_message = turn_context.activity.text or ""
 
     # -----------------------------------------------------------
-    # 2) Retrieve the Teams user's email or default to "anonymous"
+    # 1) Retrieve the Teams user's email or default to "anonymous"
     # -----------------------------------------------------------
     user_email = "anonymous"
     if turn_context.activity.channel_id == "msteams":
@@ -88,6 +88,12 @@ async def _bot_logic(turn_context: TurnContext):
         except Exception as e:
             # If we fail (permissions or otherwise), leave it as "anonymous"
             print(f"Could not retrieve user email: {e}")
+
+    # -----------------------------------------------------------
+    # 2) Show the "typing" indicator before processing the question
+    # -----------------------------------------------------------
+    await turn_context.send_activity(Activity(type=ActivityTypes.Typing))
+    await asyncio.sleep(1)  # Optional delay to ensure users see it
 
     # -----------------------------------------------------------
     # 3) Pass user_email to Ask_Question so it gets logged
