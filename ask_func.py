@@ -749,12 +749,69 @@ def Log_Interaction(
     index_dict=None,
     python_dict=None
 ):
-    """Enhanced logging with proper user ID handling"""
+    """
+    Logs each interaction to a CSV in Azure Blob with the fields:
+      time, question, answer_text, source, source_material,
+      conversation_length, topic, user_id.
+
+    - answer_text: everything before 'Source:'
+    - source: one of [Python, Index, Index & Python, AI Generated]
+    - source_material: if Python => store the actual code;
+                      if Index => store the chunk(s);
+                      if both => concatenate them;
+                      else => 'N/A'.
+    - conversation_length: len(chat_history)
+    - topic: from classify_topic(...)
+    - user_id: the ID passed in
+    """
     import re
+    import logging
     from datetime import datetime
     from azure.storage.blob import BlobServiceClient
 
-    # Azure Blob Storage Configuration
+    if index_dict is None:
+        index_dict = {}
+    if python_dict is None:
+        python_dict = {}
+
+    # 1) Parse out answer_text and source
+    match = re.search(r"(.*?)(?:\s*Source:\s*)(.*)$", full_answer, flags=re.IGNORECASE | re.DOTALL)
+    if match:
+        answer_text = match.group(1).strip()
+        found_source = match.group(2).strip()
+        if found_source.lower().startswith("index & python"):
+            source = "Index & Python"
+        elif found_source.lower().startswith("index"):
+            source = "Index"
+        elif found_source.lower().startswith("python"):
+            source = "Python"
+        else:
+            source = "AI Generated"
+    else:
+        answer_text = full_answer
+        source = "AI Generated"
+
+    # 2) source_material now uses actual code / retrieved chunks
+    if source == "Index & Python":
+        source_material = f"INDEX CHUNKS:\n{index_dict.get('top_k', '')}\n\nPYTHON CODE:\n{python_dict.get('code', '')}"
+    elif source == "Index":
+        source_material = index_dict.get("top_k", "")
+    elif source == "Python":
+        source_material = python_dict.get("code", "")
+    else:
+        source_material = "N/A"
+
+    # 3) conversation_length
+    conversation_length = len(chat_history)
+
+    # 4) topic classification
+    recent_history = chat_history[-4:]
+    topic = classify_topic(question, full_answer, recent_history)
+
+    # 5) time
+    current_time = datetime.now().strftime("%H:%M:%S")
+
+    # 6) Write to Azure Blob CSV
     account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
     sas_token = (
         "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
@@ -763,43 +820,43 @@ def Log_Interaction(
     )
     container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
 
-    # Parse answer components
-    answer_text = re.split(r'\nSource:', full_answer)[0].strip()
-    source = "AI Generated"
-    if "Source:" in full_answer:
-        source = re.search(r'Source: (.*?)(\n|$)', full_answer).group(1).strip()
-
-    # Get source material from tools
-    source_material = ""
-    if python_dict and python_dict.get("code"):
-        source_material += f"PYTHON CODE:\n{python_dict['code']}\n"
-    if index_dict and index_dict.get("top_k"):
-        source_material += f"INDEX DATA:\n{index_dict['top_k']}"
-
-    # Create CSV row
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    row = [
-        current_time,
-        question.replace('"', '""'),
-        answer_text.replace('"', '""'),
-        source,
-        source_material.replace('"', '""'),
-        str(len(chat_history)),
-        "Other",  # Default topic, replace with actual classification if needed
-        user_id.replace('"', '""')
-    ]
-
-    # Write to Azure Blob
     blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
     container_client = blob_service_client.get_container_client(container_name)
-    
+
+    target_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/logs/"
+    date_str = datetime.now().strftime("%Y_%m_%d")
+    log_filename = f"logs_{date_str}.csv"
+    blob_name = target_folder_path + log_filename
+    blob_client = container_client.get_blob_client(blob_name)
+
     try:
-        blob_client = container_client.get_blob_client("UI/2024-11-20_142337_UTC/cxqa_data/logs/logs.csv")
-        existing_data = blob_client.download_blob().readall().decode("utf-8") if blob_client.exists() else ""
-        new_content = existing_data + "\n" + ",".join(f'"{item}"' for item in row)
-        blob_client.upload_blob(new_content, overwrite=True)
-    except Exception as e:
-        print(f"Error logging interaction: {e}")
+        existing_data = blob_client.download_blob().readall().decode("utf-8")
+        lines = existing_data.strip().split("\n")
+        if not lines or not lines[0].startswith(
+            "time,question,answer_text,source,source_material,conversation_length,topic,user_id"
+        ):
+            lines = ["time,question,answer_text,source,source_material,conversation_length,topic,user_id"]
+    except:
+        lines = ["time,question,answer_text,source,source_material,conversation_length,topic,user_id"]
+
+    def esc_csv(val):
+        return val.replace('"', '""')
+
+    row = [
+        current_time,
+        esc_csv(question),
+        esc_csv(answer_text),
+        esc_csv(source),
+        esc_csv(source_material),
+        str(conversation_length),
+        esc_csv(topic),
+        esc_csv(user_id),
+    ]
+    lines.append(",".join(f'"{x}"' for x in row))
+    new_csv_content = "\n".join(lines) + "\n"
+
+    blob_client.upload_blob(new_csv_content, overwrite=True)
+
 
 ####################################################
 #          UPDATED FUNCTION: Ask_Question          #
@@ -899,7 +956,7 @@ def Ask_Question(question, user_id="anonymous"):
         question=question,
         full_answer=answer_collected,
         chat_history=chat_history,
-        user_id=user_id,  
+        user_id=user_id,
         index_dict=index_dict,
         python_dict=python_dict
     )
