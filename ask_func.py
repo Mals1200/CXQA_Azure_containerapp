@@ -223,7 +223,7 @@ def is_text_relevant(question, snippet):
 # Decide if user question references tabular data
 #########################################################################
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def references_tabular_data(question, tables_text, recent_history):
+def references_tabular_data(question, tables_text):
     """
     Improved logic: We'll do a single request, no streaming, strict yes/no.
     """
@@ -236,11 +236,11 @@ def references_tabular_data(question, tables_text, recent_history):
     system_prompt = (
         "You are a helpful agent. Decide if the user's question references or requires the tabular data.\n"
         "Return ONLY 'YES' or 'NO' (in all caps).\n"
-        "The tables are not exclusive to the data it has, this is just a sample. **dont use the content of the sample table as the complete content. There are other rows the you were not shown**."
+       "The tables are not exclusive to the data it has, this is just a sample. **dont use the content of the sample table as the complete content. There are other rows the you were not shown**."
     )
     user_prompt = (
         f"User question: {question}\n\n"
-        f"Previous conversation:\n{recent_history[-4:]}\n\n"
+        f"Previous conversation:\n{chat_history[-4:]}\n\n"
         f"We have these tables: {tables_text}\n\n"
         "Does the user need the data from these tables to answer their question?\n"
         "Return ONLY 'YES' if it does, or ONLY 'NO' if it does not."
@@ -426,7 +426,7 @@ def execute_generated_code(code_str):
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def tool_2_code_run(user_question):
     # Decide if user question references tabular data
-    need_data = references_tabular_data(user_question, TABLES, chat_history)
+    need_data = references_tabular_data(user_question, TABLES)
     if not need_data:
         return {"result": "No information", "code": ""}
 
@@ -681,7 +681,7 @@ def agent_answer(user_question):
     
     # If user_question is empty or just whitespace
     if not user_question.strip():
-        return "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+        return 
         
     # Check for repeated question in cache
     if user_question in tool_cache:
@@ -690,17 +690,17 @@ def agent_answer(user_question):
     # Quick greeting check
     if is_entirely_greeting_or_punc(user_question.strip()):
         # Return short greeting response
-        if len(chat_history) < 1:
+        if len(chat_history) < 2:
             result = (
                 "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n"
                 "- To reset the conversation type 'restart chat'.\n"
-                "- To generate Slides, Charts or Document, type 'export followed by your requirements."
+                "- To generate Slides, Charts or Documents, type 'export <followed by your requirements>'."
             )
         else:
             result = (
                 "Hello! How may I assist you?\n"
-                "-To reset the conversation type 'restart chat'.\n"
-                "-To generate Slides, Charts or Document, type 'export followed by your requirements."
+                "- To reset the conversation type 'restart chat'.\n"
+                "- To generate Slides, Charts or Documents, type 'export <followed by your requirements>'."
             )
         tool_cache[user_question] = result
         return result
