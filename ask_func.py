@@ -766,29 +766,20 @@ def Classify_Topic(question, answer_text, chat_history):
         return "Other"
 
 
-def Log_Interaction(question, final_answer):
+def Log_Interaction(question, final_answer, user_email="anonymous"):
     """
     Logs the Q&A interaction to Azure Blob Storage, including:
     - time
     - question
     - answer_text (everything before "Source:")
-    - source (the exact text following "Source:", e.g. "Index", "Python", or "Index & Python")
-    - source_material (all text after that same "Source:" line)
+    - source
+    - source_material
     - conversation_length
     - topic
-    - user_id
+    - user_id (now set to user_email)
     """
     from azure.storage.blob import BlobServiceClient
     from datetime import datetime
-
-    # Azure Blob Storage credentials
-    account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
-    sas_token = (
-        "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
-        "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
-        "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
-    )
-    container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
 
     global chat_history
 
@@ -808,36 +799,35 @@ def Log_Interaction(question, final_answer):
 
     # 4) If found, parse out "Source" and "Source material"
     if source_idx is not None:
-        src_line = lines[source_idx].strip()  # e.g., "Source: Index & Python"
-        # Remove "Source:" prefix, leaving "Index", "Python", or "Index & Python" etc.
+        src_line = lines[source_idx].strip()
         source_val = src_line[7:].strip()  # everything after "Source:"
         source = source_val if source_val else "N/A"
 
-        # If there's more lines below the "Source:" line, that is the source_material
         if source_idx + 1 < len(lines):
             source_material = "\n".join(lines[source_idx + 1:]).strip()
 
-        # The pure answer is everything above the "Source:" line
         pure_answer = "\n".join(lines[:source_idx]).strip()
 
-    # 5) Count conversation length
     conversation_length = len(chat_history)
-
-    # 6) Determine the topic from the portion we consider the "answer"
     topic = Classify_Topic(question, pure_answer, chat_history)
 
-    # Initialize blob client
+    account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
+    sas_token = (
+        "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
+        "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
+        "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
+    )
+    container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
+
     blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
     container_client = blob_service_client.get_container_client(container_name)
 
-    # Build the log filename (daily CSV)
     target_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/logs/"
     date_str = datetime.now().strftime("%Y_%m_%d")
     log_filename = f"logs_{date_str}.csv"
     blob_name = target_folder_path + log_filename
     blob_client = container_client.get_blob_client(blob_name)
 
-    # Download existing logs (if any); otherwise create headers
     try:
         existing_data = blob_client.download_blob().readall().decode("utf-8")
         lines_csv = existing_data.strip().split("\n")
@@ -846,7 +836,6 @@ def Log_Interaction(question, final_answer):
     except:
         lines_csv = ["time,question,answer_text,source,source_material,conversation_length,topic,user_id"]
 
-    # Create the new row
     current_time = datetime.now().strftime("%H:%M:%S")
     row = [
         current_time,
@@ -856,18 +845,17 @@ def Log_Interaction(question, final_answer):
         source_material.replace('"','""'),
         str(conversation_length),
         topic.replace('"','""'),
-        "anonymous"
+        user_email.replace('"','""')
     ]
     lines_csv.append(",".join(f'"{x}"' for x in row))
     new_csv_content = "\n".join(lines_csv) + "\n"
 
-    # Upload the updated log file
     blob_client.upload_blob(new_csv_content, overwrite=True)
 
 #########################################################################
 # Public-facing function to handle Q&A and log
 #########################################################################
-def Ask_Question(question):
+def Ask_Question(question, user_email="anonymous"):
     """
     Top-level function to handle user input.
     - If 'export', call export logic.
@@ -908,7 +896,7 @@ def Ask_Question(question):
         chat_history = chat_history[-12:]
 
     # Logging
-    Log_Interaction(question, final_answer)
+    Log_Interaction(question, final_answer, user_email)
 
     # Return final answer
     yield final_answer
