@@ -13,26 +13,57 @@ from azure.storage.blob import BlobServiceClient
 from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
 import csv
+from tenacity import retry, stop_after_attempt, wait_fixed #retrying
+from functools import lru_cache #caching
+import re
+import difflib
 
-# For retries
-from tenacity import retry, stop_after_attempt, wait_fixed
+def clean_repeated_patterns(text):
+    # Remove repeated words like: "TheThe", "total total"
+    text = re.sub(r'\b(\w+)( \1\b)+', r'\1', text, flags=re.IGNORECASE)
+    
+    # Remove repeated characters within a word: e.g., "footfallsfalls"
+    text = re.sub(r'\b(\w{3,})\1\b', r'\1', text, flags=re.IGNORECASE)
+
+    # Remove excessive punctuation or spaces
+    text = re.sub(r'\s{2,}', ' ', text)
+    text = re.sub(r'\.{3,}', '...', text)
+    
+    return text.strip()
+
+def is_repeated_phrase(last_text, new_text, threshold=0.98):
+    """
+    Detect if new_text is highly similar to the end of last_text.
+    """
+    if not last_text or not new_text:
+        return False
+    comparison_length = min(len(last_text), 100)
+    recent_text = last_text[-comparison_length:]
+    similarity = difflib.SequenceMatcher(None, recent_text, new_text).ratio()
+    return similarity > threshold
+
+def deduplicate_streaming_tokens(last_tokens, new_token):
+    if last_tokens.endswith(new_token):
+        return ""
+    return new_token
+
+def clean_repeated_phrases(text):
+    """
+    Removes repeated words like 'TheThe' or 'total total'.
+    """
+    return re.sub(r'\b(\w+)( \1\b)+', r'\1', text, flags=re.IGNORECASE)
+
+tool_cache = {}
 
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
 logging.getLogger("azure").setLevel(logging.WARNING)
 
-#######################################################################
-# In-memory cache to store repeated question answers (per enhancements)
-#######################################################################
-tool_cache = {}
-
-#######################################################################
-# Chat History
-#######################################################################
 chat_history = []
+recent_history = chat_history[-4:]
 
-#######################################################################
-# Tables / Sample text / Schema text (as provided)
-#######################################################################
+# -------------------------------------------------------------------------
+# Fixed coded tables info for decision. and schema/sample for writing code
+# -------------------------------------------------------------------------
 TABLES = """
 1) "Al-Bujairy Terrace Footfalls.xlsx", with the following tables:
    -Date: datetime64[ns], Footfalls: int64
@@ -94,58 +125,56 @@ Top2Box Summary.xlsx: {'Month': 'datetime64[ns]', 'Type': 'object', 'Top2Box sco
 Total Landscape areas and quantities.xlsx: {'Assets': 'object', 'Unnamed: 1': 'object', 'Unnamed: 2': 'object', 'Unnamed: 3': 'object'},
 """
 
-#########################################################################
-# Split question into subquestions (basic approach, can be improved)
-#########################################################################
-def split_question_into_subquestions(user_question):
-    
-    ###############################
-    #1) BASIC REGEX-BASED APPROACH
-    ###############################
-    # text = re.sub(r"\s+and\s+", " ~SPLIT~ ", user_question, flags=re.IGNORECASE)
-    # text = re.sub(r"\s*&\s*", " ~SPLIT~ ", text)
-    # parts = text.split("~SPLIT~")
-    # subqs = [p.strip() for p in parts if p.strip()]
-    # return subqs
-    
-    ###############################
-    #2) SEMANTIC PARSING APPROACH
-    ###############################
-    """
-    Uses an LLM to semantically parse and split a user question into subquestions.
+# -------------------------------------------------------------------
+# Helper: Stream OpenAI from Azure (modified for no streaming)
+# -------------------------------------------------------------------
+def stream_azure_chat_completion(endpoint, headers, payload, print_stream=False):
+    response = requests.post(endpoint, headers=headers, json=payload)
+    response.raise_for_status()
+    data = response.json()
+    final_text = ""
+    if "choices" in data and data["choices"]:
+        # If there's a 'message' key (non-stream response)
+        choice = data["choices"][0]
+        if "message" in choice:
+            final_text = choice["message"].get("content", "")
+        else:
+            # Fallback if 'delta' was used
+            final_text = choice.get("delta", {}).get("content", "")
+    return final_text
 
-    IMPORTANT:
-      - Replace LLM_ENDPOINT and LLM_API_KEY with your actual Azure OpenAI deployment URL and key.
-      - The LLM prompt is an example. You can modify it for your specific needs or format preferences.
-      - Ensure you handle potential errors properly (e.g., missing fields in the response).
+import json
+import requests
+
+def split_question_into_subquestions(user_question):
+    """
+    Uses an LLM to determine if the question should be split into multiple sub-questions.
+    Returns a list of sub-questions if needed, otherwise returns the question as a single item list.
     """
 
     LLM_ENDPOINT = (
         "https://cxqaazureaihub2358016269.openai.azure.com/"
         "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
-    )    
+    )
     LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
 
-    system_prompt = (
-        "You are a helpful assistant. "
-        "You receive a user question which may have multiple parts. "
-        "Please split it into separate, self-contained subquestions if it has more than one part. "
-        "If it's only a single question, simply return that one. "
-        "Return each subquestion on a separate line or as bullet points. "
-    )
-
-    user_prompt = f"""
-    If applicable Please split the following question into distinct subquestions:\n\n{user_question}\n\n
-    If not applicable just return the question as it is.
+    system_prompt = """
+    You are an expert in semantic parsing. Your task is to carefully split complex questions into their most meaningful sub-questions.
+    
+    **Rules:**
+    1. Split **only** if the question has distinct, meaningful sub-questions.
+    2. Do **NOT** split phrases like "rainy and cloudy" which belong together.
+    3. Return a **valid JSON array of strings**, where each string is a well-formed sub-question.
+    4. If no splitting is necessary, return the original question as a **single-item list**.
     """
 
     payload = {
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
+            {"role": "user", "content": f"Question: {user_question}\n\nReturn the JSON array of sub-questions."}
         ],
-        "max_tokens": 300,
-        "temperature": 0.0
+        "max_tokens": 500,
+        "temperature": 0,
     }
 
     headers = {
@@ -153,32 +182,24 @@ def split_question_into_subquestions(user_question):
         "api-key": LLM_API_KEY
     }
 
-    # Send request to Azure OpenAI endpoint
-    response = requests.post(LLM_ENDPOINT, headers=headers, json=payload)
-    response.raise_for_status()
-    data = response.json()
+    try:
+        response = requests.post(LLM_ENDPOINT, headers=headers, json=payload)
+        response.raise_for_status()
+        result = response.json()
 
-    # Get the text output from the LLM
-    answer_text = data["choices"][0]["message"]["content"].strip()
+        if "choices" in result and result["choices"] and "message" in result["choices"][0]:
+            content = result["choices"][0]["message"]["content"].strip()
+        else:
+            raise ValueError("Invalid response structure from LLM")
 
-    # EXAMPLE PARSING APPROACH:
-    # Assume the LLM returns each subquestion on its own line or bullet.
-    # We'll split on newlines, then strip out leading punctuation or bullet symbols.
-    lines = [
-        line.lstrip("•-0123456789). ").strip()
-        for line in answer_text.split("\n")
-        if line.strip()
-    ]
+        subquestions = json.loads(content)
+        if isinstance(subquestions, list) and all(isinstance(q, str) for q in subquestions):
+            return subquestions
+        else:
+            return [user_question]
+    except (requests.RequestException, json.JSONDecodeError, ValueError):
+        return [user_question]
 
-    # Filter out any empty strings (just in case)
-    subqs = [l for l in lines if l]
-
-    return subqs
-
-#########################################################################
-# Simple helper to check snippet relevance (YES or NO) – improved logic
-#########################################################################
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def is_text_relevant(question, snippet):
     if not snippet.strip():
         return False
@@ -211,94 +232,75 @@ def is_text_relevant(question, snippet):
     }
 
     try:
-        response = requests.post(LLM_ENDPOINT, headers=headers, json=payload, timeout=10)
+        response = requests.post(LLM_ENDPOINT, headers=headers, json=payload)
         response.raise_for_status()
         data = response.json()
         content = data["choices"][0]["message"]["content"].strip().upper()
         return content.startswith("YES")
-    except:
+    except Exception as e:
+        logging.error(f"Error during relevance check: {e}")
         return False
 
-#########################################################################
-# Decide if user question references tabular data
-#########################################################################
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def references_tabular_data(question, tables_text):
-    """
-    Improved logic: We'll do a single request, no streaming, strict yes/no.
-    """
-    LLM_ENDPOINT = (
-        "https://cxqaazureaihub2358016269.openai.azure.com/"
-        "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
+    llm_system_message = (
+        "You are a strict YES/NO classifier. Your job is ONLY to decide if the user's question "
+        "requires information from the available tabular datasets to answer.\n"
+        "You must respond with EXACTLY one word: 'YES' or 'NO'.\n"
+        "Do NOT add explanations or uncertainty. Be strict and consistent."
     )
-    LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+    llm_user_message = f"""
+    User Question:
+    {question}
 
-    system_prompt = (
-        "You are a helpful agent. Decide if the user's question references or requires the tabular data.\n"
-        "Return ONLY 'YES' or 'NO' (in all caps).\n"
-       "The tables are not exclusive to the data it has, this is just a sample. **dont use the content of the sample table as the complete content. There are other rows the you were not shown**."
-    )
-    user_prompt = (
-        f"User question: {question}\n\n"
-        f"Previous conversation:\n{chat_history[-4:]}\n\n"
-        f"We have these tables: {tables_text}\n\n"
-        "Does the user need the data from these tables to answer their question?\n"
-        "Return ONLY 'YES' if it does, or ONLY 'NO' if it does not."
-    )
+    chat_history
+    {recent_history}
+    
+    Available Tables:
+    {tables_text}
+
+    Decision Rules:
+    1. Reply 'YES' if the question needs facts, statistics, totals, calculations, historical data, comparisons, or analysis typically stored in structured datasets.
+    2. Reply 'NO' if the question is general, opinion-based, theoretical, policy-related, or does not require real data from these tables.
+    3. Completely ignore the sample rows of the tables. Assume full datasets exist beyond the samples.
+    4. Be STRICT: only reply 'NO' if you are CERTAIN the tables are not needed.
+    5. Do NOT create or assume data. Only decide if the tabular data is NEEDED to answer.
+
+    Final instruction: Reply ONLY with 'YES' or 'NO'.
+    """
 
     payload = {
         "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
+            {"role": "system", "content": llm_system_message},
+            {"role": "user", "content": llm_user_message}
         ],
-        "max_tokens": 50,
+        "max_tokens": 5,
         "temperature": 0.0
     }
 
-    headers = {
-        "Content-Type": "application/json",
-        "api-key": LLM_API_KEY
-    }
+    try:
+        llm_response = stream_azure_chat_completion(
+            endpoint="https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview",
+            headers={
+                "Content-Type": "application/json",
+                "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+            },
+            payload=payload,
+            print_stream=False
+        )
+        clean_response = llm_response.strip().upper()
+        return "YES" in clean_response
+    except Exception as e:
+        logging.error(f"Error in references_tabular_data: {e}")
+        return False
 
-    response = requests.post(LLM_ENDPOINT, headers=headers, json=payload)
-    response.raise_for_status()
-    data = response.json()
-    answer_raw = data["choices"][0]["message"]["content"].strip().upper()
-    return "YES" in answer_raw
-
-#########################################################################
-# Tool 1: Azure Index-based Search with semantic config + relevance check
-#########################################################################
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def tool_1_index_search(user_question, top_k=5):
-    """
-    Searches the Azure AI Search index using semantic search and retrieves top_k results.
-    This function allows switching between `cxqa-ind-v6` (old) and `vector-1741790186391-12-3-2025` (new)
-    by **changing the index name, semantic configuration, and content field**.
-    
-    Parameters:
-        - user_question (str): The query to search.
-        - top_k (int): Number of top results to retrieve.
-
-    Returns:
-        - dict: A dictionary with the search results.
-    """
-
     SEARCH_SERVICE_NAME = "cxqa-azureai-search"
     SEARCH_ENDPOINT = f"https://{SEARCH_SERVICE_NAME}.search.windows.net"
+    INDEX_NAME = "cxqa-ind-v6"
     ADMIN_API_KEY = "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv"
 
-    # 🔹 CHOOSE INDEX (Comment/Uncomment as needed)
-    INDEX_NAME = "vector-1741865904949"  # ✅ Use new index
-    # INDEX_NAME = "cxqa-ind-v6"  # ✅ Use old index
-
-    # 🔹 CHOOSE SEMANTIC CONFIGURATION (Comment/Uncomment as needed)
-    SEMANTIC_CONFIG_NAME = "vector-1741865904949-semantic-configuration"  # ✅ Use for new index
-    # SEMANTIC_CONFIG_NAME = "azureml-default"  # ✅ Use for old index
-
-    # 🔹 CHOOSE CONTENT FIELD (Comment/Uncomment as needed)
-    CONTENT_FIELD = "chunk"  # ✅ Use for new index
-    # CONTENT_FIELD = "content"  # ✅ Use for old index
+    subquestions = split_question_into_subquestions(user_question)
 
     try:
         search_client = SearchClient(
@@ -307,127 +309,40 @@ def tool_1_index_search(user_question, top_k=5):
             credential=AzureKeyCredential(ADMIN_API_KEY)
         )
 
-        # 🔹 Perform the search with explicit field selection
-        logging.info(f"🔍 Searching in Index: {INDEX_NAME}")
         results = search_client.search(
             search_text=user_question,
             query_type="semantic",
-            semantic_configuration_name=SEMANTIC_CONFIG_NAME,
+            semantic_configuration_name="azureml-default",
             top=top_k,
-            select=["title", CONTENT_FIELD],  # ✅ Ensure the correct content field is retrieved
             include_total_count=False
         )
 
-        # Keep original logic of collecting snippets:
         relevant_texts = []
-        # Collect docs so we can do weighting:
-        docs = []
-
         for r in results:
-            snippet = r.get(CONTENT_FIELD, "").strip()
-            title = r.get("title", "").strip()
-            if snippet:  # Avoid empty results
+            snippet = r.get("content", "").strip()
+
+            keep_snippet = False
+            for sq in subquestions:
+                if is_text_relevant(sq, snippet):
+                    keep_snippet = True
+                    break
+
+            if keep_snippet:
                 relevant_texts.append(snippet)
-                docs.append({"title": title, "snippet": snippet})
 
         if not relevant_texts:
             return {"top_k": "No information"}
 
-        # 🔹 Apply weighting based on keywords in title (case-insensitive)
-        for doc in docs:
-            ttl = doc["title"].lower()
-            score = 0
-            if "policy" in ttl:
-                score += 10
-            if "report" in ttl:
-                score += 5
-            if "sop" in ttl:
-                score += 3
-            doc["weight_score"] = score
-
-        # 🔹 Sort docs by descending weight
-        docs_sorted = sorted(docs, key=lambda x: x["weight_score"], reverse=True)
-
-        # 🔹 Slice top_k after re-ranking
-        docs_top_k = docs_sorted[:top_k]
-
-        # Prepare final combined text as before:
-        re_ranked_texts = [d["snippet"] for d in docs_top_k]
-        combined = "\n\n---\n\n".join(re_ranked_texts)
-
+        combined = "\n\n---\n\n".join(relevant_texts)
         return {"top_k": combined}
 
     except Exception as e:
-        logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}")
-        return {"top_k": "No information"}
+        logging.error(f"Error in Tool1 (Index Search): {e}")
+        return {"top_k": f"Error in Tool1 (Index Search): {str(e)}"}
 
-
-#########################################################################
-# Execute Python code inside an isolated environment
-#########################################################################
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def execute_generated_code(code_str):
-    """
-    Runs the code string with dataframes loaded from Azure Blob Storage.
-    """
-    account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
-    sas_token = (
-        "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
-        "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
-        "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
-    )
-    container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
-    target_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
-
-    try:
-        blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
-        container_client = blob_service_client.get_container_client(container_name)
-
-        dataframes = {}
-        blobs = container_client.list_blobs(name_starts_with=target_folder_path)
-
-        for blob in blobs:
-            file_name = blob.name.split('/')[-1]
-            blob_client = container_client.get_blob_client(blob.name)
-            blob_data = blob_client.download_blob().readall()
-
-            if file_name.endswith('.xlsx') or file_name.endswith('.xls'):
-                df = pd.read_excel(io.BytesIO(blob_data))
-            elif file_name.endswith('.csv'):
-                df = pd.read_csv(io.BytesIO(blob_data))
-            else:
-                continue
-
-            dataframes[file_name] = df
-
-        # Replace read calls with references to dataframes dict
-        code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
-        code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
-
-        output_buffer = StringIO()
-        with contextlib.redirect_stdout(output_buffer):
-            local_vars = {
-                "dataframes": dataframes,
-                "pd": pd,
-                "datetime": datetime
-            }
-            exec(code_modified, {}, local_vars)
-
-        output = output_buffer.getvalue().strip()
-        return output if output else "Execution completed with no output."
-
-    except Exception as e:
-        logging.error(f"Error executing generated code: {str(e)}")
-        return f"An error occurred during code execution: {e}"
-
-#########################################################################
-# Tool 2: Generate Python code from LLM (no streaming) and run it
-#########################################################################
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def tool_2_code_run(user_question):
-    # Decide if user question references tabular data
-    need_data = references_tabular_data(user_question, TABLES)
-    if not need_data:
+    if not references_tabular_data(user_question, TABLES):
         return {"result": "No information", "code": ""}
 
     LLM_ENDPOINT = (
@@ -458,9 +373,13 @@ Dataframes samples:
 {SAMPLE_TEXT}
 
 Chat_history:
-{chat_history[-4:]}
+{recent_history}
 """
 
+    headers = {
+        "Content-Type": "application/json",
+        "api-key": LLM_API_KEY
+    }
     payload = {
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -470,39 +389,78 @@ Chat_history:
         "temperature": 0.7
     }
 
-    headers = {
-        "Content-Type": "application/json",
-        "api-key": LLM_API_KEY
-    }
-
     try:
         response = requests.post(LLM_ENDPOINT, headers=headers, json=payload)
         response.raise_for_status()
         data = response.json()
-        # Expect code in data["choices"][0]["message"]["content"]
-        code_str = data["choices"][0]["message"]["content"]
-        code_str = code_str.strip()
+        code_str = ""
 
-        # If LLM yields '404' or empty code => no info
-        if not code_str or "404" in code_str:
+        if "choices" in data and data["choices"]:
+            code_str = data["choices"][0]["message"].get("content", "").strip()
+
+        if not code_str or code_str == "404":
             return {"result": "No information", "code": ""}
 
         execution_result = execute_generated_code(code_str)
         return {"result": execution_result, "code": code_str}
 
     except Exception as ex:
-        logging.error(f"Error in Tool2 (Code Generation/Execution): {str(ex)}")
-        return {"result": "No information", "code": ""}
+        logging.error(f"Error in tool_2_code_run: {ex}")
+        return {
+            "result": f"Error in Tool2 (Code Generation/Execution): {str(ex)}",
+            "code": ""
+        }
 
-#########################################################################
-# Tool 3: Fallback LLM (general knowledge, no data usage)
-#########################################################################
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+def execute_generated_code(code_str):
+    account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
+    sas_token = (
+        "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
+        "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
+        "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
+    )
+    container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
+    target_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
+
+    try:
+        blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
+        container_client = blob_service_client.get_container_client(container_name)
+
+        dataframes = {}
+        blobs = container_client.list_blobs(name_starts_with=target_folder_path)
+
+        for blob in blobs:
+            file_name = blob.name.split('/')[-1]
+            blob_client = container_client.get_blob_client(blob.name)
+            blob_data = blob_client.download_blob().readall()
+
+            if file_name.endswith('.xlsx') or file_name.endswith('.xls'):
+                df = pd.read_excel(io.BytesIO(blob_data))
+            elif file_name.endswith('.csv'):
+                df = pd.read_csv(io.BytesIO(blob_data))
+            else:
+                continue
+
+            dataframes[file_name] = df
+
+        code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
+        code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
+
+        output_buffer = StringIO()
+        with contextlib.redirect_stdout(output_buffer):
+            local_vars = {
+                "dataframes": dataframes,
+                "pd": pd,
+                "datetime": datetime
+            }
+            exec(code_modified, {}, local_vars)
+
+        output = output_buffer.getvalue().strip()
+        return output if output else "Execution completed with no output."
+
+    except Exception as e:
+        return f"An error occurred during code execution: {e}"
+
 def tool_3_llm_fallback(user_question):
-    """
-    If no data from the index or python was found, fallback to a general knowledge approach.
-    No streaming, direct request.
-    """
     LLM_ENDPOINT = (
         "https://cxqaazureaihub2358016269.openai.azure.com/"
         "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
@@ -529,33 +487,26 @@ def tool_3_llm_fallback(user_question):
         "api-key": LLM_API_KEY
     }
 
+    fallback_answer = ""
     try:
         response = requests.post(LLM_ENDPOINT, headers=headers, json=payload)
         response.raise_for_status()
         data = response.json()
-        fallback_answer = data["choices"][0]["message"]["content"].strip()
-        return fallback_answer
+        if "choices" in data and data["choices"]:
+            fallback_answer = data["choices"][0]["message"].get("content", "").strip()
+    except:
+        fallback_answer = "I'm sorry, but I couldn't retrieve a fallback answer."
 
-    except Exception as e:
-        logging.error(f"Fallback LLM error: {e}")
-        return "I'm sorry, but I couldn't retrieve a fallback answer."
+    return fallback_answer.strip()
 
-#########################################################################
-# Combine index data + python data, produce final answer
-#########################################################################
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def final_answer_llm(user_question, index_dict, python_dict):
-    """
-    Merges info from index search + python code results, and forms final answer.
-    No streaming, single request approach.
-    """
     index_top_k = index_dict.get("top_k", "No information").strip()
     python_result = python_dict.get("result", "No information").strip()
 
-    # If both have no info => fallback LLM
     if index_top_k.lower() == "no information" and python_result.lower() == "no information":
         fallback_text = tool_3_llm_fallback(user_question)
-        return f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
+        yield f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
+        return
 
     LLM_ENDPOINT = (
         "https://cxqaazureaihub2358016269.openai.azure.com/"
@@ -566,7 +517,7 @@ def final_answer_llm(user_question, index_dict, python_dict):
     combined_info = f"INDEX_DATA:\n{index_top_k}\n\nPYTHON_DATA:\n{python_result}"
 
     system_prompt = f"""
-You are a helpful assistant. The user asked a question, and you have two data sources:
+You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
 1) Index data: (INDEX_DATA)
 2) Python data: (PYTHON_DATA)
 
@@ -575,10 +526,10 @@ At the end of your final answer, put EXACTLY one line with "Source: X" where X c
 - "Index" if only index data was used,
 - "Python" if only python data was used,
 - "Index & Python" if both were used,
-- or "No information was found in the Data. Can I help you with anything else?" if none is relevant.
+- or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
 
-If multiple sub-questions exist, address them all. Then pick the correct source label.
-If there's conflicting info, mention it clearly.
+Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
+Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
 
 User question:
 {user_question}
@@ -606,21 +557,22 @@ Chat_history:
         "temperature": 0.0
     }
 
+    final_text = ""
     try:
         response = requests.post(LLM_ENDPOINT, headers=headers, json=payload)
         response.raise_for_status()
         data = response.json()
-        final_text = data["choices"][0]["message"]["content"].strip()
-        if not final_text:
-            return "No information was found in the Data. Can I help you with anything else?"
-        return final_text
-    except Exception as e:
-        logging.error(f"Error in final_answer_llm: {str(e)}")
-        return "An error occurred while processing your request."
 
-#########################################################################
-# Append code/text to final answer if source is "Index" or "Python" etc.
-#########################################################################
+        if "choices" in data and data["choices"]:
+            chunk = data["choices"][0]["message"].get("content", "")
+            final_text += chunk
+
+        # yield the entire text in one go
+        yield final_text
+
+    except:
+        yield "\n\nAn error occurred while processing your request."
+
 def post_process_source(final_text, index_dict, python_dict):
     text_lower = final_text.lower()
 
@@ -635,7 +587,6 @@ The Files:
 The code:
 {code_text}
 """
-
     elif "source: python" in text_lower:
         code_text = python_dict.get("code", "")
         return f"""{final_text}
@@ -643,7 +594,6 @@ The code:
 The code:
 {code_text}
 """
-
     elif "source: index" in text_lower:
         top_k_text = index_dict.get("top_k", "No information")
         return f"""{final_text}
@@ -651,120 +601,145 @@ The code:
 The Files:
 {top_k_text}
 """
-
     else:
         return final_text
 
-#########################################################################
-# Determine if user message is just greeting
-#########################################################################
-def is_entirely_greeting_or_punc(phrase):
-    greet_words = {
-        "hello", "hi", "hey", "morning", "evening", "goodmorning", "goodevening",
-        "assalam", "hayo", "hola", "salam", "alsalam", "alsalamualaikum", "assalamualaikum",
-        "greetings", "howdy", "whatsup", "sup", "namaste", "shalom", "bonjour", "ciao",
-        "konichiwa", "nihao", "marhaba", "ahlan", "sawubona", "hallo", "salut", "holaamigo",
-        "heythere", "goodday", "goodafternoon", "yo"
-    }
-    tokens = re.findall(r"[A-Za-z]+", phrase.lower())
-    if not tokens:
-        return False
-    for t in tokens:
-        if t not in greet_words:
-            return False
-    return True
-
-#########################################################################
-# Main function to produce answer
-#########################################################################
+####################################################
+#              GREETING HANDLING UPDATED           #
+####################################################
 def agent_answer(user_question):
-    
     # If user_question is empty or just whitespace
     if not user_question.strip():
         return 
-        
-    # Check for repeated question in cache
-    if user_question in tool_cache:
-        return tool_cache[user_question]
 
-    # Quick greeting check
-    if is_entirely_greeting_or_punc(user_question.strip()):
-        # Return short greeting response
-        if len(chat_history) < 2:
-            result = (
-                "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n"
-                "- To reset the conversation type 'restart chat'.\n"
-                "- To generate Slides, Charts or Documents, type 'export <followed by your requirements>'."
-            )
+    # A function to see if entire user input is basically a greeting
+    def is_entirely_greeting_or_punc(phrase):
+        greet_words = {
+            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", 
+            "Good morning", "goodevening", "good evening", "assalam", "hayo", "hola", 
+            "salam", "alsalam", "alsalamualaikum", "alsalam", "salam", "al salam", 
+            "assalamualaikum", "greetings", "howdy", "what's up", "yo", "sup", "namaste", 
+            "shalom", "bonjour", "ciao", "konichiwa", "ni hao", "marhaba", "ahlan", 
+            "sawubona", "hallo", "salut", "hola amigo", "hey there", "good day"
+        }
+        tokens = re.findall(r"[A-Za-z]+", phrase.lower())
+        if not tokens:
+            return False
+        for t in tokens:
+            if t not in greet_words:
+                return False
+        return True
+
+    user_question_stripped = user_question.strip()
+
+    # If entire phrase is basically a greeting
+    if is_entirely_greeting_or_punc(user_question_stripped):
+        if len(chat_history) < 4:
+            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         else:
-            result = (
-                "Hello! How may I assist you?\n"
-                "- To reset the conversation type 'restart chat'.\n"
-                "- To generate Slides, Charts or Documents, type 'export <followed by your requirements>'."
-            )
-        tool_cache[user_question] = result
-        return result
-
-    # Otherwise, normal flow:
-    index_dict = tool_1_index_search(user_question)
-    python_dict = tool_2_code_run(user_question)
-    final_ans = final_answer_llm(user_question, index_dict, python_dict)
-    final_ans_with_src = post_process_source(final_ans, index_dict, python_dict)
-
-    # Store in cache
-    tool_cache[user_question] = final_ans_with_src
-    return final_ans_with_src
-
-#########################################################################
-# Public-facing function to handle Q&A and log
-#########################################################################
-def Ask_Question(question):
-    """
-    Top-level function:
-    - If "export", do export (Call_Export from Export_Agent.py)
-    - If "restart chat", clear
-    - Otherwise, normal Q&A logic
-    Yields the final answer or export outcome.
-    """
-    global chat_history
-    q_lower = question.lower().strip()
-
-    # 1) Handle export requests
-    if q_lower.startswith("export"):
-        from Export_Agent import Call_Export
-        instructions = question[6:].strip()  # everything after "export"
-
-        # If chat_history is too short:
-        latest_answer = "No previous answer available."
-        latest_question = "No previous question available."
-        if len(chat_history) >= 2:
-            # Typically chat_history appends in order: [User: X, Assistant: Y, ...]
-            latest_answer = chat_history[-1]
-            latest_question = chat_history[-2]
-        elif len(chat_history) == 1:
-            latest_question = chat_history[-1]
-
-        export_result = Call_Export(latest_question, latest_answer, chat_history, instructions)
-        yield export_result
+            yield "Hello! How may I assist you?\n-To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         return
 
-    # 2) Handle "restart chat"
-    if (q_lower == "restart chat") or (q_lower == "reset chat") or (q_lower == "restart the chat") or (q_lower == "reset the chat") or (q_lower == "start over"):
-        chat_history.clear()
+    # Check cache before doing any work
+    cache_key = user_question_stripped.lower()
+    if cache_key in tool_cache:
+        _, _, cached_answer = tool_cache[cache_key]
+        yield cached_answer
+        return    
+
+    # Determine if we need tabular data
+    needs_tabular_data = references_tabular_data(user_question, TABLES)
+
+    # Default dictionaries
+    index_dict = {"top_k": "No information"}
+    python_dict = {"result": "No information", "code": ""}
+
+    # Conditionally run Python tool if needed
+    if needs_tabular_data:
+        python_dict = tool_2_code_run(user_question)
+
+    # Always run index search
+    index_dict = tool_1_index_search(user_question)
+
+    # -------------------------------------------
+    # Collect the final answer in one pass 
+    # -------------------------------------------
+    # 1) Get the raw answer from final_answer_llm
+    raw_answer = ""
+    for token in final_answer_llm(user_question, index_dict, python_dict):
+        raw_answer += token
+
+    # 2) Clean repeated phrases in the raw answer
+    raw_answer = clean_repeated_phrases(raw_answer)
+
+    # 3) Post-process to add source or code snippet
+    final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict)
+
+    # 4) Store in cache
+    tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
+
+    # 5) Yield exactly once
+    yield final_answer_with_source
+
+
+
+def Ask_Question(question):
+    global chat_history
+    question_lower = question.lower().strip()
+
+    if question_lower.startswith("export"):
+        from Export_Agent import Call_Export
+
+        instructions = question[6:].strip()
+
+        if len(chat_history) >= 2:
+            latest_question = chat_history[-1]
+            latest_answer = chat_history[-2]
+        else:
+            yield "Error: Not enough conversation history to perform export. Please ask at least one question first."
+            return
+        for message in Call_Export(
+            latest_question=latest_question,
+            latest_answer=latest_answer,
+            chat_history=chat_history,
+            instructions=instructions
+        ):
+            yield message 
+        return
+
+    if question_lower == "restart chat":
+        chat_history = []
         tool_cache.clear()
         yield "The chat has been restarted."
         return
 
-    # 3) Normal Q&A
+    greetings = ["hello", "hi", "hey", "good morning", "good afternoon", "good evening"]
+    if any(greet in question_lower for greet in greetings):
+        if len(chat_history) <= 1:
+            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+        else:
+            yield "Hello! How may I assist you?\n-To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+        return    
+
     chat_history.append(f"User: {question}")
-    answer_text = agent_answer(question)
-    chat_history.append(f"Assistant: {answer_text}")
 
-    # Keep chat_history from growing too large
-    if len(chat_history) > 12:
-        chat_history = chat_history[-12:]
+    number_of_messages = 10
+    max_pairs = number_of_messages // 2
+    max_entries = max_pairs * 2
 
-    # 4) Logging
+    answer_collected = ""
+
+    try:
+        for token in agent_answer(question):
+            yield token
+            answer_collected += token
+    except Exception as e:
+        yield f"\n\n❌ Error occurred while generating the answer: {str(e)}"
+        return
+
+    chat_history.append(f"Assistant: {answer_collected}")
+    chat_history = chat_history[-max_entries:]
+
     account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
     sas_token = (
         "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
@@ -792,13 +767,11 @@ def Ask_Question(question):
     current_time = datetime.now().strftime("%H:%M:%S")
     row = [
         current_time,
-        question.replace('"','""'),
-        answer_text.replace('"','""'),
+        question.replace('"', '""'),
+        answer_collected.replace('"', '""'),
         "anonymous"
     ]
     lines.append(",".join(f'"{x}"' for x in row))
+
     new_csv_content = "\n".join(lines) + "\n"
     blob_client.upload_blob(new_csv_content, overwrite=True)
-
-    # 5) Return the final answer
-    yield answer_text
