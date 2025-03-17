@@ -2,7 +2,7 @@ import os
 import asyncio
 from flask import Flask, request, jsonify, Response
 from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
-from botbuilder.schema import Activity, ActivityTypes
+from botbuilder.schema import Activity
 from ask_func import Ask_Question, chat_history  # updated ask_func, which logs user_email
 
 # 1) Import TeamsInfo to retrieve user emails
@@ -34,7 +34,7 @@ def ask():
         return jsonify({"error": 'Invalid request, "question" is required.'}), 400
 
     question = data["question"]
-    # If they included a user_email, use it; else "anonymous"
+    # if they included a user_email, use it, else "anonymous"
     user_email = data.get("user_email", "anonymous")
 
     ans_gen = Ask_Question(question, user_email=user_email)
@@ -72,7 +72,7 @@ async def _bot_logic(turn_context: TurnContext):
     user_message = turn_context.activity.text or ""
 
     # -----------------------------------------------------------
-    # 1) Retrieve the Teams user's email or default to "anonymous"
+    # 2) Retrieve the Teams user's email or default to "anonymous"
     # -----------------------------------------------------------
     user_email = "anonymous"
     if turn_context.activity.channel_id == "msteams":
@@ -86,18 +86,11 @@ async def _bot_logic(turn_context: TurnContext):
             elif member and member.user_principal_name:
                 user_email = member.user_principal_name
         except Exception as e:
-            # If we fail (permissions or otherwise), leave user_email as "anonymous"
+            # If we fail (permissions or otherwise), leave it as "anonymous"
             print(f"Could not retrieve user email: {e}")
 
     # -----------------------------------------------------------
-    # 2) Show the "typing" indicator before processing the question
-    # -----------------------------------------------------------
-    await turn_context.send_activity(Activity(type=ActivityTypes.Typing))
-    # Optional short delay so user sees the typing spinner:
-    await asyncio.sleep(1)
-
-    # -----------------------------------------------------------
-    # 3) Pass user_email to Ask_Question so it's logged
+    # 3) Pass user_email to Ask_Question so it gets logged
     # -----------------------------------------------------------
     ans_gen = Ask_Question(user_message, user_email=user_email)
     answer_text = "".join(ans_gen)
@@ -105,13 +98,10 @@ async def _bot_logic(turn_context: TurnContext):
     # Update the conversation history
     conversation_histories[conversation_id] = ask_func.chat_history
 
-    # -----------------------------------------------------------
-    # 4) Check if there's a "Source:" line in the answer
-    # -----------------------------------------------------------
+    # If there's "Source:" in answer_text, parse out main answer, source line, and appended details if any
     import re
     source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
     match = re.search(source_pattern, answer_text, flags=re.DOTALL)
-
     if match:
         main_answer = match.group(1).strip()
         source_line = match.group(2).strip()
@@ -121,10 +111,8 @@ async def _bot_logic(turn_context: TurnContext):
         source_line = ""
         appended_details = ""
 
-    # -----------------------------------------------------------
-    # 5) If there's a "Source:" line, hide it behind a toggle
-    # -----------------------------------------------------------
     if source_line:
+        # Hide the source line and appended details behind a toggle in an Adaptive Card
         body_blocks = [
             {
                 "type": "TextBlock",
