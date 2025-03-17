@@ -223,7 +223,7 @@ def is_text_relevant(question, snippet):
 # Decide if user question references tabular data
 #########################################################################
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def references_tabular_data(question, tables_text):
+def references_tabular_data(question, tables_text, recent_history):
     """
     Improved logic: We'll do a single request, no streaming, strict yes/no.
     """
@@ -236,11 +236,11 @@ def references_tabular_data(question, tables_text):
     system_prompt = (
         "You are a helpful agent. Decide if the user's question references or requires the tabular data.\n"
         "Return ONLY 'YES' or 'NO' (in all caps).\n"
-       "The tables are not exclusive to the data it has, this is just a sample. **dont use the content of the sample table as the complete content. There are other rows the you were not shown**."
+        "The tables are not exclusive to the data it has, this is just a sample. **dont use the content of the sample table as the complete content. There are other rows the you were not shown**."
     )
     user_prompt = (
         f"User question: {question}\n\n"
-        f"Previous conversation:\n{chat_history[-4:]}\n\n"
+        f"Previous conversation:\n{recent_history[-4:]}\n\n"
         f"We have these tables: {tables_text}\n\n"
         "Does the user need the data from these tables to answer their question?\n"
         "Return ONLY 'YES' if it does, or ONLY 'NO' if it does not."
@@ -426,7 +426,7 @@ def execute_generated_code(code_str):
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def tool_2_code_run(user_question):
     # Decide if user question references tabular data
-    need_data = references_tabular_data(user_question, TABLES)
+    need_data = references_tabular_data(user_question, TABLES, chat_history)
     if not need_data:
         return {"result": "No information", "code": ""}
 
@@ -681,7 +681,7 @@ def agent_answer(user_question):
     
     # If user_question is empty or just whitespace
     if not user_question.strip():
-        return 
+        return "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         
     # Check for repeated question in cache
     if user_question in tool_cache:
@@ -690,17 +690,17 @@ def agent_answer(user_question):
     # Quick greeting check
     if is_entirely_greeting_or_punc(user_question.strip()):
         # Return short greeting response
-        if len(chat_history) < 2:
+        if len(chat_history) < 1:
             result = (
                 "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n"
                 "- To reset the conversation type 'restart chat'.\n"
-                "- To generate Slides, Charts or Documents, type 'export <followed by your requirements>'."
+                "- To generate Slides, Charts or Document, type 'export followed by your requirements."
             )
         else:
             result = (
                 "Hello! How may I assist you?\n"
-                "- To reset the conversation type 'restart chat'.\n"
-                "- To generate Slides, Charts or Documents, type 'export <followed by your requirements>'."
+                "-To reset the conversation type 'restart chat'.\n"
+                "-To generate Slides, Charts or Document, type 'export followed by your requirements."
             )
         tool_cache[user_question] = result
         return result
@@ -716,15 +716,153 @@ def agent_answer(user_question):
     return final_ans_with_src
 
 #########################################################################
+# Logging and Topic function 
+#########################################################################
+def Classify_Topic(question, answer_text, chat_history):
+    """
+    Classifies the question into one of these topics:
+    (Policy, SOP, Report, Analysis, Exporting_file, Other)
+    using the last 4 lines of chat history.
+    """
+    LLM_ENDPOINT = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
+    LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+
+    # Gather up to the last 4 lines of chat
+    recent_history = "\n".join(chat_history[-4:])
+
+    system_prompt = (
+        "You are a topic classifier. You will receive:\n"
+        "1) A user question\n"
+        "2) The assistant's answer\n"
+        "3) Up to 4 lines of previous chat\n"
+        "You must classify the overall topic of the user's question into exactly one of the following:\n"
+        "    Policy, SOP, Report, Analysis, Exporting_file, Other\n"
+        "Return only the topic word. No explanations."
+    )
+    user_prompt = (
+        f"Question: {question}\nAnswer: {answer_text}\n\nRecent history:\n{recent_history}\n\n"
+        "What is the single best-fitting topic label?"
+    )
+
+    payload = {
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "max_tokens": 50,
+        "temperature": 0.0
+    }
+
+    headers = {"Content-Type": "application/json", "api-key": LLM_API_KEY}
+
+    try:
+        response = requests.post(LLM_ENDPOINT, headers=headers, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        raw_topic = data["choices"][0]["message"]["content"].strip()
+        valid_topics = ["Policy", "SOP", "Report", "Analysis", "Exporting_file", "Other"]
+        return raw_topic if raw_topic in valid_topics else "Other"
+    except:
+        return "Other"
+
+
+def Log_Interaction(question, final_answer, user_email="anonymous"):
+    """
+    Logs the Q&A interaction to Azure Blob Storage, including:
+    - time
+    - question
+    - answer_text (everything before "Source:")
+    - source
+    - source_material
+    - conversation_length
+    - topic
+    - user_id (now set to user_email)
+    """
+    from azure.storage.blob import BlobServiceClient
+    from datetime import datetime
+
+    global chat_history
+
+    # 1) Split final_answer into lines
+    lines = final_answer.strip().split("\n")
+    # 2) Initialize defaults
+    pure_answer = final_answer
+    source = "N/A"
+    source_material = "N/A"
+
+    # 3) Find the line that starts with "Source:"
+    source_idx = None
+    for i, line in enumerate(lines):
+        if line.strip().lower().startswith("source:"):
+            source_idx = i
+            break
+
+    # 4) If found, parse out "Source" and "Source material"
+    if source_idx is not None:
+        src_line = lines[source_idx].strip()
+        source_val = src_line[7:].strip()  # everything after "Source:"
+        source = source_val if source_val else "N/A"
+
+        if source_idx + 1 < len(lines):
+            source_material = "\n".join(lines[source_idx + 1:]).strip()
+
+        pure_answer = "\n".join(lines[:source_idx]).strip()
+
+    conversation_length = len(chat_history)
+    topic = Classify_Topic(question, pure_answer, chat_history)
+
+    account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
+    sas_token = (
+        "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
+        "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
+        "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
+    )
+    container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
+
+    blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
+    container_client = blob_service_client.get_container_client(container_name)
+
+    target_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/logs/"
+    date_str = datetime.now().strftime("%Y_%m_%d")
+    log_filename = f"logs_{date_str}.csv"
+    blob_name = target_folder_path + log_filename
+    blob_client = container_client.get_blob_client(blob_name)
+
+    try:
+        existing_data = blob_client.download_blob().readall().decode("utf-8")
+        lines_csv = existing_data.strip().split("\n")
+        if not lines_csv or not lines_csv[0].startswith("time,question,answer_text,source,source_material,conversation_length,topic,user_id"):
+            lines_csv = ["time,question,answer_text,source,source_material,conversation_length,topic,user_id"]
+    except:
+        lines_csv = ["time,question,answer_text,source,source_material,conversation_length,topic,user_id"]
+
+    current_time = datetime.now().strftime("%H:%M:%S")
+    row = [
+        current_time,
+        question.replace('"','""'),
+        pure_answer.replace('"','""'),
+        source.replace('"','""'),
+        source_material.replace('"','""'),
+        str(conversation_length),
+        topic.replace('"','""'),
+        user_email.replace('"','""')
+    ]
+    lines_csv.append(",".join(f'"{x}"' for x in row))
+    new_csv_content = "\n".join(lines_csv) + "\n"
+
+    blob_client.upload_blob(new_csv_content, overwrite=True)
+
+#########################################################################
 # Public-facing function to handle Q&A and log
 #########################################################################
-def Ask_Question(question):
+def Ask_Question(question, user_email="anonymous"):
     """
     Top-level function:
     - If "export", do export (Call_Export from Export_Agent.py)
     - If "restart chat", clear
     - Otherwise, normal Q&A logic
     Yields the final answer or export outcome.
+    Accepts a user_email parameter for logging.
     """
     global chat_history
     q_lower = question.lower().strip()
@@ -749,7 +887,13 @@ def Ask_Question(question):
         return
 
     # 2) Handle "restart chat"
-    if (q_lower == "restart chat") or (q_lower == "reset chat") or (q_lower == "restart the chat") or (q_lower == "reset the chat") or (q_lower == "start over"):
+    if (
+        q_lower == "restart chat"
+        or q_lower == "reset chat"
+        or q_lower == "restart the chat"
+        or q_lower == "reset the chat"
+        or q_lower == "start over"
+    ):
         chat_history.clear()
         tool_cache.clear()
         yield "The chat has been restarted."
@@ -794,7 +938,7 @@ def Ask_Question(question):
         current_time,
         question.replace('"','""'),
         answer_text.replace('"','""'),
-        "anonymous"
+        user_email.replace('"','""')  # Store the actual user_email instead of "anonymous"
     ]
     lines.append(",".join(f'"{x}"' for x in row))
     new_csv_content = "\n".join(lines) + "\n"
@@ -802,3 +946,4 @@ def Ask_Question(question):
 
     # 5) Return the final answer
     yield answer_text
+
