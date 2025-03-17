@@ -716,101 +716,55 @@ def agent_answer(user_question):
     return final_ans_with_src
 
 #########################################################################
-# Logging and Topic function 
+# Public-facing function to handle Q&A and log
 #########################################################################
-def Classify_Topic(question, answer_text, chat_history):
+def Ask_Question(question):
     """
-    Classifies the question into one of these topics:
-    (Policy, SOP, Report, Analysis, Exporting_file, Other)
-    using the last 4 lines of chat history.
+    Top-level function:
+    - If "export", do export (Call_Export from Export_Agent.py)
+    - If "restart chat", clear
+    - Otherwise, normal Q&A logic
+    Yields the final answer or export outcome.
     """
-    LLM_ENDPOINT = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
-    LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
-
-    # Gather up to the last 4 lines of chat
-    recent_history = "\n".join(chat_history[-4:])
-
-    system_prompt = (
-        "You are a topic classifier. You will receive:\n"
-        "1) A user question\n"
-        "2) The assistant's answer\n"
-        "3) Up to 4 lines of previous chat\n"
-        "You must classify the overall topic of the user's question into exactly one of the following:\n"
-        "    Policy, SOP, Report, Analysis, Exporting_file, Other\n"
-        "Return only the topic word. No explanations."
-    )
-    user_prompt = (
-        f"Question: {question}\nAnswer: {answer_text}\n\nRecent history:\n{recent_history}\n\n"
-        "What is the single best-fitting topic label?"
-    )
-
-    payload = {
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        "max_tokens": 50,
-        "temperature": 0.0
-    }
-
-    headers = {"Content-Type": "application/json", "api-key": LLM_API_KEY}
-
-    try:
-        response = requests.post(LLM_ENDPOINT, headers=headers, json=payload)
-        response.raise_for_status()
-        data = response.json()
-        raw_topic = data["choices"][0]["message"]["content"].strip()
-        valid_topics = ["Policy", "SOP", "Report", "Analysis", "Exporting_file", "Other"]
-        return raw_topic if raw_topic in valid_topics else "Other"
-    except:
-        return "Other"
-
-
-def Log_Interaction(question, final_answer, user_email="anonymous"):
-    """
-    Logs the Q&A interaction to Azure Blob Storage, including:
-    - time
-    - question
-    - answer_text (everything before "Source:")
-    - source
-    - source_material
-    - conversation_length
-    - topic
-    - user_id (now set to user_email)
-    """
-    from azure.storage.blob import BlobServiceClient
-    from datetime import datetime
-
     global chat_history
+    q_lower = question.lower().strip()
 
-    # 1) Split final_answer into lines
-    lines = final_answer.strip().split("\n")
-    # 2) Initialize defaults
-    pure_answer = final_answer
-    source = "N/A"
-    source_material = "N/A"
+    # 1) Handle export requests
+    if q_lower.startswith("export"):
+        from Export_Agent import Call_Export
+        instructions = question[6:].strip()  # everything after "export"
 
-    # 3) Find the line that starts with "Source:"
-    source_idx = None
-    for i, line in enumerate(lines):
-        if line.strip().lower().startswith("source:"):
-            source_idx = i
-            break
+        # If chat_history is too short:
+        latest_answer = "No previous answer available."
+        latest_question = "No previous question available."
+        if len(chat_history) >= 2:
+            # Typically chat_history appends in order: [User: X, Assistant: Y, ...]
+            latest_answer = chat_history[-1]
+            latest_question = chat_history[-2]
+        elif len(chat_history) == 1:
+            latest_question = chat_history[-1]
 
-    # 4) If found, parse out "Source" and "Source material"
-    if source_idx is not None:
-        src_line = lines[source_idx].strip()
-        source_val = src_line[7:].strip()  # everything after "Source:"
-        source = source_val if source_val else "N/A"
+        export_result = Call_Export(latest_question, latest_answer, chat_history, instructions)
+        yield export_result
+        return
 
-        if source_idx + 1 < len(lines):
-            source_material = "\n".join(lines[source_idx + 1:]).strip()
+    # 2) Handle "restart chat"
+    if (q_lower == "restart chat") or (q_lower == "reset chat") or (q_lower == "restart the chat") or (q_lower == "reset the chat") or (q_lower == "start over"):
+        chat_history.clear()
+        tool_cache.clear()
+        yield "The chat has been restarted."
+        return
 
-        pure_answer = "\n".join(lines[:source_idx]).strip()
+    # 3) Normal Q&A
+    chat_history.append(f"User: {question}")
+    answer_text = agent_answer(question)
+    chat_history.append(f"Assistant: {answer_text}")
 
-    conversation_length = len(chat_history)
-    topic = Classify_Topic(question, pure_answer, chat_history)
+    # Keep chat_history from growing too large
+    if len(chat_history) > 12:
+        chat_history = chat_history[-12:]
 
+    # 4) Logging
     account_url = "https://cxqaazureaihub8779474245.blob.core.windows.net"
     sas_token = (
         "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
@@ -818,7 +772,6 @@ def Log_Interaction(question, final_answer, user_email="anonymous"):
         "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
     )
     container_name = "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
-
     blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
     container_client = blob_service_client.get_container_client(container_name)
 
@@ -830,73 +783,22 @@ def Log_Interaction(question, final_answer, user_email="anonymous"):
 
     try:
         existing_data = blob_client.download_blob().readall().decode("utf-8")
-        lines_csv = existing_data.strip().split("\n")
-        if not lines_csv or not lines_csv[0].startswith("time,question,answer_text,source,source_material,conversation_length,topic,user_id"):
-            lines_csv = ["time,question,answer_text,source,source_material,conversation_length,topic,user_id"]
+        lines = existing_data.strip().split("\n")
+        if not lines or not lines[0].startswith("time,question,answer,user_id"):
+            lines = ["time,question,answer,user_id"]
     except:
-        lines_csv = ["time,question,answer_text,source,source_material,conversation_length,topic,user_id"]
+        lines = ["time,question,answer,user_id"]
 
     current_time = datetime.now().strftime("%H:%M:%S")
     row = [
         current_time,
         question.replace('"','""'),
-        pure_answer.replace('"','""'),
-        source.replace('"','""'),
-        source_material.replace('"','""'),
-        str(conversation_length),
-        topic.replace('"','""'),
-        user_email.replace('"','""')
+        answer_text.replace('"','""'),
+        "anonymous"
     ]
-    lines_csv.append(",".join(f'"{x}"' for x in row))
-    new_csv_content = "\n".join(lines_csv) + "\n"
-
+    lines.append(",".join(f'"{x}"' for x in row))
+    new_csv_content = "\n".join(lines) + "\n"
     blob_client.upload_blob(new_csv_content, overwrite=True)
 
-#########################################################################
-# Public-facing function to handle Q&A and log
-#########################################################################
-def Ask_Question(question, user_email="anonymous"):
-    """
-    Top-level function to handle user input.
-    - If 'export', call export logic.
-    - If 'restart chat', clear conversation.
-    - Otherwise, perform normal Q&A and log with Log_Interaction.
-    """
-    global chat_history
-    q_lower = question.lower().strip()
-
-    # Handle export requests
-    if q_lower.startswith("export"):
-        from Export_Agent import Call_Export
-        instructions = question[6:].strip()
-        if len(chat_history) >= 2:
-            latest_answer = chat_history[-1]
-            latest_question = chat_history[-2]
-        else:
-            latest_answer = "No previous answer available."
-            latest_question = "No previous question available."
-        export_result = Call_Export(latest_question, latest_answer, chat_history, instructions)
-        yield export_result
-        return
-
-    # Handle "restart chat"
-    if q_lower in ["restart chat", "reset chat", "restart the chat", "reset the chat", "start over"]:
-        chat_history.clear()
-        tool_cache.clear()
-        yield "The chat has been restarted."
-        return
-
-    # Normal Q&A
-    chat_history.append(f"User: {question}")
-    final_answer = agent_answer(question)
-    chat_history.append(f"Assistant: {final_answer}")
-
-    # Trim chat_history if needed
-    if len(chat_history) > 12:
-        chat_history = chat_history[-12:]
-
-    # Logging
-    Log_Interaction(question, final_answer, user_email)
-
-    # Return final answer
-    yield final_answer
+    # 5) Return the final answer
+    yield answer_text
