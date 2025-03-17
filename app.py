@@ -2,18 +2,17 @@ import os
 import asyncio
 
 from flask import Flask, request, jsonify, Response
-
-# Important Bot Builder imports
-from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
+from botbuilder.core import (
+    BotFrameworkAdapter,
+    BotFrameworkAdapterSettings,
+    TurnContext
+)
 from botbuilder.schema import Activity
+# *** Important: import TeamsInfo ***
+from botbuilder.core.teams import TeamsInfo
 
-# Import your QnA / logic code
 from ask_func import Ask_Question, chat_history
 
-
-# ------------------------------------------------
-#   Flask App and Bot Adapter Setup
-# ------------------------------------------------
 app = Flask(__name__)
 
 MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
@@ -22,41 +21,14 @@ MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
 
-# In-memory storage for conversation history per conversation ID
 conversation_histories = {}
 
-
-# ------------------------------------------------
-#   Basic Route
-# ------------------------------------------------
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({"message": "API is running!"}), 200
 
-
-# ------------------------------------------------
-#   Optional: Simple /ask endpoint for local tests
-# ------------------------------------------------
-@app.route("/ask", methods=["POST"])
-def ask():
-    data = request.get_json()
-    if not data or "question" not in data:
-        return jsonify({"error": 'Invalid request, "question" is required.'}), 400
-
-    question = data["question"]
-
-    # In this example, we’re NOT capturing user_id from outside, so it remains "anonymous"
-    ans_gen = Ask_Question(question, user_id="anonymous")
-    answer_text = "".join(ans_gen)
-    return jsonify({"answer": answer_text})
-
-
-# ------------------------------------------------
-#   Teams-compatible /api/messages endpoint
-# ------------------------------------------------
 @app.route("/api/messages", methods=["POST"])
 def messages():
-    # Must check JSON content
     if "application/json" not in request.headers.get("Content-Type", ""):
         return Response(status=415)
 
@@ -64,7 +36,6 @@ def messages():
     activity = Activity().deserialize(body)
     auth_header = request.headers.get("Authorization", "")
 
-    # Run the Bot's logic in an event loop
     loop = asyncio.new_event_loop()
     try:
         loop.run_until_complete(adapter.process_activity(activity, auth_header, _bot_logic))
@@ -73,84 +44,55 @@ def messages():
 
     return Response(status=200)
 
-
-# ------------------------------------------------
-#   Main Bot Logic (called by adapter)
-# ------------------------------------------------
 async def _bot_logic(turn_context: TurnContext):
-    """
-    This function is invoked each time a message arrives from Teams.
-    We show a "typing" indicator, gather user ID from Teams, and
-    then get an answer using the Ask_Question function.
-    """
-
     conversation_id = turn_context.activity.conversation.id
     if conversation_id not in conversation_histories:
         conversation_histories[conversation_id] = []
 
-    # Let ask_func.py see this conversation's history
     import ask_func
     ask_func.chat_history = conversation_histories[conversation_id]
 
     user_message = turn_context.activity.text or ""
 
-    # --------------------------------------------------------------------------
-    # 1) EXTRACT USER EMAIL / UPN FROM TEAMS (OR FALL BACK IF NOT FOUND)
-    # --------------------------------------------------------------------------
-    user_id = "anonymous"
+    # --------------------------------------------------------------------
+    # Use 'TeamsInfo.get_member' to get userPrincipalName or email
+    # --------------------------------------------------------------------
+    user_id = "anonymous"  # fallback
+    try:
+        # 'from_property.id' usually holds the "29:..." Teams user ID
+        teams_user_id = turn_context.activity.from_property.id
 
-    from_prop = turn_context.activity.from_property
-    channel_data = turn_context.activity.channel_data or {}
+        # This call will attempt to fetch the user's profile from Teams
+        teams_member = await TeamsInfo.get_member(turn_context, teams_user_id)
+        # If successful, you can read these fields:
+        #   teams_member.user_principal_name (often the email/UPN)
+        #   teams_member.email
+        #   teams_member.name
+        #   teams_member.id
+        if teams_member and teams_member.user_principal_name:
+            user_id = teams_member.user_principal_name
+        elif teams_member and teams_member.email:
+            user_id = teams_member.email
+        else:
+            user_id = teams_user_id  # fallback if we can't get an email
 
-    # (a) If there's a typical "teamsUser" in channelData
-    teams_user = channel_data.get("teamsUser", {})
-    if isinstance(teams_user, dict):
-        possible_upn = teams_user.get("userPrincipalName")
-        if possible_upn and "@" in possible_upn:
-            user_id = possible_upn
+    except Exception as e:
+        # If get_member call fails (e.g., in a group chat scenario or permission issues),
+        # just fallback to the "29:..." ID or 'anonymous'
+        user_id = turn_context.activity.from_property.id or "anonymous"
 
-    # (b) If not found, check from_property
-    if user_id == "anonymous" and from_prop:
-        # user_principal_name if available
-        if hasattr(from_prop, "user_principal_name") and from_prop.user_principal_name:
-            user_id = from_prop.user_principal_name
-
-        # or try additional_properties
-        elif getattr(from_prop, "additional_properties", None):
-            extra_props = from_prop.additional_properties
-            upn_extra = extra_props.get("userPrincipalName") or extra_props.get("email")
-            if upn_extra and "@" in upn_extra:
-                user_id = upn_extra
-
-        # If still not found, at least try aadObjectId
-        if user_id == "anonymous" and hasattr(from_prop, "aadObjectId") and from_prop.aadObjectId:
-            user_id = from_prop.aadObjectId
-
-        # Fallback to from_prop.id
-        if user_id == "anonymous" and from_prop.id:
-            user_id = from_prop.id
-
-    # --------------------------------------------------------------------------
-    # 2) Show "thinking/typing" indicator
-    # --------------------------------------------------------------------------
+    # Show "thinking" indicator
     typing_activity = Activity(type="typing")
     await turn_context.send_activity(typing_activity)
 
-    # --------------------------------------------------------------------------
-    # 3) Get answer from ask_func
-    # --------------------------------------------------------------------------
+    # Pass the user_id to your QnA logic
     ans_gen = Ask_Question(user_message, user_id=user_id)
     answer_text = "".join(ans_gen)
 
-    # --------------------------------------------------------------------------
-    # 4) Save updated conversation history for the user
-    # --------------------------------------------------------------------------
+    # Save updated conversation history
     conversation_histories[conversation_id] = ask_func.chat_history
 
-    # --------------------------------------------------------------------------
-    # 5) (Optional) Build an Adaptive Card if you have "Source:" lines
-    #    Otherwise, just send plain text.
-    # --------------------------------------------------------------------------
+    # OPTIONAL: parse out "Source:" lines to hide them behind a toggle
     import re
     source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
     match = re.search(source_pattern, answer_text, flags=re.DOTALL)
@@ -165,7 +107,6 @@ async def _bot_logic(turn_context: TurnContext):
         appended_details = ""
 
     if source_line:
-        # We can hide the source line and appended details behind a toggle
         body_blocks = [
             {
                 "type": "TextBlock",
@@ -216,13 +157,7 @@ async def _bot_logic(turn_context: TurnContext):
         )
         await turn_context.send_activity(message)
     else:
-        # No "Source:" line, just return the plain text
         await turn_context.send_activity(Activity(type="message", text=main_answer))
 
-
-# ------------------------------------------------
-#   Entry point for local run
-# ------------------------------------------------
 if __name__ == "__main__":
-    # Expose on port 80 by default (or pick another)
     app.run(host="0.0.0.0", port=80)
