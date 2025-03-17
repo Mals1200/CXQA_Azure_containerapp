@@ -1,77 +1,4 @@
-import os
-import asyncio
-from flask import Flask, request, jsonify, Response
-from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
-from botbuilder.schema import Activity
-from ask_func import Ask_Question, chat_history
-
-app = Flask(__name__)
-
-# These should be set as environment variables in Azure or your local .env
-MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
-MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
-
-adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
-adapter = BotFrameworkAdapter(adapter_settings)
-
-# In-memory mapping from conversation_id -> conversation_history
-conversation_histories = {}
-
-@app.route("/", methods=["GET"])
-def home():
-    """
-    Simple health-check endpoint.
-    """
-    return jsonify({"message": "API is running!"}), 200
-
-@app.route("/ask", methods=["POST"])
-def ask():
-    """
-    Non-Teams usage for direct Q&A.
-    JSON body must include { "question": "...", "user_email": "optional@domain" }.
-    """
-    data = request.get_json()
-    if not data or "question" not in data:
-        return jsonify({"error": 'Invalid request, "question" is required.'}), 400
-
-    question = data["question"]
-    user_email = data.get("user_email", "anonymous")
-
-    ans_gen = Ask_Question(question, user_id=user_email)
-    answer_text = "".join(ans_gen)
-    return jsonify({"answer": answer_text})
-
-
-@app.route("/api/messages", methods=["POST"])
-def messages():
-    """
-    Primary endpoint for Microsoft Teams messages (via Bot Framework).
-    """
-    if "application/json" not in request.headers.get("Content-Type", ""):
-        return Response(status=415)
-
-    body = request.json
-    activity = Activity().deserialize(body)
-    auth_header = request.headers.get("Authorization", "")
-
-    loop = asyncio.new_event_loop()
-    try:
-        loop.run_until_complete(adapter.process_activity(activity, auth_header, _bot_logic))
-    finally:
-        loop.close()
-
-    return Response(status=200)
-
-
 async def _bot_logic(turn_context: TurnContext):
-    """
-    Main bot logic invoked by Teams.
-    1) Restores conversation history for this conversation_id.
-    2) Attempts to get user’s email from claims, else "anonymous".
-    3) Calls Ask_Question(...) with user_id.
-    4) If "Source:" in final answer, builds an Adaptive Card with hidden sections.
-    """
-
     conversation_id = turn_context.activity.conversation.id
     if conversation_id not in conversation_histories:
         conversation_histories[conversation_id] = []
@@ -81,29 +8,65 @@ async def _bot_logic(turn_context: TurnContext):
 
     user_message = turn_context.activity.text or ""
 
-    # ----------------------------------------------------------------
-    # Attempt to retrieve user's Azure/Teams email from the activity claims
-    # ----------------------------------------------------------------
+    # --------------------------------------------------------------------------
+    # EXTRACT USER EMAIL / UPN FROM TEAMS (OR FALL BACK IF NOT FOUND)
+    # --------------------------------------------------------------------------
     user_id = "anonymous"
-    if turn_context.activity.claims:
-        for claim in turn_context.activity.claims:
-            # Common claim type for email in Azure AD / Teams
-            if claim.get("type") == "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress":
-                user_id = claim.get("value")
-                break
 
-    # Show a Teams typing indicator
+    from_prop = turn_context.activity.from_property
+    channel_data = turn_context.activity.channel_data or {}
+
+    # 1) Check if there's a typical Teams field in channelData
+    #    (e.g., "teamsUser" -> "userPrincipalName").
+    teams_user = channel_data.get("teamsUser", {})
+    if isinstance(teams_user, dict):
+        possible_upn = teams_user.get("userPrincipalName")
+        if possible_upn and "@" in possible_upn:
+            user_id = possible_upn
+
+    # 2) If not found yet, check "from_property" fields
+    if user_id == "anonymous" and from_prop:
+        # Try userPrincipalName
+        if hasattr(from_prop, "user_principal_name") and from_prop.user_principal_name:
+            user_id = from_prop.user_principal_name
+
+        # If still not found, check additionalProperties
+        elif getattr(from_prop, "additional_properties", None):
+            extra_props = from_prop.additional_properties
+            upn_extra = extra_props.get("userPrincipalName") or extra_props.get("email")
+            if upn_extra and "@" in upn_extra:
+                user_id = upn_extra
+
+        # If we never found a valid email, try using aadObjectId at least
+        if user_id == "anonymous":
+            if hasattr(from_prop, "aadObjectId") and from_prop.aadObjectId:
+                user_id = from_prop.aadObjectId
+
+        # Finally, if we still have nothing, fallback to from_prop.id
+        if user_id == "anonymous":
+            if from_prop.id:
+                user_id = from_prop.id
+
+    # --------------------------------------------------------------------------
+    # Send "typing" indicator to Teams
+    # --------------------------------------------------------------------------
     typing_activity = Activity(type="typing")
     await turn_context.send_activity(typing_activity)
 
-    # Generate the answer from ask_func, passing the discovered user_id
+    # --------------------------------------------------------------------------
+    # Pass user_id to Ask_Question so it gets logged properly
+    # --------------------------------------------------------------------------
     ans_gen = Ask_Question(user_message, user_id=user_id)
     answer_text = "".join(ans_gen)
 
-    # Update the conversation history
+    # --------------------------------------------------------------------------
+    # Update conversation history for this conversation ID
+    # --------------------------------------------------------------------------
     conversation_histories[conversation_id] = ask_func.chat_history
 
-    # If there's "Source:" in the answer, parse main text vs. source lines
+    # --------------------------------------------------------------------------
+    # Build an optional Adaptive Card with a Show/Hide Source button
+    # --------------------------------------------------------------------------
     import re
     source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
     match = re.search(source_pattern, answer_text, flags=re.DOTALL)
@@ -116,8 +79,8 @@ async def _bot_logic(turn_context: TurnContext):
         source_line = ""
         appended_details = ""
 
-    # If there's a "Source:" line, place it (plus appended details) behind a toggle in an Adaptive Card
     if source_line:
+        # Hide both the source line and appended details behind the same toggle
         body_blocks = [
             {
                 "type": "TextBlock",
@@ -132,6 +95,7 @@ async def _bot_logic(turn_context: TurnContext):
                 "isVisible": False
             }
         ]
+
         if appended_details:
             body_blocks.append({
                 "type": "TextBlock",
@@ -158,7 +122,6 @@ async def _bot_logic(turn_context: TurnContext):
             "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
             "version": "1.2"
         }
-
         message = Activity(
             type="message",
             attachments=[{
@@ -167,12 +130,6 @@ async def _bot_logic(turn_context: TurnContext):
             }]
         )
         await turn_context.send_activity(message)
-
     else:
-        # Otherwise, send a plain text response
+        # No "Source:" line, just return the plain text
         await turn_context.send_activity(Activity(type="message", text=main_answer))
-
-
-if __name__ == "__main__":
-    # Run Flask app on port 80 (or your preferred port)
-    app.run(host="0.0.0.0", port=80)
