@@ -146,59 +146,96 @@ def stream_azure_chat_completion(endpoint, headers, payload, print_stream=False)
 import json
 import requests
 
-def split_question_into_subquestions(user_question):
-    """
-    Uses an LLM to determine if the question should be split into multiple sub-questions.
-    Returns a list of sub-questions if needed, otherwise returns the question as a single item list.
-    """
+import re
+import requests
 
-    LLM_ENDPOINT = (
-        "https://cxqaazureaihub2358016269.openai.azure.com/"
-        "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
-    )
-    LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+def split_question_into_subquestions(user_question, use_semantic_parsing=True):
+    """
+    Splits a user question into subquestions using either a regex-based approach or a semantic parsing approach.
 
-    system_prompt = """
-    You are an expert in semantic parsing. Your task is to carefully split complex questions into their most meaningful sub-questions.
+    Parameters:
+        - user_question (str): The question to split.
+        - use_semantic_parsing (bool): If True, use semantic parsing. Otherwise, use regex-based approach.
+
+    Returns:
+        - list: A list of subquestions.
+    """
     
-    **Rules:**
-    1. Split **only** if the question has distinct, meaningful sub-questions.
-    2. Do **NOT** split phrases like "rainy and cloudy" which belong together.
-    3. Return a **valid JSON array of strings**, where each string is a well-formed sub-question.
-    4. If no splitting is necessary, return the original question as a **single-item list**.
-    """
+    ###############################
+    # 1) BASIC REGEX-BASED APPROACH
+    ###############################
+    if not use_semantic_parsing:
+        # Regex-based splitting (e.g., "and" or "&")
+        text = re.sub(r"\s+and\s+", " ~SPLIT~ ", user_question, flags=re.IGNORECASE)
+        text = re.sub(r"\s*&\s*", " ~SPLIT~ ", text)
+        parts = text.split("~SPLIT~")
+        subqs = [p.strip() for p in parts if p.strip()]
+        return subqs
+    
+    ###############################
+    # 2) SEMANTIC PARSING APPROACH
+    ###############################
+    else:
+        LLM_ENDPOINT = (
+            "https://cxqaazureaihub2358016269.openai.azure.com/"
+            "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
+        )    
+        LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
 
-    payload = {
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Question: {user_question}\n\nReturn the JSON array of sub-questions."}
-        ],
-        "max_tokens": 500,
-        "temperature": 0,
-    }
+        system_prompt = (
+            "You are a helpful assistant. "
+            "You receive a user question which may have multiple parts. "
+            "Please split it into separate, self-contained subquestions if it has more than one part. "
+            "If it's only a single question, simply return that one. "
+            "Return each subquestion on a separate line or as bullet points. "
+        )
 
-    headers = {
-        "Content-Type": "application/json",
-        "api-key": LLM_API_KEY
-    }
+        user_prompt = f"""
+        If applicable Please split the following question into distinct subquestions:\n\n{user_question}\n\n
+        If not applicable just return the question as it is.
+        """
 
-    try:
-        response = requests.post(LLM_ENDPOINT, headers=headers, json=payload)
-        response.raise_for_status()
-        result = response.json()
+        payload = {
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "max_tokens": 300,
+            "temperature": 0.0
+        }
 
-        if "choices" in result and result["choices"] and "message" in result["choices"][0]:
-            content = result["choices"][0]["message"]["content"].strip()
-        else:
-            raise ValueError("Invalid response structure from LLM")
+        headers = {
+            "Content-Type": "application/json",
+            "api-key": LLM_API_KEY
+        }
 
-        subquestions = json.loads(content)
-        if isinstance(subquestions, list) and all(isinstance(q, str) for q in subquestions):
-            return subquestions
-        else:
-            return [user_question]
-    except (requests.RequestException, json.JSONDecodeError, ValueError):
-        return [user_question]
+        try:
+            # Send request to Azure OpenAI endpoint
+            response = requests.post(LLM_ENDPOINT, headers=headers, json=payload)
+            response.raise_for_status()
+            data = response.json()
+
+            # Get the text output from the LLM
+            answer_text = data["choices"][0]["message"]["content"].strip()
+
+            # EXAMPLE PARSING APPROACH:
+            # Assume the LLM returns each subquestion on its own line or bullet.
+            # We'll split on newlines, then strip out leading punctuation or bullet symbols.
+            lines = [
+                line.lstrip("•-0123456789). ").strip()
+                for line in answer_text.split("\n")
+                if line.strip()
+            ]
+
+            # Filter out any empty strings (just in case)
+            subqs = [l for l in lines if l]
+
+            return subqs
+        
+        except Exception as e:
+            print(f"Error during semantic parsing: {e}")
+            return [user_question]  # Fallback to original question if semantic parsing fails
+
 
 def is_text_relevant(question, snippet):
     if not snippet.strip():
@@ -295,12 +332,34 @@ def references_tabular_data(question, tables_text):
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def tool_1_index_search(user_question, top_k=5):
+    """
+    Searches the Azure AI Search index using semantic search and retrieves top_k results.
+    This function allows switching between `cxqa-ind-v6` (old) and `vector-1741790186391-12-3-2025` (new)
+    by **changing the index name, semantic configuration, and content field**.
+    
+    Parameters:
+        - user_question (str): The query to search.
+        - top_k (int): Number of top results to retrieve.
+
+    Returns:
+        - dict: A dictionary with the search results.
+    """
+
     SEARCH_SERVICE_NAME = "cxqa-azureai-search"
     SEARCH_ENDPOINT = f"https://{SEARCH_SERVICE_NAME}.search.windows.net"
-    INDEX_NAME = "cxqa-ind-v6"
     ADMIN_API_KEY = "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv"
 
-    subquestions = split_question_into_subquestions(user_question)
+    # 🔹 CHOOSE INDEX (Comment/Uncomment as needed)
+    INDEX_NAME = "vector-1741865904949"  # ✅ Use new index
+    # INDEX_NAME = "cxqa-ind-v6"  # ✅ Use old index
+
+    # 🔹 CHOOSE SEMANTIC CONFIGURATION (Comment/Uncomment as needed)
+    SEMANTIC_CONFIG_NAME = "vector-1741865904949-semantic-configuration"  # ✅ Use for new index
+    # SEMANTIC_CONFIG_NAME = "azureml-default"  # ✅ Use for old index
+
+    # 🔹 CHOOSE CONTENT FIELD (Comment/Uncomment as needed)
+    CONTENT_FIELD = "chunk"  # ✅ Use for new index
+    # CONTENT_FIELD = "content"  # ✅ Use for old index
 
     try:
         search_client = SearchClient(
@@ -309,36 +368,59 @@ def tool_1_index_search(user_question, top_k=5):
             credential=AzureKeyCredential(ADMIN_API_KEY)
         )
 
+        # 🔹 Perform the search with explicit field selection
+        logging.info(f"🔍 Searching in Index: {INDEX_NAME}")
         results = search_client.search(
             search_text=user_question,
             query_type="semantic",
-            semantic_configuration_name="azureml-default",
+            semantic_configuration_name=SEMANTIC_CONFIG_NAME,
             top=top_k,
+            select=["title", CONTENT_FIELD],  # ✅ Ensure the correct content field is retrieved
             include_total_count=False
         )
 
+        # Keep original logic of collecting snippets:
         relevant_texts = []
+        # Collect docs so we can do weighting:
+        docs = []
+
         for r in results:
-            snippet = r.get("content", "").strip()
-
-            keep_snippet = False
-            for sq in subquestions:
-                if is_text_relevant(sq, snippet):
-                    keep_snippet = True
-                    break
-
-            if keep_snippet:
+            snippet = r.get(CONTENT_FIELD, "").strip()
+            title = r.get("title", "").strip()
+            if snippet:  # Avoid empty results
                 relevant_texts.append(snippet)
+                docs.append({"title": title, "snippet": snippet})
 
         if not relevant_texts:
             return {"top_k": "No information"}
 
-        combined = "\n\n---\n\n".join(relevant_texts)
+        # 🔹 Apply weighting based on keywords in title (case-insensitive)
+        for doc in docs:
+            ttl = doc["title"].lower()
+            score = 0
+            if "policy" in ttl:
+                score += 10
+            if "report" in ttl:
+                score += 5
+            if "sop" in ttl:
+                score += 3
+            doc["weight_score"] = score
+
+        # 🔹 Sort docs by descending weight
+        docs_sorted = sorted(docs, key=lambda x: x["weight_score"], reverse=True)
+
+        # 🔹 Slice top_k after re-ranking
+        docs_top_k = docs_sorted[:top_k]
+
+        # Prepare final combined text as before:
+        re_ranked_texts = [d["snippet"] for d in docs_top_k]
+        combined = "\n\n---\n\n".join(re_ranked_texts)
+
         return {"top_k": combined}
 
     except Exception as e:
-        logging.error(f"Error in Tool1 (Index Search): {e}")
-        return {"top_k": f"Error in Tool1 (Index Search): {str(e)}"}
+        logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}")
+        return {"top_k": "No information"}
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def tool_2_code_run(user_question):
