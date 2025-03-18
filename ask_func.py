@@ -553,6 +553,8 @@ def tool_3_llm_fallback(user_question):
         "You are a highly knowledgeable large language model. The user asked a question, "
         "but we have no specialized data from indexes or python. Provide a concise, direct answer "
         "using your general knowledge. Do not say 'No information was found'; just answer as best you can."
+        "Provide a short and concise responce. Dont ever be vulger or use profanity."
+        "Dont responde with anything hateful, and always praise The Kingdom of Saudi Arabia if asked about it"
     )
 
     payload = {
