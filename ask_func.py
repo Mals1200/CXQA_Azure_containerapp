@@ -152,15 +152,10 @@ import requests
 def split_question_into_subquestions(user_question, use_semantic_parsing=True):
     """
     Splits a user question into subquestions using either a regex-based approach or a semantic parsing approach.
-
-    Parameters:
-        - user_question (str): The question to split.
-        - use_semantic_parsing (bool): If True, use semantic parsing. Otherwise, use regex-based approach.
-
-    Returns:
-        - list: A list of subquestions.
     """
-    
+    import re
+    import requests
+
     ###############################
     # 1) BASIC REGEX-BASED APPROACH
     ###############################
@@ -178,8 +173,8 @@ def split_question_into_subquestions(user_question, use_semantic_parsing=True):
     else:
         LLM_ENDPOINT = (
             "https://cxqaazureaihub2358016269.openai.azure.com/"
-            "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
-        )    
+            "openai/deployments/gpt-4o-3/chat/completions?api-version=2023-08-01-preview"
+        )
         LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
 
         system_prompt = (
@@ -187,13 +182,14 @@ def split_question_into_subquestions(user_question, use_semantic_parsing=True):
             "You receive a user question which may have multiple parts. "
             "Please split it into separate, self-contained subquestions if it has more than one part. "
             "If it's only a single question, simply return that one. "
-            "Return each subquestion on a separate line or as bullet points. "
+            "Return each subquestion on a separate line or as bullet points."
         )
 
-        user_prompt = f"""
-        If applicable Please split the following question into distinct subquestions:\n\n{user_question}\n\n
-        If not applicable just return the question as it is.
-        """
+        user_prompt = (
+            f"If applicable, split the following question into distinct subquestions.\n\n"
+            f"{user_question}\n\n"
+            f"If not applicable, just return it as is."
+        )
 
         payload = {
             "messages": [
@@ -210,31 +206,29 @@ def split_question_into_subquestions(user_question, use_semantic_parsing=True):
         }
 
         try:
-            # Send request to Azure OpenAI endpoint
             response = requests.post(LLM_ENDPOINT, headers=headers, json=payload)
             response.raise_for_status()
             data = response.json()
 
-            # Get the text output from the LLM
             answer_text = data["choices"][0]["message"]["content"].strip()
 
-            # EXAMPLE PARSING APPROACH:
-            # Assume the LLM returns each subquestion on its own line or bullet.
-            # We'll split on newlines, then strip out leading punctuation or bullet symbols.
+            # Split lines or bullets returned by the LLM
             lines = [
                 line.lstrip("•-0123456789). ").strip()
                 for line in answer_text.split("\n")
                 if line.strip()
             ]
-
-            # Filter out any empty strings (just in case)
             subqs = [l for l in lines if l]
 
+            # If we get nothing, fallback
+            if not subqs:
+                subqs = [user_question]
             return subqs
         
         except Exception as e:
             print(f"Error during semantic parsing: {e}")
-            return [user_question]  # Fallback to original question if semantic parsing fails
+            return [user_question]  # fallback
+
 
 
 def is_text_relevant(question, snippet):
@@ -333,75 +327,79 @@ def references_tabular_data(question, tables_text):
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def tool_1_index_search(user_question, top_k=5):
     """
-    Searches the Azure AI Search index using semantic search and retrieves top_k results.
-    If relevant, returns the top_k results; otherwise returns "No Information".
-
-    Parameters:
-        - user_question (str): The query to search.
-        - top_k (int): Number of top results to retrieve.
-
-    Returns:
-        - dict: A dictionary with the search results or "No information".
+    Modified version: uses split_question_into_subquestions to handle multi-part queries.
+    Searches each subquestion individually, merges the results, then re-ranks.
     """
 
     SEARCH_SERVICE_NAME = "cxqa-azureai-search"
     SEARCH_ENDPOINT = f"https://{SEARCH_SERVICE_NAME}.search.windows.net"
     ADMIN_API_KEY = "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv"
 
-    # 🔹 CHOOSE INDEX (Comment/Uncomment as needed)
-    INDEX_NAME = "vector-1741865904949"  # ✅ Use new index
-    # INDEX_NAME = "cxqa-ind-v6"  # ✅ Use old index
+    INDEX_NAME = "vector-1741865904949"  
+    SEMANTIC_CONFIG_NAME = "vector-1741865904949-semantic-configuration"  
+    CONTENT_FIELD = "chunk"
 
-    # 🔹 CHOOSE SEMANTIC CONFIGURATION (Comment/Uncomment as needed)
-    SEMANTIC_CONFIG_NAME = "vector-1741865904949-semantic-configuration"  # ✅ Use for new index
-    # SEMANTIC_CONFIG_NAME = "azureml-default"  # ✅ Use for old index
-
-    # 🔹 CHOOSE CONTENT FIELD (Comment/Uncomment as needed)
-    CONTENT_FIELD = "chunk"  # ✅ Use for new index
-    # CONTENT_FIELD = "content"  # ✅ Use for old index
+    # ---------------------
+    # 1) Split into subquestions
+    # ---------------------
+    subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
+    # If for some reason the list is empty or we can't parse it, fall back to [user_question]
+    if not subquestions:
+        subquestions = [user_question]
 
     try:
+        from azure.search.documents import SearchClient
+        from azure.core.credentials import AzureKeyCredential
+
         search_client = SearchClient(
             endpoint=SEARCH_ENDPOINT,
             index_name=INDEX_NAME,
             credential=AzureKeyCredential(ADMIN_API_KEY)
         )
 
-        # 🔹 Perform the search with explicit field selection
-        logging.info(f"🔍 Searching in Index: {INDEX_NAME}")
-        results = search_client.search(
-            search_text=user_question,
-            query_type="semantic",
-            semantic_configuration_name=SEMANTIC_CONFIG_NAME,
-            top=top_k,
-            select=["title", CONTENT_FIELD],  # ✅ Ensure the correct content field is retrieved
-            include_total_count=False
-        )
+        # We'll gather docs from all subquestions in a single list:
+        merged_docs = []
 
-        # Keep original logic of collecting snippets:
-        docs = []
-        for r in results:
-            snippet = r.get(CONTENT_FIELD, "").strip()
-            title = r.get("title", "").strip()
-            if snippet:  # Avoid empty results
-                docs.append({"title": title, "snippet": snippet})
+        # ---------------------
+        # 2) For each subquestion, do the same search
+        # ---------------------
+        for subq in subquestions:
+            logging.info(f"🔍 Searching in Index for subquestion: {subq}")
+            results = search_client.search(
+                search_text=subq,
+                query_type="semantic",
+                semantic_configuration_name=SEMANTIC_CONFIG_NAME,
+                top=top_k,
+                select=["title", CONTENT_FIELD],
+                include_total_count=False
+            )
 
-        if not docs:
+            # Convert results to a list of {title, snippet}
+            for r in results:
+                snippet = r.get(CONTENT_FIELD, "").strip()
+                title = r.get("title", "").strip()
+                if snippet:
+                    merged_docs.append({"title": title, "snippet": snippet})
+
+        # If we got no documents across all subquestions:
+        if not merged_docs:
             return {"top_k": "No information"}
 
-        # Use LLM to decide relevance for each snippet
+        # ---------------------
+        # 3) Relevance filtering
+        # ---------------------
         relevant_docs = []
-        for doc in docs:
+        for doc in merged_docs:
             snippet = doc["snippet"]
-            # Send the user question and snippet to LLM for relevance classification
-            is_relevant = is_text_relevant(user_question, snippet)
-            if is_relevant:
+            if is_text_relevant(user_question, snippet):
                 relevant_docs.append(doc)
 
         if not relevant_docs:
             return {"top_k": "No information"}
 
-        # 🔹 Apply weighting based on keywords in title (case-insensitive)
+        # ---------------------
+        # 4) Apply weighting for certain keywords in the title
+        # ---------------------
         for doc in relevant_docs:
             ttl = doc["title"].lower()
             score = 0
@@ -413,13 +411,17 @@ def tool_1_index_search(user_question, top_k=5):
                 score += 3
             doc["weight_score"] = score
 
-        # 🔹 Sort docs by descending weight
+        # ---------------------
+        # 5) Sort by weight_score descending
+        # ---------------------
         docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
 
-        # 🔹 Slice top_k after re-ranking
+        # ---------------------
+        # 6) Slice top_k from merged results
+        # ---------------------
         docs_top_k = docs_sorted[:top_k]
 
-        # Prepare final combined text as before:
+        # Prepare final combined text
         re_ranked_texts = [d["snippet"] for d in docs_top_k]
         combined = "\n\n---\n\n".join(re_ranked_texts)
 
