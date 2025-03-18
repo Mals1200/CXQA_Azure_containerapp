@@ -168,10 +168,10 @@ def Call_CHART(latest_question, latest_answer, chat_history, instructions):
     from docx import Document
     from docx.shared import Inches
     from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+    import json
+    import io
 
-    ##################################################
-    # (A) CHART COLOR PALETTE
-    ##################################################
+    # Chart color palette for aesthetic purposes
     CHART_COLORS = [
         (193/255, 114/255, 80/255),   # Reddish
         (85/255, 20/255, 45/255),     # Dark Wine
@@ -181,7 +181,7 @@ def Call_CHART(latest_question, latest_answer, chat_history, instructions):
     ]
 
     ##################################################
-    # (B) IMPROVED AZURE OPENAI CALL FOR CHART DATA
+    # (A) Improved Azure OpenAI Call for Chart Data
     ##################################################
     def generate_chart_data():
         chat_history_str = str(chat_history)
@@ -234,24 +234,29 @@ Data:
             return f"API_ERROR: {str(e)}"
 
     ##################################################
-    # (C) CHART GENERATION LOGIC
+    # (B) Chart Generation Logic - Robust Handling
     ##################################################
     def create_chart_image(chart_data):
         try:
             plt.rcParams['axes.titleweight'] = 'bold'
             plt.rcParams['axes.titlesize'] = 12
 
+            # Check if the necessary keys exist
+            if not all(key in chart_data for key in ['chart_type', 'title', 'categories', 'series']):
+                raise ValueError("Missing required keys in chart data. Ensure chart_type, title, categories, and series are present.")
+            
             fig, ax = plt.subplots(figsize=(8, 4.5))
             color_cycle = CHART_COLORS
 
-            # Decide plot function
+            # Determine chart type and plot accordingly
             if chart_data['chart_type'] in ['bar', 'column']:
                 handle = ax.bar
             elif chart_data['chart_type'] == 'line':
                 handle = ax.plot
             else:
-                return None
+                raise ValueError(f"Unsupported chart type: {chart_data['chart_type']}")
 
+            # Plot each series
             for idx, series in enumerate(chart_data['series']):
                 color = color_cycle[idx % len(color_cycle)]
                 if chart_data['chart_type'] in ['bar', 'column']:
@@ -262,7 +267,7 @@ Data:
                         color=color,
                         width=0.6
                     )
-                else:  # line
+                else:  # line chart
                     handle(
                         chart_data['categories'],
                         series['values'],
@@ -272,12 +277,14 @@ Data:
                         linewidth=2.5
                     )
 
+            # Finalize chart appearance
             ax.set_title(chart_data['title'])
             ax.yaxis.set_major_locator(MaxNLocator(integer=True))
             plt.xticks(rotation=45, ha='right')
             plt.legend()
             plt.tight_layout()
 
+            # Save chart to image buffer
             img_buffer = io.BytesIO()
             plt.savefig(img_buffer, format='png', dpi=150)
             img_buffer.seek(0)
@@ -289,13 +296,14 @@ Data:
             return None
 
     ##################################################
-    # (D) MAIN PROCESSING FLOW
+    # (C) Main Processing Flow for Chart Generation
     ##################################################
     try:
         chart_response = generate_chart_data()
 
         if chart_response.startswith("API_ERROR:"):
             return f"OpenAI Error: {chart_response[10:]}"
+
         if chart_response.strip() == "Information is not suitable for a chart":
             return "Information is not suitable for a chart"
 
@@ -308,21 +316,23 @@ Data:
         try:
             chart_data = json.loads(json_str)
             if not all(k in chart_data for k in ['chart_type', 'title', 'categories', 'series']):
-                raise ValueError("Missing keys in chart data")
+                raise ValueError("Missing required keys in chart data: 'chart_type', 'title', 'categories', or 'series'.")
         except Exception as e:
             return f"Invalid chart data format: {str(e)}"
 
-        # Build the doc with the chart image
-        doc = Document()
+        # Create chart image
         img_buffer = create_chart_image(chart_data)
         if not img_buffer:
             return "Failed to generate chart from data"
 
+        # Create Word document to include the chart
+        doc = Document()
         doc.add_heading(chart_data['title'], level=1)
         doc.add_picture(img_buffer, width=Inches(6))
         para = doc.add_paragraph("Source: Generated from provided data")
         para.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
 
+        # Upload to Azure Blob Storage
         blob_config = {
             "account_url": "https://cxqaazureaihub8779474245.blob.core.windows.net",
             "sas_token": "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D",
@@ -347,15 +357,13 @@ Data:
         download_url = (
             f"{blob_config['account_url']}/"
             f"{blob_config['container']}/"
-            f"{blob_client.blob_name}?"
-            f"{blob_config['sas_token']}"
+            f"{blob_client.blob_name}?{blob_config['sas_token']}"
         )
 
+        # Automatically delete the blob after 5 minutes
         threading.Timer(300, blob_client.delete_blob).start()
 
-        # SINGLE-LINE RETURN
-        export_type = "Chart"
-        return f"Here is your generated {export_type}:\n{download_url}"
+        return f"Here is your generated chart:\n{download_url}"
 
     except Exception as e:
         return f"Chart Generation Error: {str(e)}"
