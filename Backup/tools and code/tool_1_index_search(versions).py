@@ -322,3 +322,97 @@ def tool_1_index_search(user_question, top_k=5):
     except Exception as e:
         logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}")
         return {"top_k": "No information"}
+
+# Version (6) : make it retrieve 12 top_k, then short list it to 5.
+def tool_1_index_search(user_question, top_k=5):
+    """
+    Modified version: uses split_question_into_subquestions to handle multi-part queries.
+    Internally always fetches 12 results per subquestion (FETCH_LIMIT), 
+    then re-ranks and slices to 'top_k' in the final step.
+    The function signature remains the same (top_k=5 by default).
+    """
+
+    SEARCH_SERVICE_NAME = "cxqa-azureai-search"
+    SEARCH_ENDPOINT = f"https://{SEARCH_SERVICE_NAME}.search.windows.net"
+    ADMIN_API_KEY = "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv"
+
+    INDEX_NAME = "vector-1741865904949"
+    SEMANTIC_CONFIG_NAME = "vector-1741865904949-semantic-configuration"
+    CONTENT_FIELD = "chunk"
+
+    FETCH_LIMIT = 12  # We will always retrieve 12 initially
+
+    # 1) Split into subquestions
+    subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
+    if not subquestions:
+        subquestions = [user_question]
+
+    try:
+        from azure.search.documents import SearchClient
+        from azure.core.credentials import AzureKeyCredential
+
+        search_client = SearchClient(
+            endpoint=SEARCH_ENDPOINT,
+            index_name=INDEX_NAME,
+            credential=AzureKeyCredential(ADMIN_API_KEY)
+        )
+
+        merged_docs = []
+
+        # 2) For each subquestion, fetch 12 results
+        for subq in subquestions:
+            logging.info(f"🔍 Searching in Index for subquestion: {subq}")
+            results = search_client.search(
+                search_text=subq,
+                query_type="semantic",
+                semantic_configuration_name=SEMANTIC_CONFIG_NAME,
+                top=FETCH_LIMIT,  # always retrieve 12
+                select=["title", CONTENT_FIELD],
+                include_total_count=False
+            )
+            for r in results:
+                snippet = r.get(CONTENT_FIELD, "").strip()
+                title = r.get("title", "").strip()
+                if snippet:
+                    merged_docs.append({"title": title, "snippet": snippet})
+
+        if not merged_docs:
+            return {"top_k": "No information"}
+
+        # 3) Relevance filtering
+        relevant_docs = []
+        for doc in merged_docs:
+            snippet = doc["snippet"]
+            if is_text_relevant(user_question, snippet):
+                relevant_docs.append(doc)
+
+        if not relevant_docs:
+            return {"top_k": "No information"}
+
+        # 4) Apply weighting for certain keywords in the title
+        for doc in relevant_docs:
+            ttl = doc["title"].lower()
+            score = 0
+            if "policy" in ttl:
+                score += 10
+            if "report" in ttl:
+                score += 5
+            if "sop" in ttl:
+                score += 3
+            doc["weight_score"] = score
+
+        # 5) Sort by weight_score descending
+        docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
+
+        # 6) Finally, slice 'top_k' from that sorted list
+        docs_top_k = docs_sorted[:top_k]
+
+        # Prepare final combined text
+        re_ranked_texts = [d["snippet"] for d in docs_top_k]
+        combined = "\n\n---\n\n".join(re_ranked_texts)
+
+        return {"top_k": combined}
+
+    except Exception as e:
+        logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}")
+        return {"top_k": "No information"}
