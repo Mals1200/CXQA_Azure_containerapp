@@ -1,0 +1,106 @@
+##################################################################################
+# version(1) uses regex:
+##################################################################################
+
+
+missing code
+
+
+
+
+
+
+
+
+
+##################################################################################
+#version(2) can use semantic_parsing(LLM) or regex :
+##################################################################################
+def split_question_into_subquestions(user_question, use_semantic_parsing=True):
+    """
+    Splits a user question into subquestions using either a regex-based approach or a semantic parsing approach.
+
+    Parameters:
+        - user_question (str): The question to split.
+        - use_semantic_parsing (bool): If True, use semantic parsing. Otherwise, use regex-based approach.
+
+    Returns:
+        - list: A list of subquestions.
+    """
+    
+    ###############################
+    # 1) BASIC REGEX-BASED APPROACH
+    ###############################
+    if not use_semantic_parsing:
+        # Regex-based splitting (e.g., "and" or "&")
+        text = re.sub(r"\s+and\s+", " ~SPLIT~ ", user_question, flags=re.IGNORECASE)
+        text = re.sub(r"\s*&\s*", " ~SPLIT~ ", text)
+        parts = text.split("~SPLIT~")
+        subqs = [p.strip() for p in parts if p.strip()]
+        return subqs
+    
+    ###############################
+    # 2) SEMANTIC PARSING APPROACH
+    ###############################
+    else:
+        LLM_ENDPOINT = (
+            "https://cxqaazureaihub2358016269.openai.azure.com/"
+            "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
+        )    
+        LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+
+        system_prompt = (
+            "You are a helpful assistant. "
+            "You receive a user question which may have multiple parts. "
+            "Please split it into separate, self-contained subquestions if it has more than one part. "
+            "If it's only a single question, simply return that one. "
+            "Return each subquestion on a separate line or as bullet points. "
+        )
+
+        user_prompt = f"""
+        If applicable Please split the following question into distinct subquestions:\n\n{user_question}\n\n
+        If not applicable just return the question as it is.
+        """
+
+        payload = {
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "max_tokens": 300,
+            "temperature": 0.0
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "api-key": LLM_API_KEY
+        }
+
+        try:
+            # Send request to Azure OpenAI endpoint
+            response = requests.post(LLM_ENDPOINT, headers=headers, json=payload)
+            response.raise_for_status()
+            data = response.json()
+
+            # Get the text output from the LLM
+            answer_text = data["choices"][0]["message"]["content"].strip()
+
+            # EXAMPLE PARSING APPROACH:
+            # Assume the LLM returns each subquestion on its own line or bullet.
+            # We'll split on newlines, then strip out leading punctuation or bullet symbols.
+            lines = [
+                line.lstrip("•-0123456789). ").strip()
+                for line in answer_text.split("\n")
+                if line.strip()
+            ]
+
+            # Filter out any empty strings (just in case)
+            subqs = [l for l in lines if l]
+
+            return subqs
+        
+        except Exception as e:
+            print(f"Error during semantic parsing: {e}")
+            return [user_question]  # Fallback to original question if semantic parsing fails
+
+split_question_into_subquestions("What is the temperture in riyadh and jeddah?")
