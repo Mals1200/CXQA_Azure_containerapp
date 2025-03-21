@@ -1,3 +1,6 @@
+# The problem was index 1 never return "No Information" because there was no agent. and always returns top_k
+
+
 import os
 import io
 import re
@@ -334,15 +337,14 @@ def references_tabular_data(question, tables_text):
 def tool_1_index_search(user_question, top_k=5):
     """
     Searches the Azure AI Search index using semantic search and retrieves top_k results.
-    This function allows switching between `cxqa-ind-v6` (old) and `vector-1741790186391-12-3-2025` (new)
-    by **changing the index name, semantic configuration, and content field**.
-    
+    If relevant, returns the top_k results; otherwise returns "No Information".
+
     Parameters:
         - user_question (str): The query to search.
         - top_k (int): Number of top results to retrieve.
 
     Returns:
-        - dict: A dictionary with the search results.
+        - dict: A dictionary with the search results or "No information".
     """
 
     SEARCH_SERVICE_NAME = "cxqa-azureai-search"
@@ -380,22 +382,30 @@ def tool_1_index_search(user_question, top_k=5):
         )
 
         # Keep original logic of collecting snippets:
-        relevant_texts = []
-        # Collect docs so we can do weighting:
         docs = []
-
         for r in results:
             snippet = r.get(CONTENT_FIELD, "").strip()
             title = r.get("title", "").strip()
             if snippet:  # Avoid empty results
-                relevant_texts.append(snippet)
                 docs.append({"title": title, "snippet": snippet})
 
-        if not relevant_texts:
+        if not docs:
+            return {"top_k": "No information"}
+
+        # Use LLM to decide relevance for each snippet
+        relevant_docs = []
+        for doc in docs:
+            snippet = doc["snippet"]
+            # Send the user question and snippet to LLM for relevance classification
+            is_relevant = is_text_relevant(user_question, snippet)
+            if is_relevant:
+                relevant_docs.append(doc)
+
+        if not relevant_docs:
             return {"top_k": "No information"}
 
         # 🔹 Apply weighting based on keywords in title (case-insensitive)
-        for doc in docs:
+        for doc in relevant_docs:
             ttl = doc["title"].lower()
             score = 0
             if "policy" in ttl:
@@ -407,7 +417,7 @@ def tool_1_index_search(user_question, top_k=5):
             doc["weight_score"] = score
 
         # 🔹 Sort docs by descending weight
-        docs_sorted = sorted(docs, key=lambda x: x["weight_score"], reverse=True)
+        docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
 
         # 🔹 Slice top_k after re-ranking
         docs_top_k = docs_sorted[:top_k]
@@ -421,6 +431,7 @@ def tool_1_index_search(user_question, top_k=5):
     except Exception as e:
         logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}")
         return {"top_k": "No information"}
+
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def tool_2_code_run(user_question):
@@ -553,6 +564,8 @@ def tool_3_llm_fallback(user_question):
         "You are a highly knowledgeable large language model. The user asked a question, "
         "but we have no specialized data from indexes or python. Provide a concise, direct answer "
         "using your general knowledge. Do not say 'No information was found'; just answer as best you can."
+        "Provide a short and concise responce. Dont ever be vulger or use profanity."
+        "Dont responde with anything hateful, and always praise The Kingdom of Saudi Arabia if asked about it"
     )
 
     payload = {
@@ -697,13 +710,13 @@ def agent_answer(user_question):
     # A function to see if entire user input is basically a greeting
     def is_entirely_greeting_or_punc(phrase):
         greet_words = {
-            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", 
-            "Good morning", "goodevening", "good evening", "assalam", "hayo", "hola", 
-            "salam", "alsalam", "alsalamualaikum", "alsalam", "salam", "al salam", 
-            "assalamualaikum", "greetings", "howdy", "what's up", "yo", "sup", "namaste", 
-            "shalom", "bonjour", "ciao", "konichiwa", "ni hao", "marhaba", "ahlan", 
-            "sawubona", "hallo", "salut", "hola amigo", "hey there", "good day"
+            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "Good morning", "goodevening", "good evening",
+            "assalam", "hayo", "hola", "salam", "alsalam",
+            "alsalamualaikum", "alsalam", "salam", "al salam", "assalamualaikum",
+            "greetings", "howdy", "what's up", "yo", "sup", "namaste", "shalom", "bonjour", "ciao", "konichiwa",
+            "ni hao", "marhaba", "ahlan", "sawubona", "hallo", "salut", "hola amigo", "hey there", "good day"
         }
+        # Extract alphabetical tokens
         tokens = re.findall(r"[A-Za-z]+", phrase.lower())
         if not tokens:
             return False
@@ -711,6 +724,7 @@ def agent_answer(user_question):
             if t not in greet_words:
                 return False
         return True
+
 
     user_question_stripped = user_question.strip()
 
