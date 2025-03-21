@@ -1,5 +1,3 @@
-# version 15
-
 import os
 import io
 import re
@@ -327,25 +325,28 @@ def references_tabular_data(question, tables_text):
         return False
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def tool_1_index_search(user_question, top_k=5):
+def tool_1_index_search(user_question, top_k=8):
     """
-    Modified version: uses split_question_into_subquestions to handle multi-part queries.
-    Searches each subquestion individually, merges the results, then re-ranks.
+    This version:
+     - Performs sub-question splitting,
+     - Retrieves up to top_k=8 documents for each sub-question,
+     - Merges them,
+     - Does a relevance filter (with fallback if none pass),
+     - Applies weighting for certain keywords,
+     - Sorts & short-lists to 5,
+     - Finally returns those 5 (or fewer) as the "top_k" text.
     """
 
     SEARCH_SERVICE_NAME = "cxqa-azureai-search"
     SEARCH_ENDPOINT = f"https://{SEARCH_SERVICE_NAME}.search.windows.net"
     ADMIN_API_KEY = "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv"
 
-    INDEX_NAME = "vector-1741865904949"  
-    SEMANTIC_CONFIG_NAME = "vector-1741865904949-semantic-configuration"  
+    INDEX_NAME = "vector-1741865904949"
+    SEMANTIC_CONFIG_NAME = "vector-1741865904949-semantic-configuration"
     CONTENT_FIELD = "chunk"
 
-    # ---------------------
     # 1) Split into subquestions
-    # ---------------------
     subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
-    # If for some reason the list is empty or we can't parse it, fall back to [user_question]
     if not subquestions:
         subquestions = [user_question]
 
@@ -362,16 +363,14 @@ def tool_1_index_search(user_question, top_k=5):
         # We'll gather docs from all subquestions in a single list:
         merged_docs = []
 
-        # ---------------------
         # 2) For each subquestion, do the same search
-        # ---------------------
         for subq in subquestions:
             logging.info(f"🔍 Searching in Index for subquestion: {subq}")
             results = search_client.search(
                 search_text=subq,
                 query_type="semantic",
                 semantic_configuration_name=SEMANTIC_CONFIG_NAME,
-                top=top_k,
+                top=top_k,  # we retrieve up to 8 results each time
                 select=["title", CONTENT_FIELD],
                 include_total_count=False
             )
@@ -383,25 +382,23 @@ def tool_1_index_search(user_question, top_k=5):
                 if snippet:
                     merged_docs.append({"title": title, "snippet": snippet})
 
-        # If we got no documents across all subquestions:
+        # If we got no documents at all across subquestions:
         if not merged_docs:
             return {"top_k": "No information"}
 
-        # ---------------------
         # 3) Relevance filtering
-        # ---------------------
         relevant_docs = []
         for doc in merged_docs:
             snippet = doc["snippet"]
             if is_text_relevant(user_question, snippet):
                 relevant_docs.append(doc)
 
+        # IMPORTANT FIX: fallback if none pass the is_text_relevant check
         if not relevant_docs:
-            return {"top_k": "No information"}
+            # Fallback: just use all merged_docs so you’re not stuck with "No information."
+            relevant_docs = merged_docs
 
-        # ---------------------
         # 4) Apply weighting for certain keywords in the title
-        # ---------------------
         for doc in relevant_docs:
             ttl = doc["title"].lower()
             score = 0
@@ -413,15 +410,13 @@ def tool_1_index_search(user_question, top_k=5):
                 score += 3
             doc["weight_score"] = score
 
-        # ---------------------
-        # 5) Sort by weight_score descending
-        # ---------------------
+        # 5) Sort by weight_score descending, then short-list top 5
         docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
+        docs_sorted = docs_sorted[:5]  # short-list to 5
 
-        # ---------------------
-        # 6) Slice top_k from merged results
-        # ---------------------
+        # 6) If you still want to slice top_k from that short-list, do so:
         docs_top_k = docs_sorted[:top_k]
+        # Realistically, top_k=8 vs short-list of 5 => you’ll only end up with 5 anyway
 
         # Prepare final combined text
         re_ranked_texts = [d["snippet"] for d in docs_top_k]
@@ -432,6 +427,7 @@ def tool_1_index_search(user_question, top_k=5):
     except Exception as e:
         logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}")
         return {"top_k": "No information"}
+
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
