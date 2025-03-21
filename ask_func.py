@@ -1,3 +1,5 @@
+# version 15
+
 import os
 import io
 import re
@@ -325,7 +327,7 @@ def references_tabular_data(question, tables_text):
         return False
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def tool_1_index_search(user_question, top_k=8):
+def tool_1_index_search(user_question, top_k=5):
     """
     Modified version: uses split_question_into_subquestions to handle multi-part queries.
     Searches each subquestion individually, merges the results, then re-ranks.
@@ -415,7 +417,6 @@ def tool_1_index_search(user_question, top_k=8):
         # 5) Sort by weight_score descending
         # ---------------------
         docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
-        docs_sorted = docs_sorted[:5] # Take only the top 5 results
 
         # ---------------------
         # 6) Slice top_k from merged results
