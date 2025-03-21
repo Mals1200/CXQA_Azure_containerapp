@@ -1,6 +1,3 @@
-# The problem was index 1 never return "No Information" because there was no agent. and always returns top_k
-
-
 import os
 import io
 import re
@@ -699,84 +696,6 @@ The Files:
     else:
         return final_text
 
-####################################################
-#              GREETING HANDLING UPDATED           #
-####################################################
-def agent_answer(user_question):
-    # If user_question is empty or just whitespace
-    if not user_question.strip():
-        return 
-
-    # A function to see if entire user input is basically a greeting
-    def is_entirely_greeting_or_punc(phrase):
-        greet_words = {
-            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "Good morning", "goodevening", "good evening",
-            "assalam", "hayo", "hola", "salam", "alsalam",
-            "alsalamualaikum", "alsalam", "salam", "al salam", "assalamualaikum",
-            "greetings", "howdy", "what's up", "yo", "sup", "namaste", "shalom", "bonjour", "ciao", "konichiwa",
-            "ni hao", "marhaba", "ahlan", "sawubona", "hallo", "salut", "hola amigo", "hey there", "good day"
-        }
-        # Extract alphabetical tokens
-        tokens = re.findall(r"[A-Za-z]+", phrase.lower())
-        if not tokens:
-            return False
-        for t in tokens:
-            if t not in greet_words:
-                return False
-        return True
-
-
-    user_question_stripped = user_question.strip()
-
-    # If entire phrase is basically a greeting
-    if is_entirely_greeting_or_punc(user_question_stripped):
-        if len(chat_history) < 4:
-            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
-        else:
-            yield "Hello! How may I assist you?\n-To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
-        return
-
-    # Check cache before doing any work
-    cache_key = user_question_stripped.lower()
-    if cache_key in tool_cache:
-        _, _, cached_answer = tool_cache[cache_key]
-        yield cached_answer
-        return    
-
-    # Determine if we need tabular data
-    needs_tabular_data = references_tabular_data(user_question, TABLES)
-
-    # Default dictionaries
-    index_dict = {"top_k": "No information"}
-    python_dict = {"result": "No information", "code": ""}
-
-    # Conditionally run Python tool if needed
-    if needs_tabular_data:
-        python_dict = tool_2_code_run(user_question)
-
-    # Always run index search
-    index_dict = tool_1_index_search(user_question)
-
-    # -------------------------------------------
-    # Collect the final answer in one pass 
-    # -------------------------------------------
-    # 1) Get the raw answer from final_answer_llm
-    raw_answer = ""
-    for token in final_answer_llm(user_question, index_dict, python_dict):
-        raw_answer += token
-
-    # 2) Clean repeated phrases in the raw answer
-    raw_answer = clean_repeated_phrases(raw_answer)
-
-    # 3) Post-process to add source or code snippet
-    final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict)
-
-    # 4) Store in cache
-    tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
-
-    # 5) Yield exactly once
-    yield final_answer_with_source
-
 
 ####################################################
 #         NEW HELPER FUNCTION: classify_topic      #
@@ -955,6 +874,83 @@ def Log_Interaction(
 
 
 ####################################################
+#              GREETING HANDLING UPDATED           #
+####################################################
+def agent_answer(user_question):
+    # If user_question is empty or just whitespace
+    if not user_question.strip():
+        return 
+
+    # A function to see if entire user input is basically a greeting
+    def is_entirely_greeting_or_punc(phrase):
+        greet_words = {
+            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "Good morning", "goodevening", "good evening",
+            "assalam", "hayo", "hola", "salam", "alsalam", "alsalamualaikum", "alsalam", "salam", "al salam", "assalamualaikum",
+            "greetings", "howdy", "what's up", "yo", "sup", "namaste", "shalom", "bonjour", "ciao", "konichiwa",
+            "ni hao", "marhaba", "ahlan", "sawubona", "hallo", "salut", "hola amigo", "hey there", "good day"
+        }
+        # Extract alphabetical tokens
+        tokens = re.findall(r"[A-Za-z]+", phrase.lower())
+        if not tokens:
+            return False
+        for t in tokens:
+            if t not in greet_words:
+                return False
+        return True
+
+
+    user_question_stripped = user_question.strip()
+
+    # If entire phrase is basically a greeting
+    if is_entirely_greeting_or_punc(user_question_stripped):
+        if len(chat_history) < 4:
+            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+        else:
+            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+        return
+
+    # Check cache before doing any work
+    cache_key = user_question_stripped.lower()
+    if cache_key in tool_cache:
+        _, _, cached_answer = tool_cache[cache_key]
+        yield cached_answer
+        return    
+
+    # Determine if we need tabular data
+    needs_tabular_data = references_tabular_data(user_question, TABLES)
+
+    # Default dictionaries
+    index_dict = {"top_k": "No information"}
+    python_dict = {"result": "No information", "code": ""}
+
+    # Conditionally run Python tool if needed
+    if needs_tabular_data:
+        python_dict = tool_2_code_run(user_question)
+
+    # Always run index search
+    index_dict = tool_1_index_search(user_question)
+
+    # -------------------------------------------
+    # Collect the final answer in one pass 
+    # -------------------------------------------
+    # 1) Get the raw answer from final_answer_llm
+    raw_answer = ""
+    for token in final_answer_llm(user_question, index_dict, python_dict):
+        raw_answer += token
+
+    # 2) Clean repeated phrases in the raw answer
+    raw_answer = clean_repeated_phrases(raw_answer)
+
+    # 3) Post-process to add source or code snippet
+    final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict)
+
+    # 4) Store in cache
+    tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
+
+    # 5) Yield exactly once
+    yield final_answer_with_source
+
+####################################################
 #          UPDATED FUNCTION: Ask_Question          #
 ####################################################
 def Ask_Question(question, user_id="anonymous"):
@@ -992,24 +988,6 @@ def Ask_Question(question, user_id="anonymous"):
         chat_history = []
         tool_cache.clear()
         yield "The chat has been restarted."
-        return
-
-    # Simple greeting responses
-    greetings = ["hello", "hi", "hey", "good morning", "good afternoon", "good evening"]
-    if any(greet in question_lower for greet in greetings):
-        if len(chat_history) <= 1:
-            yield (
-                "Hello! I'm The CXQA AI Assistant. I'm here to help you. "
-                "What would you like to know today?\n"
-                "- To reset the conversation type 'restart chat'.\n"
-                "- To generate Slides, Charts or Document, type 'export' followed by your requirements."
-            )
-        else:
-            yield (
-                "Hello! How may I assist you?\n"
-                "-To reset the conversation type 'restart chat'.\n"
-                "-To generate Slides, Charts or Document, type 'export' followed by your requirements."
-            )
         return
 
     # Add user question to chat history
