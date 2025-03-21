@@ -325,26 +325,25 @@ def references_tabular_data(question, tables_text):
         return False
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def tool_1_index_search(user_question, top_k=5):
+def tool_1_index_search(user_question, top_k=8):
     """
     Modified version: uses split_question_into_subquestions to handle multi-part queries.
-    Internally always fetches 12 results per subquestion (FETCH_LIMIT), 
-    then re-ranks and slices to 'top_k' in the final step.
-    The function signature remains the same (top_k=5 by default).
+    Searches each subquestion individually, merges the results, then re-ranks.
     """
 
     SEARCH_SERVICE_NAME = "cxqa-azureai-search"
     SEARCH_ENDPOINT = f"https://{SEARCH_SERVICE_NAME}.search.windows.net"
     ADMIN_API_KEY = "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv"
 
-    INDEX_NAME = "vector-1741865904949"
-    SEMANTIC_CONFIG_NAME = "vector-1741865904949-semantic-configuration"
+    INDEX_NAME = "vector-1741865904949"  
+    SEMANTIC_CONFIG_NAME = "vector-1741865904949-semantic-configuration"  
     CONTENT_FIELD = "chunk"
 
-    FETCH_LIMIT = 12  # We will always retrieve 12 initially
-
+    # ---------------------
     # 1) Split into subquestions
+    # ---------------------
     subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
+    # If for some reason the list is empty or we can't parse it, fall back to [user_question]
     if not subquestions:
         subquestions = [user_question]
 
@@ -358,29 +357,37 @@ def tool_1_index_search(user_question, top_k=5):
             credential=AzureKeyCredential(ADMIN_API_KEY)
         )
 
+        # We'll gather docs from all subquestions in a single list:
         merged_docs = []
 
-        # 2) For each subquestion, fetch 12 results
+        # ---------------------
+        # 2) For each subquestion, do the same search
+        # ---------------------
         for subq in subquestions:
             logging.info(f"🔍 Searching in Index for subquestion: {subq}")
             results = search_client.search(
                 search_text=subq,
                 query_type="semantic",
                 semantic_configuration_name=SEMANTIC_CONFIG_NAME,
-                top=FETCH_LIMIT,  # always retrieve 12
+                top=top_k,
                 select=["title", CONTENT_FIELD],
                 include_total_count=False
             )
+
+            # Convert results to a list of {title, snippet}
             for r in results:
                 snippet = r.get(CONTENT_FIELD, "").strip()
                 title = r.get("title", "").strip()
                 if snippet:
                     merged_docs.append({"title": title, "snippet": snippet})
 
+        # If we got no documents across all subquestions:
         if not merged_docs:
             return {"top_k": "No information"}
 
+        # ---------------------
         # 3) Relevance filtering
+        # ---------------------
         relevant_docs = []
         for doc in merged_docs:
             snippet = doc["snippet"]
@@ -390,7 +397,9 @@ def tool_1_index_search(user_question, top_k=5):
         if not relevant_docs:
             return {"top_k": "No information"}
 
+        # ---------------------
         # 4) Apply weighting for certain keywords in the title
+        # ---------------------
         for doc in relevant_docs:
             ttl = doc["title"].lower()
             score = 0
@@ -402,10 +411,15 @@ def tool_1_index_search(user_question, top_k=5):
                 score += 3
             doc["weight_score"] = score
 
+        # ---------------------
         # 5) Sort by weight_score descending
+        # ---------------------
         docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
+        docs_sorted = docs_sorted[:5] # Take only the top 5 results
 
-        # 6) Finally, slice 'top_k' from that sorted list
+        # ---------------------
+        # 6) Slice top_k from merged results
+        # ---------------------
         docs_top_k = docs_sorted[:top_k]
 
         # Prepare final combined text
@@ -418,7 +432,6 @@ def tool_1_index_search(user_question, top_k=5):
         logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}")
         return {"top_k": "No information"}
 
-tool_1_index_search("What is the fire policy?")
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def tool_2_code_run(user_question):
