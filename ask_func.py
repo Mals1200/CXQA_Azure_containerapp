@@ -173,7 +173,7 @@ def split_question_into_subquestions(user_question, use_semantic_parsing=True):
     else:
         LLM_ENDPOINT = (
             "https://cxqaazureaihub2358016269.openai.azure.com/"
-            "openai/deployments/gpt-4o-3/chat/completions?api-version=2023-08-01-preview"
+            "openai/deployments/gpt-4o-mini/chat/completions?api-version=2025-01-01-preview"
         )
         LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
 
@@ -237,7 +237,7 @@ def is_text_relevant(question, snippet):
 
     LLM_ENDPOINT = (
         "https://cxqaazureaihub2358016269.openai.azure.com/"
-        "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
+        "openai/deployments/gpt-4o-mini/chat/completions?api-version=2025-01-01-preview"
     )
     LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
 
@@ -310,7 +310,7 @@ def references_tabular_data(question, tables_text):
 
     try:
         llm_response = stream_azure_chat_completion(
-            endpoint="https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview",
+            endpoint="https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions?api-version=2025-01-01-preview",
             headers={
                 "Content-Type": "application/json",
                 "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
