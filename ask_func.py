@@ -811,7 +811,7 @@ def Log_Interaction(
 
     # 4) topic classification
     recent_history = chat_history[-4:]
-    topic = classify_topic(question, full_answer, recent_history)
+    # topic = classify_topic(question, full_answer, recent_history)
 
     # 5) time
     current_time = datetime.now().strftime("%H:%M:%S")
@@ -854,7 +854,7 @@ def Log_Interaction(
         esc_csv(source),
         esc_csv(source_material),
         str(conversation_length),
-        esc_csv(topic),
+        # esc_csv(topic),
         esc_csv(user_id),
     ]
     lines.append(",".join(f'"{x}"' for x in row))
