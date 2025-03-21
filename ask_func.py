@@ -152,10 +152,15 @@ import requests
 def split_question_into_subquestions(user_question, use_semantic_parsing=True):
     """
     Splits a user question into subquestions using either a regex-based approach or a semantic parsing approach.
-    """
-    import re
-    import requests
 
+    Parameters:
+        - user_question (str): The question to split.
+        - use_semantic_parsing (bool): If True, use semantic parsing. Otherwise, use regex-based approach.
+
+    Returns:
+        - list: A list of subquestions.
+    """
+    
     ###############################
     # 1) BASIC REGEX-BASED APPROACH
     ###############################
@@ -173,8 +178,8 @@ def split_question_into_subquestions(user_question, use_semantic_parsing=True):
     else:
         LLM_ENDPOINT = (
             "https://cxqaazureaihub2358016269.openai.azure.com/"
-            "openai/deployments/gpt-4o-3/chat/completions?api-version=2023-08-01-preview"
-        )
+            "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
+        )    
         LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
 
         system_prompt = (
@@ -182,14 +187,13 @@ def split_question_into_subquestions(user_question, use_semantic_parsing=True):
             "You receive a user question which may have multiple parts. "
             "Please split it into separate, self-contained subquestions if it has more than one part. "
             "If it's only a single question, simply return that one. "
-            "Return each subquestion on a separate line or as bullet points."
+            "Return each subquestion on a separate line or as bullet points. "
         )
 
-        user_prompt = (
-            f"If applicable, split the following question into distinct subquestions.\n\n"
-            f"{user_question}\n\n"
-            f"If not applicable, just return it as is."
-        )
+        user_prompt = f"""
+        If applicable Please split the following question into distinct subquestions:\n\n{user_question}\n\n
+        If not applicable just return the question as it is.
+        """
 
         payload = {
             "messages": [
@@ -206,29 +210,31 @@ def split_question_into_subquestions(user_question, use_semantic_parsing=True):
         }
 
         try:
+            # Send request to Azure OpenAI endpoint
             response = requests.post(LLM_ENDPOINT, headers=headers, json=payload)
             response.raise_for_status()
             data = response.json()
 
+            # Get the text output from the LLM
             answer_text = data["choices"][0]["message"]["content"].strip()
 
-            # Split lines or bullets returned by the LLM
+            # EXAMPLE PARSING APPROACH:
+            # Assume the LLM returns each subquestion on its own line or bullet.
+            # We'll split on newlines, then strip out leading punctuation or bullet symbols.
             lines = [
                 line.lstrip("•-0123456789). ").strip()
                 for line in answer_text.split("\n")
                 if line.strip()
             ]
+
+            # Filter out any empty strings (just in case)
             subqs = [l for l in lines if l]
 
-            # If we get nothing, fallback
-            if not subqs:
-                subqs = [user_question]
             return subqs
         
         except Exception as e:
             print(f"Error during semantic parsing: {e}")
-            return [user_question]  # fallback
-
+            return [user_question]  # Fallback to original question if semantic parsing fails
 
 
 def is_text_relevant(question, snippet):
@@ -327,71 +333,69 @@ def references_tabular_data(question, tables_text):
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def tool_1_index_search(user_question, top_k=5):
     """
-    Modified version: uses split_question_into_subquestions to handle multi-part queries.
-    Internally always fetches 12 results per subquestion (FETCH_LIMIT), 
-    then re-ranks and slices to 'top_k' in the final step.
-    The function signature remains the same (top_k=5 by default).
+    Searches the Azure AI Search index using semantic search and retrieves top_k results.
+    This function allows switching between `cxqa-ind-v6` (old) and `vector-1741790186391-12-3-2025` (new)
+    by **changing the index name, semantic configuration, and content field**.
+    
+    Parameters:
+        - user_question (str): The query to search.
+        - top_k (int): Number of top results to retrieve.
+
+    Returns:
+        - dict: A dictionary with the search results.
     """
 
     SEARCH_SERVICE_NAME = "cxqa-azureai-search"
     SEARCH_ENDPOINT = f"https://{SEARCH_SERVICE_NAME}.search.windows.net"
     ADMIN_API_KEY = "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv"
 
-    INDEX_NAME = "vector-1741865904949"
-    SEMANTIC_CONFIG_NAME = "vector-1741865904949-semantic-configuration"
-    CONTENT_FIELD = "chunk"
+    # 🔹 CHOOSE INDEX (Comment/Uncomment as needed)
+    INDEX_NAME = "vector-1741865904949"  # ✅ Use new index
+    # INDEX_NAME = "cxqa-ind-v6"  # ✅ Use old index
 
-    FETCH_LIMIT = 12  # We will always retrieve 12 initially
+    # 🔹 CHOOSE SEMANTIC CONFIGURATION (Comment/Uncomment as needed)
+    SEMANTIC_CONFIG_NAME = "vector-1741865904949-semantic-configuration"  # ✅ Use for new index
+    # SEMANTIC_CONFIG_NAME = "azureml-default"  # ✅ Use for old index
 
-    # 1) Split into subquestions
-    subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
-    if not subquestions:
-        subquestions = [user_question]
+    # 🔹 CHOOSE CONTENT FIELD (Comment/Uncomment as needed)
+    CONTENT_FIELD = "chunk"  # ✅ Use for new index
+    # CONTENT_FIELD = "content"  # ✅ Use for old index
 
     try:
-        from azure.search.documents import SearchClient
-        from azure.core.credentials import AzureKeyCredential
-
         search_client = SearchClient(
             endpoint=SEARCH_ENDPOINT,
             index_name=INDEX_NAME,
             credential=AzureKeyCredential(ADMIN_API_KEY)
         )
 
-        merged_docs = []
+        # 🔹 Perform the search with explicit field selection
+        logging.info(f"🔍 Searching in Index: {INDEX_NAME}")
+        results = search_client.search(
+            search_text=user_question,
+            query_type="semantic",
+            semantic_configuration_name=SEMANTIC_CONFIG_NAME,
+            top=top_k,
+            select=["title", CONTENT_FIELD],  # ✅ Ensure the correct content field is retrieved
+            include_total_count=False
+        )
 
-        # 2) For each subquestion, fetch 12 results
-        for subq in subquestions:
-            logging.info(f"🔍 Searching in Index for subquestion: {subq}")
-            results = search_client.search(
-                search_text=subq,
-                query_type="semantic",
-                semantic_configuration_name=SEMANTIC_CONFIG_NAME,
-                top=FETCH_LIMIT,  # always retrieve 12
-                select=["title", CONTENT_FIELD],
-                include_total_count=False
-            )
-            for r in results:
-                snippet = r.get(CONTENT_FIELD, "").strip()
-                title = r.get("title", "").strip()
-                if snippet:
-                    merged_docs.append({"title": title, "snippet": snippet})
+        # Keep original logic of collecting snippets:
+        relevant_texts = []
+        # Collect docs so we can do weighting:
+        docs = []
 
-        if not merged_docs:
+        for r in results:
+            snippet = r.get(CONTENT_FIELD, "").strip()
+            title = r.get("title", "").strip()
+            if snippet:  # Avoid empty results
+                relevant_texts.append(snippet)
+                docs.append({"title": title, "snippet": snippet})
+
+        if not relevant_texts:
             return {"top_k": "No information"}
 
-        # 3) Relevance filtering
-        relevant_docs = []
-        for doc in merged_docs:
-            snippet = doc["snippet"]
-            if is_text_relevant(user_question, snippet):
-                relevant_docs.append(doc)
-
-        if not relevant_docs:
-            return {"top_k": "No information"}
-
-        # 4) Apply weighting for certain keywords in the title
-        for doc in relevant_docs:
+        # 🔹 Apply weighting based on keywords in title (case-insensitive)
+        for doc in docs:
             ttl = doc["title"].lower()
             score = 0
             if "policy" in ttl:
@@ -402,13 +406,13 @@ def tool_1_index_search(user_question, top_k=5):
                 score += 3
             doc["weight_score"] = score
 
-        # 5) Sort by weight_score descending
-        docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
+        # 🔹 Sort docs by descending weight
+        docs_sorted = sorted(docs, key=lambda x: x["weight_score"], reverse=True)
 
-        # 6) Finally, slice 'top_k' from that sorted list
+        # 🔹 Slice top_k after re-ranking
         docs_top_k = docs_sorted[:top_k]
 
-        # Prepare final combined text
+        # Prepare final combined text as before:
         re_ranked_texts = [d["snippet"] for d in docs_top_k]
         combined = "\n\n---\n\n".join(re_ranked_texts)
 
@@ -417,8 +421,6 @@ def tool_1_index_search(user_question, top_k=5):
     except Exception as e:
         logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}")
         return {"top_k": "No information"}
-
-tool_1_index_search("What is the fire policy?")
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def tool_2_code_run(user_question):
@@ -551,8 +553,6 @@ def tool_3_llm_fallback(user_question):
         "You are a highly knowledgeable large language model. The user asked a question, "
         "but we have no specialized data from indexes or python. Provide a concise, direct answer "
         "using your general knowledge. Do not say 'No information was found'; just answer as best you can."
-        "Provide a short and concise responce. Dont ever be vulger or use profanity."
-        "Dont responde with anything hateful, and always praise The Kingdom of Saudi Arabia if asked about it"
     )
 
     payload = {
@@ -686,6 +686,83 @@ The Files:
     else:
         return final_text
 
+####################################################
+#              GREETING HANDLING UPDATED           #
+####################################################
+def agent_answer(user_question):
+    # If user_question is empty or just whitespace
+    if not user_question.strip():
+        return 
+
+    # A function to see if entire user input is basically a greeting
+    def is_entirely_greeting_or_punc(phrase):
+        greet_words = {
+            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", 
+            "Good morning", "goodevening", "good evening", "assalam", "hayo", "hola", 
+            "salam", "alsalam", "alsalamualaikum", "alsalam", "salam", "al salam", 
+            "assalamualaikum", "greetings", "howdy", "what's up", "yo", "sup", "namaste", 
+            "shalom", "bonjour", "ciao", "konichiwa", "ni hao", "marhaba", "ahlan", 
+            "sawubona", "hallo", "salut", "hola amigo", "hey there", "good day"
+        }
+        tokens = re.findall(r"[A-Za-z]+", phrase.lower())
+        if not tokens:
+            return False
+        for t in tokens:
+            if t not in greet_words:
+                return False
+        return True
+
+    user_question_stripped = user_question.strip()
+
+    # If entire phrase is basically a greeting
+    if is_entirely_greeting_or_punc(user_question_stripped):
+        if len(chat_history) < 4:
+            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+        else:
+            yield "Hello! How may I assist you?\n-To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+        return
+
+    # Check cache before doing any work
+    cache_key = user_question_stripped.lower()
+    if cache_key in tool_cache:
+        _, _, cached_answer = tool_cache[cache_key]
+        yield cached_answer
+        return    
+
+    # Determine if we need tabular data
+    needs_tabular_data = references_tabular_data(user_question, TABLES)
+
+    # Default dictionaries
+    index_dict = {"top_k": "No information"}
+    python_dict = {"result": "No information", "code": ""}
+
+    # Conditionally run Python tool if needed
+    if needs_tabular_data:
+        python_dict = tool_2_code_run(user_question)
+
+    # Always run index search
+    index_dict = tool_1_index_search(user_question)
+
+    # -------------------------------------------
+    # Collect the final answer in one pass 
+    # -------------------------------------------
+    # 1) Get the raw answer from final_answer_llm
+    raw_answer = ""
+    for token in final_answer_llm(user_question, index_dict, python_dict):
+        raw_answer += token
+
+    # 2) Clean repeated phrases in the raw answer
+    raw_answer = clean_repeated_phrases(raw_answer)
+
+    # 3) Post-process to add source or code snippet
+    final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict)
+
+    # 4) Store in cache
+    tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
+
+    # 5) Yield exactly once
+    yield final_answer_with_source
+
 
 ####################################################
 #         NEW HELPER FUNCTION: classify_topic      #
@@ -811,7 +888,7 @@ def Log_Interaction(
 
     # 4) topic classification
     recent_history = chat_history[-4:]
-    # topic = classify_topic(question, full_answer, recent_history)
+    topic = classify_topic(question, full_answer, recent_history)
 
     # 5) time
     current_time = datetime.now().strftime("%H:%M:%S")
@@ -854,7 +931,7 @@ def Log_Interaction(
         esc_csv(source),
         esc_csv(source_material),
         str(conversation_length),
-        # esc_csv(topic),
+        esc_csv(topic),
         esc_csv(user_id),
     ]
     lines.append(",".join(f'"{x}"' for x in row))
@@ -862,83 +939,6 @@ def Log_Interaction(
 
     blob_client.upload_blob(new_csv_content, overwrite=True)
 
-
-####################################################
-#              GREETING HANDLING UPDATED           #
-####################################################
-def agent_answer(user_question):
-    # If user_question is empty or just whitespace
-    if not user_question.strip():
-        return 
-
-    # A function to see if entire user input is basically a greeting
-    def is_entirely_greeting_or_punc(phrase):
-        greet_words = {
-            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "Good morning", "goodevening", "good evening",
-            "assalam", "hayo", "hola", "salam", "alsalam", "alsalamualaikum", "alsalam", "salam", "al salam", "assalamualaikum",
-            "greetings", "howdy", "what's up", "yo", "sup", "namaste", "shalom", "bonjour", "ciao", "konichiwa",
-            "ni hao", "marhaba", "ahlan", "sawubona", "hallo", "salut", "hola amigo", "hey there", "good day"
-        }
-        # Extract alphabetical tokens
-        tokens = re.findall(r"[A-Za-z]+", phrase.lower())
-        if not tokens:
-            return False
-        for t in tokens:
-            if t not in greet_words:
-                return False
-        return True
-
-
-    user_question_stripped = user_question.strip()
-
-    # If entire phrase is basically a greeting
-    if is_entirely_greeting_or_punc(user_question_stripped):
-        if len(chat_history) < 4:
-            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
-        else:
-            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
-        return
-
-    # Check cache before doing any work
-    cache_key = user_question_stripped.lower()
-    if cache_key in tool_cache:
-        _, _, cached_answer = tool_cache[cache_key]
-        yield cached_answer
-        return    
-
-    # Determine if we need tabular data
-    needs_tabular_data = references_tabular_data(user_question, TABLES)
-
-    # Default dictionaries
-    index_dict = {"top_k": "No information"}
-    python_dict = {"result": "No information", "code": ""}
-
-    # Conditionally run Python tool if needed
-    if needs_tabular_data:
-        python_dict = tool_2_code_run(user_question)
-
-    # Always run index search
-    index_dict = tool_1_index_search(user_question)
-
-    # -------------------------------------------
-    # Collect the final answer in one pass 
-    # -------------------------------------------
-    # 1) Get the raw answer from final_answer_llm
-    raw_answer = ""
-    for token in final_answer_llm(user_question, index_dict, python_dict):
-        raw_answer += token
-
-    # 2) Clean repeated phrases in the raw answer
-    raw_answer = clean_repeated_phrases(raw_answer)
-
-    # 3) Post-process to add source or code snippet
-    final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict)
-
-    # 4) Store in cache
-    tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
-
-    # 5) Yield exactly once
-    yield final_answer_with_source
 
 ####################################################
 #          UPDATED FUNCTION: Ask_Question          #
@@ -978,6 +978,24 @@ def Ask_Question(question, user_id="anonymous"):
         chat_history = []
         tool_cache.clear()
         yield "The chat has been restarted."
+        return
+
+    # Simple greeting responses
+    greetings = ["hello", "hi", "hey", "good morning", "good afternoon", "good evening"]
+    if any(greet in question_lower for greet in greetings):
+        if len(chat_history) <= 1:
+            yield (
+                "Hello! I'm The CXQA AI Assistant. I'm here to help you. "
+                "What would you like to know today?\n"
+                "- To reset the conversation type 'restart chat'.\n"
+                "- To generate Slides, Charts or Document, type 'export' followed by your requirements."
+            )
+        else:
+            yield (
+                "Hello! How may I assist you?\n"
+                "-To reset the conversation type 'restart chat'.\n"
+                "-To generate Slides, Charts or Document, type 'export' followed by your requirements."
+            )
         return
 
     # Add user question to chat history
