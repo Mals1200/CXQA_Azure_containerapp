@@ -1,3 +1,5 @@
+# version 17
+
 import os
 import io
 import re
@@ -715,7 +717,7 @@ def classify_topic(question, answer, recent_history):
 
     LLM_ENDPOINT = (
         "https://cxqaazureaihub2358016269.openai.azure.com/"
-        "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
+        "openai/deployments/gpt-4o-mini/chat/completions?api-version=2025-01-01-preview"
     )
     LLM_API_KEY = "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
 
