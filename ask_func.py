@@ -327,10 +327,8 @@ def references_tabular_data(question, tables_text):
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def tool_1_index_search(user_question, top_k=5):
     """
-    Modified version: uses split_question_into_subquestions to handle multi-part queries.
-    Searches each subquestion individually, merges the results, then re-ranks.
+    Modified version: retrieves 12 documents, processes them, then returns top 5
     """
-
     SEARCH_SERVICE_NAME = "cxqa-azureai-search"
     SEARCH_ENDPOINT = f"https://{SEARCH_SERVICE_NAME}.search.windows.net"
     ADMIN_API_KEY = "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv"
@@ -343,7 +341,6 @@ def tool_1_index_search(user_question, top_k=5):
     # 1) Split into subquestions
     # ---------------------
     subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
-    # If for some reason the list is empty or we can't parse it, fall back to [user_question]
     if not subquestions:
         subquestions = [user_question]
 
@@ -355,13 +352,12 @@ def tool_1_index_search(user_question, top_k=5):
             endpoint=SEARCH_ENDPOINT,
             index_name=INDEX_NAME,
             credential=AzureKeyCredential(ADMIN_API_KEY)
-        )
+        )  # FIXED THIS LINE
 
-        # We'll gather docs from all subquestions in a single list:
         merged_docs = []
 
         # ---------------------
-        # 2) For each subquestion, do the same search
+        # 2) Retrieve 12 documents per subquestion
         # ---------------------
         for subq in subquestions:
             logging.info(f"🔍 Searching in Index for subquestion: {subq}")
@@ -369,19 +365,16 @@ def tool_1_index_search(user_question, top_k=5):
                 search_text=subq,
                 query_type="semantic",
                 semantic_configuration_name=SEMANTIC_CONFIG_NAME,
-                top=top_k,
+                top=12,  # Changed from top_k to 12 for initial retrieval
                 select=["title", CONTENT_FIELD],
-                include_total_count=False
-            )
+                include_total_count=False)
 
-            # Convert results to a list of {title, snippet}
             for r in results:
                 snippet = r.get(CONTENT_FIELD, "").strip()
                 title = r.get("title", "").strip()
                 if snippet:
                     merged_docs.append({"title": title, "snippet": snippet})
 
-        # If we got no documents across all subquestions:
         if not merged_docs:
             return {"top_k": "No information"}
 
@@ -390,38 +383,29 @@ def tool_1_index_search(user_question, top_k=5):
         # ---------------------
         relevant_docs = []
         for doc in merged_docs:
-            snippet = doc["snippet"]
-            if is_text_relevant(user_question, snippet):
+            if is_text_relevant(user_question, doc["snippet"]):
                 relevant_docs.append(doc)
 
         if not relevant_docs:
             return {"top_k": "No information"}
 
         # ---------------------
-        # 4) Apply weighting for certain keywords in the title
+        # 4) Apply weighting
         # ---------------------
         for doc in relevant_docs:
             ttl = doc["title"].lower()
-            score = 0
-            if "policy" in ttl:
-                score += 10
-            if "report" in ttl:
-                score += 5
-            if "sop" in ttl:
-                score += 3
-            doc["weight_score"] = score
+            doc["weight_score"] = sum([
+                10 if "policy" in ttl else 0,
+                5 if "report" in ttl else 0,
+                3 if "sop" in ttl else 0
+            ])
 
         # ---------------------
-        # 5) Sort by weight_score descending
+        # 5) Sort and return top_k
         # ---------------------
         docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
+        docs_top_k = docs_sorted[:top_k]  # Maintain original top_k parameter for final output
 
-        # ---------------------
-        # 6) Slice top_k from merged results
-        # ---------------------
-        docs_top_k = docs_sorted[:top_k]
-
-        # Prepare final combined text
         re_ranked_texts = [d["snippet"] for d in docs_top_k]
         combined = "\n\n---\n\n".join(re_ranked_texts)
 
