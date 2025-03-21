@@ -41,5 +41,8 @@ pyvis==0.3.2
 # Retrying logic:
 tenacity==9.0.0
 
+# multi layerd questions handling
+asyncio==3.4.3
+
 # voice ui
 PyQt5==5.15.11
