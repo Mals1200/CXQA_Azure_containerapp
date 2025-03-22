@@ -734,7 +734,7 @@ def Ask_Question(question, user_id="anonymous"):
         from Export_Agent import Call_Export
         for message in Call_Export(
             latest_question=question,
-            latest_answer=chat_history[-1] if chat_history else "",
+            latest_answer=chat_history[-1],
             chat_history=chat_history,
             instructions=question[6:].strip()
         ):
