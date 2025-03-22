@@ -1,5 +1,6 @@
-# Version 16: removed the export history ristriction:
-# the low info handeling happens inside the Export_Agent.py
+# Version 16: 
+# removed the export history ristriction: the low info handeling happens inside the Export_Agent.py
+# Used question instead of chat_history[-2]
 
 
 import os
@@ -971,16 +972,13 @@ def Ask_Question(question, user_id="anonymous"):
 
     question_lower = question.lower().strip()
 
-    # Handle "export" command
+ # Handle "export" command
     if question_lower.startswith("export"):
-        from Export_Agent import Call_Export
-        # Safely get latest interaction regardless of history length
-        latest_question = chat_history[-1] if len(chat_history) >= 1 else ""
-        latest_answer = chat_history[-2] if len(chat_history) >= 2 else ""
         
+        from Export_Agent import Call_Export
         for message in Call_Export(
-            latest_question=latest_question,
-            latest_answer=latest_answer,
+            latest_question=question,
+            latest_answer=chat_history[-1],
             chat_history=chat_history,
             instructions=question[6:].strip()
         ):
