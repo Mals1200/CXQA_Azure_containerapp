@@ -3,10 +3,79 @@ import requests
 import json
 import io
 import threading
+import time
 from datetime import datetime
 
 # Azure Blob Storage
 from azure.storage.blob import BlobServiceClient
+
+
+##################################################
+# HELPER: Retry-Enabled OpenAI Call
+##################################################
+def openai_call_with_retry(endpoint, headers, payload, max_attempts=3, backoff=5, timeout=30):
+    """
+    Makes an OpenAI POST request, retrying up to `max_attempts` times if an error occurs.
+    :param endpoint: Full URL endpoint of the Azure OpenAI service
+    :param headers: Dict of HTTP headers (including 'api-key')
+    :param payload: JSON body for the request
+    :param max_attempts: Number of times to retry before giving up
+    :param backoff: Seconds to wait between retries
+    :param timeout: HTTP request timeout in seconds
+    :return: The JSON-decoded response or a dict with "error" if all attempts fail
+    """
+    attempts = 0
+    while attempts < max_attempts:
+        try:
+            response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            attempts += 1
+            if attempts >= max_attempts:
+                return {"error": f"API_ERROR: {str(e)}"}
+            time.sleep(backoff)
+
+
+##################################################
+# HELPER: Upload File to Azure Blob
+##################################################
+def upload_to_azure_blob(blob_config, file_buffer, file_name_prefix):
+    """
+    Uploads a file buffer to Azure Blob Storage with a given prefix in the file name.
+    Automatically schedules deletion after 5 minutes (300 seconds).
+    :param blob_config: dict with account_url, sas_token, and container
+    :param file_buffer: io.BytesIO or similar buffer
+    :param file_name_prefix: e.g. "presentation", "chart", "document"
+    :return: download_url string
+    """
+    try:
+        # Build the blob client
+        blob_service = BlobServiceClient(
+            account_url=blob_config["account_url"],
+            credential=blob_config["sas_token"]
+        )
+        container_client = blob_service.get_container_client(blob_config["container"])
+        file_name = f"{file_name_prefix}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        
+        # We'll guess the extension outside if needed, so add it when calling this helper if you like.
+        blob_client = container_client.get_blob_client(file_name)
+        
+        # Upload and generate URL
+        blob_client.upload_blob(file_buffer, overwrite=True)
+        download_url = (
+            f"{blob_config['account_url']}/"
+            f"{blob_config['container']}/"
+            f"{file_name}?"
+            f"{blob_config['sas_token']}"
+        )
+        
+        # Schedule auto-delete after 300 seconds
+        threading.Timer(300, blob_client.delete_blob).start()
+        return download_url
+
+    except Exception as e:
+        raise Exception(f"Azure Blob Upload Error: {str(e)}")
 
 
 ##################################################
@@ -54,12 +123,12 @@ Data:
             "temperature": 0.3
         }
 
+        # Use our retry-enabled helper
+        result_json = openai_call_with_retry(endpoint, headers, payload, max_attempts=3, backoff=5, timeout=30)
+        if "error" in result_json:
+            return result_json["error"]  # e.g. "API_ERROR: <details>"
         try:
-            response = requests.post(endpoint, headers=headers, json=payload, timeout=15)
-            response.raise_for_status()
-            result = response.json()
-            return result['choices'][0]['message']['content'].strip()
-        
+            return result_json['choices'][0]['message']['content'].strip()
         except Exception as e:
             return f"API_ERROR: {str(e)}"
 
@@ -130,15 +199,18 @@ Data:
         prs.save(ppt_buffer)
         ppt_buffer.seek(0)
 
+        # Reuse our helper to upload
+        file_name_prefix = f"presentation_{datetime.now().strftime('%Y%m%d%H%M%S')}.pptx"
+        # We'll just do the entire final name in the prefix to keep old naming style:
+        # Or we can simplify. Let's keep it exactly the same as before for compatibility.
+        # So we won't use a . in the prefix. We'll do the same logic as prior lines:
         blob_service = BlobServiceClient(
             account_url=blob_config["account_url"],
             credential=blob_config["sas_token"]
         )
         blob_client = blob_service.get_container_client(
             blob_config["container"]
-        ).get_blob_client(
-            f"presentation_{datetime.now().strftime('%Y%m%d%H%M%S')}.pptx"
-        )
+        ).get_blob_client(file_name_prefix)
         
         blob_client.upload_blob(ppt_buffer, overwrite=True)
         download_url = (
@@ -147,7 +219,8 @@ Data:
             f"{blob_client.blob_name}?"
             f"{blob_config['sas_token']}"
         )
-
+        
+        # Auto-delete after 5 minutes
         threading.Timer(300, blob_client.delete_blob).start()
 
         # SINGLE-LINE RETURN
@@ -156,7 +229,6 @@ Data:
 
     except Exception as e:
         return f"Presentation Generation Error: {str(e)}"
-
 
 
 ##################################################
@@ -226,10 +298,11 @@ Data:
             "temperature": 0.3
         }
 
+        result_json = openai_call_with_retry(endpoint, headers, payload, max_attempts=3, backoff=5, timeout=30)
+        if "error" in result_json:
+            return result_json["error"]
         try:
-            response = requests.post(endpoint, headers=headers, json=payload, timeout=20)
-            response.raise_for_status()
-            return response.json()['choices'][0]['message']['content'].strip()
+            return result_json['choices'][0]['message']['content'].strip()
         except Exception as e:
             return f"API_ERROR: {str(e)}"
 
@@ -352,7 +425,6 @@ Data:
         ).get_blob_client(
             f"chart_{datetime.now().strftime('%Y%m%d%H%M%S')}.docx"
         )
-
         blob_client.upload_blob(doc_buffer, overwrite=True)
         download_url = (
             f"{blob_config['account_url']}/"
@@ -367,7 +439,6 @@ Data:
 
     except Exception as e:
         return f"Chart Generation Error: {str(e)}"
-
 
 
 ##################################################
@@ -413,10 +484,11 @@ Data:
             "temperature": 0.3
         }
 
+        result_json = openai_call_with_retry(endpoint, headers, payload, max_attempts=3, backoff=5, timeout=30)
+        if "error" in result_json:
+            return result_json["error"]
         try:
-            response = requests.post(endpoint, headers=headers, json=payload, timeout=15)
-            response.raise_for_status()
-            return response.json()['choices'][0]['message']['content'].strip()
+            return result_json['choices'][0]['message']['content'].strip()
         except Exception as e:
             return f"API_ERROR: {str(e)}"
 
@@ -507,7 +579,6 @@ Data:
 
     except Exception as e:
         return f"Document Generation Error: {str(e)}"
-
 
 
 ##################################################
