@@ -50,6 +50,7 @@ def upload_to_azure_blob(blob_config, file_buffer, file_name_prefix):
     :return: download_url string
     """
     try:
+        # Build the blob client
         blob_service = BlobServiceClient(
             account_url=blob_config["account_url"],
             credential=blob_config["sas_token"]
@@ -57,8 +58,10 @@ def upload_to_azure_blob(blob_config, file_buffer, file_name_prefix):
         container_client = blob_service.get_container_client(blob_config["container"])
         file_name = f"{file_name_prefix}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
         
+        # We'll guess the extension outside if needed, so add it when calling this helper if you like.
         blob_client = container_client.get_blob_client(file_name)
         
+        # Upload and generate URL
         blob_client.upload_blob(file_buffer, overwrite=True)
         download_url = (
             f"{blob_config['account_url']}/"
@@ -79,37 +82,33 @@ def upload_to_azure_blob(blob_config, file_buffer, file_name_prefix):
 # Generate PowerPoint function
 ##################################################
 def Call_PPT(latest_question, latest_answer, chat_history, instructions):
-    """
-    Generates slides from partial or full data. Only if there's truly no data
-    will it say, "There is not enough information."
-    """
+    # PowerPoint imports
     from pptx import Presentation
     from pptx.util import Pt
     from pptx.dml.color import RGBColor as PPTRGBColor
     from pptx.enum.text import PP_ALIGN
-
+    
+    ##################################################
+    # (A) IMPROVED AZURE OPENAI CALL
+    ##################################################
     def generate_slide_content():
         chat_history_str = str(chat_history)
         
-        ppt_prompt = f"""You are a professional PowerPoint slide creator. 
-You must create a set of slides from the user question, answer, and instructions. 
-1. If there's truly no content to build on, you may say "There is not enough information."
-2. Otherwise, produce slides in this format (strictly):
-   Slide Title
-   - Bullet 1
-   - Bullet 2
-   (More bullets if needed)
-3. Separate slides with two newlines (\\n\\n). 
-4. Return at least one slide if you can.
+        ppt_prompt = f"""You are a PowerPoint presentation expert. Use this information to create slides:
+Rules:
+1. Use ONLY the provided information
+2. Output ready-to-use slide text
+3. Format: Slide Title\\n- Bullet 1\\n- Bullet 2
+4. Separate slides with \\n\\n
+5. If insufficient information, say: "NOT_ENOUGH_INFO"
 
-Information provided:
-Instructions: {instructions}
-Question: {latest_question}
-Answer: {latest_answer}
-History: {chat_history_str}
-"""
+Data:
+- Instructions: {instructions}
+- Question: {latest_question}
+- Answer: {latest_answer}
+- History: {chat_history_str}"""
 
-        endpoint = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-08-01-preview"
+        endpoint = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview"
         headers = {
             "Content-Type": "application/json",
             "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
@@ -117,39 +116,41 @@ History: {chat_history_str}
 
         payload = {
             "messages": [
-                {"role": "system", "content": "Generate real PowerPoint slide text. Return at least something if partial data."},
+                {"role": "system", "content": "Generate structured PowerPoint content"},
                 {"role": "user", "content": ppt_prompt}
             ],
-            "max_tokens": 1200,
-            "temperature": 0.5
+            "max_tokens": 1000,
+            "temperature": 0.3
         }
 
+        # Use our retry-enabled helper
         result_json = openai_call_with_retry(endpoint, headers, payload, max_attempts=3, backoff=5, timeout=30)
         if "error" in result_json:
-            return result_json["error"]
+            return result_json["error"]  # e.g. "API_ERROR: <details>"
         try:
-            raw_text = result_json['choices'][0]['message']['content'].strip()
-            return raw_text
+            return result_json['choices'][0]['message']['content'].strip()
         except Exception as e:
             return f"API_ERROR: {str(e)}"
 
+    ##################################################
+    # (B) ROBUST CONTENT HANDLING
+    ##################################################
     slides_text = generate_slide_content()
-
-    # If there's an API error
+    
+    # Handle error cases
     if slides_text.startswith("API_ERROR:"):
         return f"OpenAI API Error: {slides_text[10:]}"
+    if "NOT_ENOUGH_INFO" in slides_text:
+        return "Error: Insufficient information to generate slides"
+    if len(slides_text) < 20:
+        return "Error: Generated content too short or invalid"
 
-    # If the model responded with a direct statement of no data
-    # Use a gentle check:
-    if "There is not enough information" in slides_text:
-        return "There is not enough information"
-
-    # Minimal length check
-    if len(slides_text) < 10:
-        return "There is not enough information"
-
+    ##################################################
+    # (C) SLIDE GENERATION WITH DESIGN
+    ##################################################
     try:
         prs = Presentation()
+
         BG_COLOR = PPTRGBColor(234, 215, 194)  # #EAD7C2
         TEXT_COLOR = PPTRGBColor(193, 114, 80) # #C17250
         FONT_NAME = "Cairo"
@@ -163,7 +164,7 @@ History: {chat_history_str}
             slide.background.fill.solid()
             slide.background.fill.fore_color.rgb = BG_COLOR
             
-            # Title in first line
+            # Title
             title_box = slide.shapes.add_textbox(Pt(50), Pt(50), prs.slide_width - Pt(100), Pt(60))
             title_frame = title_box.text_frame
             title_frame.text = lines[0]
@@ -173,20 +174,21 @@ History: {chat_history_str}
                 paragraph.font.size = Pt(36)
                 paragraph.alignment = PP_ALIGN.CENTER
                 
-            # Bullets for subsequent lines
+            # Bullets
             if len(lines) > 1:
-                content_box = slide.shapes.add_textbox(Pt(100), Pt(150), 
-                                                       prs.slide_width - Pt(200), 
-                                                       prs.slide_height - Pt(250))
+                content_box = slide.shapes.add_textbox(Pt(100), Pt(150), prs.slide_width - Pt(200), prs.slide_height - Pt(250))
                 content_frame = content_box.text_frame
-                for bullet_line in lines[1:]:
+                for bullet in lines[1:]:
                     p = content_frame.add_paragraph()
-                    p.text = bullet_line.replace('- ', '').strip()
+                    p.text = bullet.replace('- ', '').strip()
                     p.font.color.rgb = TEXT_COLOR
                     p.font.name = FONT_NAME
                     p.font.size = Pt(24)
                     p.space_after = Pt(12)
 
+        ##################################################
+        # (D) FILE UPLOAD
+        ##################################################
         blob_config = {
             "account_url": "https://cxqaazureaihub8779474245.blob.core.windows.net",
             "sas_token": "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D",
@@ -197,11 +199,15 @@ History: {chat_history_str}
         prs.save(ppt_buffer)
         ppt_buffer.seek(0)
 
+        # Reuse our helper to upload
+        file_name_prefix = f"presentation_{datetime.now().strftime('%Y%m%d%H%M%S')}.pptx"
+        # We'll just do the entire final name in the prefix to keep old naming style:
+        # Or we can simplify. Let's keep it exactly the same as before for compatibility.
+        # So we won't use a . in the prefix. We'll do the same logic as prior lines:
         blob_service = BlobServiceClient(
             account_url=blob_config["account_url"],
             credential=blob_config["sas_token"]
         )
-        file_name_prefix = f"presentation_{datetime.now().strftime('%Y%m%d%H%M%S')}.pptx"
         blob_client = blob_service.get_container_client(
             blob_config["container"]
         ).get_blob_client(file_name_prefix)
@@ -214,8 +220,12 @@ History: {chat_history_str}
             f"{blob_config['sas_token']}"
         )
         
+        # Auto-delete after 5 minutes
         threading.Timer(300, blob_client.delete_blob).start()
-        return f"Here is your generated slides:\n{download_url}"
+
+        # SINGLE-LINE RETURN
+        export_type = "slides"
+        return f"Here is your generated {export_type}:\n{download_url}"
 
     except Exception as e:
         return f"Presentation Generation Error: {str(e)}"
@@ -225,10 +235,6 @@ History: {chat_history_str}
 # Generate Charts function
 ##################################################
 def Call_CHART(latest_question, latest_answer, chat_history, instructions):
-    """
-    Generates a minimal chart doc if partial data is found. If absolutely no 
-    data is available, returns "There is not enough information."
-    """
     import matplotlib.pyplot as plt
     from matplotlib.ticker import MaxNLocator
     from docx import Document
@@ -237,41 +243,47 @@ def Call_CHART(latest_question, latest_answer, chat_history, instructions):
     import json
     import io
 
+    # Chart color palette for aesthetic purposes
     CHART_COLORS = [
-        (193/255, 114/255, 80/255),
-        (85/255, 20/255, 45/255),
-        (219/255, 188/255, 154/255),
-        (39/255, 71/255, 54/255),
-        (254/255, 200/255, 65/255)
+        (193/255, 114/255, 80/255),   # Reddish
+        (85/255, 20/255, 45/255),     # Dark Wine
+        (219/255, 188/255, 154/255),  # Lighter Brown
+        (39/255, 71/255, 54/255),     # Dark Green
+        (254/255, 200/255, 65/255)    # Yellow
     ]
 
+    ##################################################
+    # (A) Improved Azure OpenAI Call for Chart Data
+    ##################################################
     def generate_chart_data():
         chat_history_str = str(chat_history)
-        chart_prompt = f"""You are a converter that must produce a JSON chart spec if possible.
-If you truly cannot parse any numeric or categorical data, then say exactly:
-"There is not enough information"
-
-Otherwise, output one valid JSON object like:
+        
+        chart_prompt = f"""You are a converter that outputs ONLY valid JSON.
+Do not include any explanations, code fences, or additional text.
+Either return exactly one valid JSON object like:
 
 {{
   "chart_type": "bar"|"line"|"column",
   "title": "string",
-  "categories": ["Month1","Month2", ...],
+  "categories": ["Category1","Category2",...],
   "series": [
-    {{ "name": "Visitors", "values": [num1, num2, ...] }},
+    {{"name": "Series1", "values": [num1, num2, ...]}},
     ...
   ]
 }}
 
-At minimum, use placeholders if partial data is available. 
-Information:
-Instructions: {instructions}
-Question: {latest_question}
-Answer: {latest_answer}
-History: {chat_history_str}
-"""
+OR return the EXACT string:
+"Information is not suitable for a chart"
 
-        endpoint = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-08-01-preview"
+Nothing else.
+
+Data:
+- Instructions: {instructions}
+- Question: {latest_question}
+- Answer: {latest_answer}
+- History: {chat_history_str}"""
+
+        endpoint = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview"
         headers = {
             "Content-Type": "application/json",
             "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
@@ -279,44 +291,48 @@ History: {chat_history_str}
 
         payload = {
             "messages": [
-                {"role": "system", "content": "Output one JSON object or the exact line 'There is not enough information'."},
+                {"role": "system", "content": "Output ONLY valid JSON as described."},
                 {"role": "user", "content": chart_prompt}
             ],
-            "max_tokens": 1200,
-            "temperature": 0.5
+            "max_tokens": 1000,
+            "temperature": 0.3
         }
 
         result_json = openai_call_with_retry(endpoint, headers, payload, max_attempts=3, backoff=5, timeout=30)
         if "error" in result_json:
             return result_json["error"]
         try:
-            raw_text = result_json['choices'][0]['message']['content'].strip()
-            return raw_text
+            return result_json['choices'][0]['message']['content'].strip()
         except Exception as e:
             return f"API_ERROR: {str(e)}"
 
+    ##################################################
+    # (B) Chart Generation Logic - Robust Handling
+    ##################################################
     def create_chart_image(chart_data):
         try:
             plt.rcParams['axes.titleweight'] = 'bold'
             plt.rcParams['axes.titlesize'] = 12
 
-            if not all(k in chart_data for k in ['chart_type', 'title', 'categories', 'series']):
-                raise ValueError("Missing chart_type, title, categories, or series.")
-
+            # Check if the necessary keys exist
+            if not all(key in chart_data for key in ['chart_type', 'title', 'categories', 'series']):
+                raise ValueError("Missing required keys in chart data. Ensure chart_type, title, categories, and series are present.")
+            
             fig, ax = plt.subplots(figsize=(8, 4.5))
             color_cycle = CHART_COLORS
 
-            ctype = chart_data['chart_type'].lower()
-            if ctype in ['bar', 'column']:
+            # Determine chart type and plot accordingly
+            if chart_data['chart_type'] in ['bar', 'column']:
                 handle = ax.bar
-            elif ctype == 'line':
+            elif chart_data['chart_type'] == 'line':
                 handle = ax.plot
             else:
                 raise ValueError(f"Unsupported chart type: {chart_data['chart_type']}")
 
+            # Plot each series
             for idx, series in enumerate(chart_data['series']):
                 color = color_cycle[idx % len(color_cycle)]
-                if ctype in ['bar', 'column']:
+                if chart_data['chart_type'] in ['bar', 'column']:
                     handle(
                         chart_data['categories'],
                         series['values'],
@@ -324,7 +340,7 @@ History: {chat_history_str}
                         color=color,
                         width=0.6
                     )
-                else:  # line
+                else:  # line chart
                     handle(
                         chart_data['categories'],
                         series['values'],
@@ -334,12 +350,14 @@ History: {chat_history_str}
                         linewidth=2.5
                     )
 
+            # Finalize chart appearance
             ax.set_title(chart_data['title'])
             ax.yaxis.set_major_locator(MaxNLocator(integer=True))
             plt.xticks(rotation=45, ha='right')
             plt.legend()
             plt.tight_layout()
 
+            # Save chart to image buffer
             img_buffer = io.BytesIO()
             plt.savefig(img_buffer, format='png', dpi=150)
             img_buffer.seek(0)
@@ -350,111 +368,108 @@ History: {chat_history_str}
             print(f"Chart Error: {str(e)}")
             return None
 
-    chart_response = generate_chart_data()
-    if chart_response.startswith("API_ERROR:"):
-        return f"OpenAI Error: {chart_response[10:]}"
-
-    # If the model says "There is not enough information"
-    if "There is not enough information" in chart_response:
-        return "There is not enough information"
-
-    # Now parse the JSON
-    brace_index = chart_response.find('{')
-    if brace_index < 0:
-        # No brace => treat as "not enough info"
-        return "There is not enough information"
-
-    raw_json_str = chart_response[brace_index:]
+    ##################################################
+    # (C) Main Processing Flow for Chart Generation
+    ##################################################
     try:
-        chart_data = json.loads(raw_json_str)
-    except:
-        return "There is not enough information"
+        chart_response = generate_chart_data()
 
-    img_buffer = create_chart_image(chart_data)
-    if not img_buffer:
-        return "There is not enough information"
+        if chart_response.startswith("API_ERROR:"):
+            return f"OpenAI Error: {chart_response[10:]}"
 
-    # Create Word doc with chart
-    from docx import Document
-    from docx.shared import Inches
-    from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+        if chart_response.strip() == "Information is not suitable for a chart":
+            return "Information is not suitable for a chart"
 
-    doc = Document()
-    doc.add_heading(chart_data.get('title', 'Chart'), level=1)
-    doc.add_picture(img_buffer, width=Inches(6))
-    para = doc.add_paragraph("Source: Generated from provided data")
-    para.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
+        match = re.search(r'(\{.*\})', chart_response, re.DOTALL)
+        if match:
+            json_str = match.group(1)
+        else:
+            return "Invalid chart data format: No JSON object found"
 
-    blob_config = {
-        "account_url": "https://cxqaazureaihub8779474245.blob.core.windows.net",
-        "sas_token": "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D",
-        "container": "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
-    }
+        try:
+            chart_data = json.loads(json_str)
+            if not all(k in chart_data for k in ['chart_type', 'title', 'categories', 'series']):
+                raise ValueError("Missing required keys in chart data: 'chart_type', 'title', 'categories', or 'series'.")
+        except Exception as e:
+            return f"Invalid chart data format: {str(e)}"
 
-    doc_buffer = io.BytesIO()
-    doc.save(doc_buffer)
-    doc_buffer.seek(0)
+        # Create chart image
+        img_buffer = create_chart_image(chart_data)
+        if not img_buffer:
+            return "Failed to generate chart from data"
 
-    blob_service = BlobServiceClient(
-        account_url=blob_config["account_url"],
-        credential=blob_config["sas_token"]
-    )
-    blob_client = blob_service.get_container_client(
-        blob_config["container"]
-    ).get_blob_client(
-        f"chart_{datetime.now().strftime('%Y%m%d%H%M%S')}.docx"
-    )
-    blob_client.upload_blob(doc_buffer, overwrite=True)
-    download_url = (
-        f"{blob_config['account_url']}/"
-        f"{blob_config['container']}/"
-        f"{blob_client.blob_name}?{blob_config['sas_token']}"
-    )
-    threading.Timer(300, blob_client.delete_blob).start()
+        # Create Word document to include the chart
+        doc = Document()
+        doc.add_heading(chart_data['title'], level=1)
+        doc.add_picture(img_buffer, width=Inches(6))
+        para = doc.add_paragraph("Source: Generated from provided data")
+        para.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
 
-    return f"Here is your generated chart:\n{download_url}"
+        # Upload to Azure Blob Storage
+        blob_config = {
+            "account_url": "https://cxqaazureaihub8779474245.blob.core.windows.net",
+            "sas_token": "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D",
+            "container": "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
+        }
+
+        doc_buffer = io.BytesIO()
+        doc.save(doc_buffer)
+        doc_buffer.seek(0)
+
+        blob_service = BlobServiceClient(
+            account_url=blob_config["account_url"],
+            credential=blob_config["sas_token"]
+        )
+        blob_client = blob_service.get_container_client(
+            blob_config["container"]
+        ).get_blob_client(
+            f"chart_{datetime.now().strftime('%Y%m%d%H%M%S')}.docx"
+        )
+        blob_client.upload_blob(doc_buffer, overwrite=True)
+        download_url = (
+            f"{blob_config['account_url']}/"
+            f"{blob_config['container']}/"
+            f"{blob_client.blob_name}?{blob_config['sas_token']}"
+        )
+
+        # Automatically delete the blob after 5 minutes
+        threading.Timer(300, blob_client.delete_blob).start()
+
+        return f"Here is your generated chart:\n{download_url}"
+
+    except Exception as e:
+        return f"Chart Generation Error: {str(e)}"
 
 
 ##################################################
 # Generate Documents function
 ##################################################
 def Call_DOC(latest_question, latest_answer, chat_history, instructions_doc):
-    """
-    Generates a Word doc with headings & bullets. Only if there's truly no 
-    content to build on does it say "There is not enough information."
-    """
     from docx import Document
     from docx.shared import Pt as DocxPt, Inches, RGBColor as DocxRGBColor
     from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
     from docx.oxml.ns import nsdecls
     from docx.oxml import parse_xml
-    import io, threading
 
     def generate_doc_content():
         chat_history_str = str(chat_history)
         
-        doc_prompt = f"""You are a professional document writer. 
-Use the user question, answer, instructions, and chat history 
-to produce a multi-section Word doc. 
-
+        doc_prompt = f"""You are a professional document writer. Use this information to create content:
 Rules:
-1. If you truly have no data, say "There is not enough information."
-2. Otherwise, produce sections like:
-   Section Heading
-   - Bullet 1
-   - Bullet 2
-   (and so on)
-3. Separate sections by a blank line (\\n\\n).
-4. At least one heading if partial data is present.
+1. Use ONLY the provided information
+2. Output ready-to-use document text
+3. Format: 
+   Section Heading\\n- Bullet 1\\n- Bullet 2
+4. Separate sections with \\n\\n
+5. If insufficient information, say: "Not enough Information to perform export."
 
 Data:
-Instructions: {instructions_doc}
-Question: {latest_question}
-Answer: {latest_answer}
-History: {chat_history_str}
-"""
+- Instructions: {instructions_doc}
+- Question: {latest_question}
+- Answer: {latest_answer}
+- History: {chat_history_str}"""
 
-        endpoint = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-08-01-preview"
+        endpoint = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview"
         headers = {
             "Content-Type": "application/json",
             "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
@@ -462,35 +477,29 @@ History: {chat_history_str}
 
         payload = {
             "messages": [
-                {"role": "system", "content": "Generate a structured doc with headings & bullets, or say 'There is not enough information'."},
+                {"role": "system", "content": "Generate structured document content"},
                 {"role": "user", "content": doc_prompt}
             ],
-            "max_tokens": 1200,
-            "temperature": 0.5
+            "max_tokens": 1000,
+            "temperature": 0.3
         }
 
         result_json = openai_call_with_retry(endpoint, headers, payload, max_attempts=3, backoff=5, timeout=30)
         if "error" in result_json:
             return result_json["error"]
         try:
-            raw_text = result_json['choices'][0]['message']['content'].strip()
-            return raw_text
+            return result_json['choices'][0]['message']['content'].strip()
         except Exception as e:
             return f"API_ERROR: {str(e)}"
 
+    # Get the doc text
     doc_text = generate_doc_content()
-
-    # Check for API errors
     if doc_text.startswith("API_ERROR:"):
         return f"OpenAI API Error: {doc_text[10:]}"
-
-    # If the model says no information
-    if "There is not enough information" in doc_text:
-        return "There is not enough information"
-
-    # Minimal length check
-    if len(doc_text) < 10:
-        return "There is not enough information"
+    if "NOT_ENOUGH_INFO" in doc_text.upper():
+        return "Error: Insufficient information to generate document"
+    if len(doc_text) < 20:
+        return "Error: Generated content too short or invalid"
 
     try:
         doc = Document()
@@ -512,8 +521,8 @@ History: {chat_history_str}
             shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{BG_COLOR_HEX}"/>')
             sectPr.append(shd)
 
-        sections_split = doc_text.split('\n\n')
-        for section_content in sections_split:
+        # Split into sections
+        for section_content in doc_text.split('\n\n'):
             lines = [line.strip() for line in section_content.split('\n') if line.strip()]
             if not lines:
                 continue
@@ -525,10 +534,11 @@ History: {chat_history_str}
             heading_run.font.size = TITLE_SIZE
             heading_run.bold = True
 
+            # Bullets
             if len(lines) > 1:
-                for bullet_line in lines[1:]:
+                for bullet in lines[1:]:
                     para = doc.add_paragraph(style='ListBullet')
-                    run = para.add_run(bullet_line.replace('- ', '').strip())
+                    run = para.add_run(bullet.replace('- ', '').strip())
                     run.font.color.rgb = BODY_COLOR
 
             doc.add_paragraph()
@@ -543,15 +553,15 @@ History: {chat_history_str}
         doc.save(doc_buffer)
         doc_buffer.seek(0)
 
-        from azure.storage.blob import BlobServiceClient
         blob_service = BlobServiceClient(
             account_url=blob_config["account_url"],
             credential=blob_config["sas_token"]
         )
-        file_name = f"document_{datetime.now().strftime('%Y%m%d%H%M%S')}.docx"
         blob_client = blob_service.get_container_client(
             blob_config["container"]
-        ).get_blob_client(file_name)
+        ).get_blob_client(
+            f"document_{datetime.now().strftime('%Y%m%d%H%M%S')}.docx"
+        )
         
         blob_client.upload_blob(doc_buffer, overwrite=True)
         download_url = (
@@ -562,7 +572,10 @@ History: {chat_history_str}
         )
 
         threading.Timer(300, blob_client.delete_blob).start()
-        return f"Here is your generated Document:\n{download_url}"
+
+        # SINGLE-LINE RETURN
+        export_type = "Document"
+        return f"Here is your generated {export_type}:\n{download_url}"
 
     except Exception as e:
         return f"Document Generation Error: {str(e)}"
@@ -572,11 +585,6 @@ History: {chat_history_str}
 # Calling the export function
 ##################################################
 def Call_Export(latest_question, latest_answer, chat_history, instructions):
-    """
-    Main function to decide if user wants PPT, Doc, or Chart.
-    If there's partial data, attempt an export. 
-    Otherwise, return "There is not enough information."
-    """
     import re
 
     def generate_ppt():
@@ -604,7 +612,7 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
         return generate_ppt()
 
     # Chart?
-    if re.search(
+    elif re.search(
         r"\b("
         r"chart[s]?|graph[s]?|diagram[s]?|"
         r"bar[-\s]?chart[s]?|line[-\s]?chart[s]?|pie[-\s]?chart[s]?|"
@@ -618,7 +626,7 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
         return generate_chart()
 
     # Document?
-    if re.search(
+    elif re.search(
         r"\b("
         r"document[s]?|report[s]?|word[-\s]?doc[s]?|"
         r"policy[-\s]?paper[s]?|manual[s]?|write[-\s]?up[s]?|"
@@ -632,5 +640,5 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
     ):
         return generate_doc()
 
-    # Fallback if no recognized export
-    return "There is not enough information"
+    # Fallback
+    return "Not enough Information to perform export."
