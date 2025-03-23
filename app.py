@@ -11,6 +11,7 @@ from botbuilder.schema import Activity
 # *** Important: import TeamsInfo ***
 from botbuilder.core.teams import TeamsInfo
 
+# Import your revised Ask_Question and chat_history
 from ask_func import Ask_Question, chat_history
 
 app = Flask(__name__)
@@ -49,6 +50,7 @@ async def _bot_logic(turn_context: TurnContext):
     if conversation_id not in conversation_histories:
         conversation_histories[conversation_id] = []
 
+    # Ensure ask_func uses this conversation’s history
     import ask_func
     ask_func.chat_history = conversation_histories[conversation_id]
 
@@ -64,7 +66,7 @@ async def _bot_logic(turn_context: TurnContext):
 
         # This call will attempt to fetch the user's profile from Teams
         teams_member = await TeamsInfo.get_member(turn_context, teams_user_id)
-        # If successful, you can read these fields:
+        # If successful, we can read:
         #   teams_member.user_principal_name (often the email/UPN)
         #   teams_member.email
         #   teams_member.name
@@ -74,22 +76,20 @@ async def _bot_logic(turn_context: TurnContext):
         elif teams_member and teams_member.email:
             user_id = teams_member.email
         else:
-            user_id = teams_user_id  # fallback if we can't get an email
+            user_id = teams_user_id  # fallback if email not available
 
-    except Exception as e:
-        # If get_member call fails (e.g., in a group chat scenario or permission issues),
-        # just fallback to the "29:..." ID or 'anonymous'
+    except Exception:
+        # If get_member fails (e.g. group chat or permission issue), fallback:
         user_id = turn_context.activity.from_property.id or "anonymous"
 
     # Show "thinking" indicator
     typing_activity = Activity(type="typing")
     await turn_context.send_activity(typing_activity)
 
-    # Pass the user_id to your QnA logic
-    ans_gen = Ask_Question(user_message, user_id=user_id)
-    answer_text = "".join(ans_gen)
+    # Get single final answer from ask_func
+    answer_text = Ask_Question(user_message, user_id=user_id)
 
-    # Save updated conversation history
+    # Persist updated conversation history
     conversation_histories[conversation_id] = ask_func.chat_history
 
     # OPTIONAL: parse out "Source:" lines to hide them behind a toggle
