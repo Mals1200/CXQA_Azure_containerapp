@@ -1,785 +1,658 @@
-import os
-import io
+# Verion 3
+# What Changed?
+# New Helper Functions:
+
+# openai_call_with_retry(...) handles the Azure OpenAI calls with retries, ensuring timeouts or transient errors don’t immediately kill your request.
+# upload_to_azure_blob(...) (illustrated concept) was introduced to unify blob uploading. For compatibility, the code above still shows the direct approach, but you can adapt it if desired.
+# Time Out:
+
+# Increased the default timeout to 30 seconds in the OpenAI call to reduce failures with longer answers.
+# Retry Logic:
+
+# If the OpenAI call fails or times out, it will retry up to 3 times, waiting 5 seconds between attempts. If it still fails, you’ll see an error string in place of the normal text.
+
+
 import re
-import json
-import logging
-import warnings
 import requests
-import contextlib
-import pandas as pd
-import csv
-from io import BytesIO, StringIO
+import json
+import io
+import threading
+import time
 from datetime import datetime
+
+# Azure Blob Storage
 from azure.storage.blob import BlobServiceClient
-from azure.search.documents import SearchClient
-from azure.core.credentials import AzureKeyCredential
-from tenacity import retry, stop_after_attempt, wait_fixed  # retrying
-from functools import lru_cache  # caching
-import difflib
 
-#######################################################################################
-#                               GLOBAL CONFIG / CONSTANTS
-#######################################################################################
-CONFIG = {
-    "LLM_ENDPOINT": (
-        "https://cxqaazureaihub2358016269.openai.azure.com/"
-        "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
-    ),
-    "LLM_API_KEY": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor",
-    "SEARCH_SERVICE_NAME": "cxqa-azureai-search",
-    "SEARCH_ENDPOINT": "https://cxqa-azureai-search.search.windows.net",
-    "ADMIN_API_KEY": "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv",
-    "INDEX_NAME": "vector-1741865904949",
-    "SEMANTIC_CONFIG_NAME": "vector-1741865904949-semantic-configuration",
-    "CONTENT_FIELD": "chunk",
-    "ACCOUNT_URL": "https://cxqaazureaihub8779474245.blob.core.windows.net",
-    "SAS_TOKEN": (
-        "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
-        "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
-        "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
-    ),
-    "CONTAINER_NAME": "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore",
-    "TARGET_FOLDER_PATH": "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
-}
 
-# Global objects
-logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
-logging.getLogger("azure").setLevel(logging.WARNING)
-
-chat_history = []
-recent_history = chat_history[-4:]
-tool_cache = {}
-
-#######################################################################################
-#                           TABLES / SCHEMA (constants as strings)
-#######################################################################################
-TABLES = """
-1) "Al-Bujairy Terrace Footfalls.xlsx", with the following tables:
-   -Date: datetime64[ns], Footfalls: int64
-2) "Al-Turaif Footfalls.xlsx", with the following tables:
-   -Date: datetime64[ns], Footfalls: int64
-3) "Complaints.xlsx", with the following tables:
-   -Created On: datetime64[ns], Incident Category: object, Status: object, Resolved On Date(Local): object, Incident Description: object, Resolution: object
-4) "Duty manager log.xlsx", with the following tables:
-   -DM NAME: object, Date: datetime64[ns], Shift: object, Issue: object, Department: object, Team: object, Incident: object, Remark: object, Status: object, ETA: object, Days: float64
-5) "Food and Beverages (F&b) Sales.xlsx", with the following tables:
-   -Restaurant name: object, Category: object, Date: datetime64[ns], Covers: float64, Gross Sales: float64
-6) "Meta-Data.xlsx", with the following tables:
-   -Visitation: object, Attendance: object, Visitors: object, Guests: object, Footfalls: object, Unnamed: 5: object
-7) "PE Observations.xlsx", with the following tables:
-   -Unnamed: 0: object, Unnamed: 1: object
-8) "Parking.xlsx", with the following tables:
-   -Date: datetime64[ns], Valet Volume: int64, Valet Revenue: int64, Valet Utilization: float64, BCP Revenue: object, BCP Volume: int64, BCP Utilization: float64, SCP Volume: int64, SCP Revenue: int64, SCP Utilization: float64
-9) "Qualitative Comments.xlsx", with the following tables:
-   -Open Ended: object
-10) "Tenants Violations.xlsx", with the following tables:
-   -Unnamed: 0: object, Unnamed: 1: object
-11) "Tickets.xlsx", with the following tables:
-   -Date: datetime64[ns], Number of tickets: int64, revenue: int64, attendnace: int64, Reservation Attendnace: int64, Pass Attendance: int64, Male attendance: int64, Female attendance: int64, Rebate value: float64, AM Tickets: int64, PM Tickets: int64, Free tickets: int64, Paid tickets: int64, Free tickets %: float64, Paid tickets %: float64, AM Tickets %: float64, PM Tickets %: float64, Rebate Rate V 55: float64, Revenue  v2: int64
-12) "Top2Box Summary.xlsx", with the following tables:
-   -Month: datetime64[ns], Type: object, Top2Box scores/ rating: float64
-13) "Total Landscape areas and quantities.xlsx", with the following tables:
-   -Assets: object, Unnamed: 1: object, Unnamed: 2: object, Unnamed: 3: object
-"""
-
-SAMPLE_TEXT = """
-Al-Bujairy Terrace Footfalls.xlsx: [{'Date': "Timestamp('2023-01-01 00:00:00')", 'Footfalls': 2950}, ...],
-Al-Turaif Footfalls.xlsx: [{'Date': "Timestamp('2023-06-01 00:00:00')", 'Footfalls': 694}, ...],
-Complaints.xlsx: [{'Created On': "Timestamp('2024-01-01 00:00:00')", 'Incident Category': 'Contact Center Operation', ...}],
-Duty manager log.xlsx: [{'DM NAME': 'Abdulrahman Alkanhal', 'Date': "Timestamp('2024-06-01 00:00:00')", 'Shift': 'Morning Shift', ...}],
-Food and Beverages (F&b) Sales.xlsx: [{'Restaurant name': 'Angelina', 'Category': 'Casual Dining', 'Date': "Timestamp('2023-08-01 00:00:00')", ...}],
-Meta-Data.xlsx: [{'Visitation': 'Revenue', 'Attendance': 'Income', 'Visitors': 'Sales', 'Guests': 'Gross Sales', 'Footfalls': nan, ...}],
-PE Observations.xlsx: [{'Unnamed: 0': nan, 'Unnamed: 1': nan}, ...],
-Parking.xlsx: [{'Date': "Timestamp('2023-01-01 00:00:00')", 'Valet Volume': 194, 'Valet Revenue': 29100, ...}],
-Qualitative Comments.xlsx: [{'Open Ended': 'يفوقو توقعاتي كل شيء رائع'}, ...],
-Tenants Violations.xlsx: [{'Unnamed: 0': nan, 'Unnamed: 1': nan}, ...],
-Tickets.xlsx: [{'Date': "Timestamp('2023-01-01 00:00:00')", 'Number of tickets': 4644, 'revenue': 288050, ...}],
-Top2Box Summary.xlsx: [{'Month': "Timestamp('2024-01-01 00:00:00')", 'Type': 'Bujairi Terrace/ Diriyah  offering', ...}],
-Total Landscape areas and quantities.xlsx: [{'Assets': 'SN', 'Unnamed: 1': 'Location', 'Unnamed: 2': 'Unit', 'Unnamed: 3': 'Quantity'}, ...],
-"""
-
-SCHEMA_TEXT = """
-Al-Bujairy Terrace Footfalls.xlsx: {'Date': 'datetime64[ns]', 'Footfalls': 'int64'},
-Al-Turaif Footfalls.xlsx: {'Date': 'datetime64[ns]', 'Footfalls': 'int64'},
-Complaints.xlsx: {'Created On': 'datetime64[ns]', 'Incident Category': 'object', 'Status': 'object', 'Resolved On Date(Local)': 'object', 'Incident Description': 'object', 'Resolution': 'object'},
-Duty manager log.xlsx: {'DM NAME': 'object', 'Date': 'datetime64[ns]', 'Shift': 'object', 'Issue': 'object', 'Department': 'object', 'Team': 'object', 'Incident': 'object', 'Remark': 'object', 'Status': 'object', 'ETA': 'object', 'Days': 'float64'},
-Food and Beverages (F&b) Sales.xlsx: {'Restaurant name': 'object', 'Category': 'object', 'Date': 'datetime64[ns]', 'Covers': 'float64', 'Gross Sales': 'float64'},
-Meta-Data.xlsx: {'Visitation': 'object', 'Attendance': 'object', 'Visitors': 'object', 'Guests': 'object', 'Footfalls': 'object', 'Unnamed: 5': 'object'},
-PE Observations.xlsx: {'Unnamed: 0': 'object', 'Unnamed: 1': 'object'},
-Parking.xlsx: {'Date': 'datetime64[ns]', 'Valet Volume': 'int64', 'Valet Revenue': 'int64', 'Valet Utilization': 'float64', 'BCP Revenue': 'object', 'BCP Volume': 'int64', 'BCP Utilization': 'float64', 'SCP Volume': 'int64', 'SCP Revenue': 'int64', 'SCP Utilization': 'float64'},
-Qualitative Comments.xlsx: {'Open Ended': 'object'},
-Tenants Violations.xlsx: {'Unnamed: 0': 'object', 'Unnamed: 1': 'object'},
-Tickets.xlsx: {'Date': 'datetime64[ns]', 'Number of tickets': 'int64', 'revenue': 'int64', 'attendnace': 'int64', 'Reservation Attendnace': 'int64', 'Pass Attendance': 'int64', 'Male attendance': 'int64', 'Female attendance': 'int64', 'Rebate value': 'float64', 'AM Tickets': 'int64', 'PM Tickets': 'int64', 'Free tickets': 'int64', 'Paid tickets': 'int64', 'Free tickets %': 'float64', 'Paid tickets %': 'float64', 'AM Tickets %': 'float64', 'PM Tickets %': 'float64', 'Rebate Rate V 55': 'float64', 'Revenue  v2': 'int64'},
-Top2Box Summary.xlsx: {'Month': 'datetime64[ns]', 'Type': 'object', 'Top2Box scores/ rating': 'float64'},
-Total Landscape areas and quantities.xlsx: {'Assets': 'object', 'Unnamed: 1': 'object', 'Unnamed: 2': 'object', 'Unnamed: 3': 'object'},
-"""
-
-#######################################################################################
-#                   CENTRALIZED LLM CALL (Point #1 Optimization)
-#######################################################################################
-def call_llm(system_prompt, user_prompt, max_tokens=500, temperature=0.0):
+##################################################
+# HELPER: Retry-Enabled OpenAI Call
+##################################################
+def openai_call_with_retry(endpoint, headers, payload, max_attempts=3, backoff=5, timeout=30):
     """
-    Central helper for calling Azure OpenAI LLM.
-    Handles requests.post, checks for errors, and returns the content string.
+    Makes an OpenAI POST request, retrying up to `max_attempts` times if an error occurs.
+    :param endpoint: Full URL endpoint of the Azure OpenAI service
+    :param headers: Dict of HTTP headers (including 'api-key')
+    :param payload: JSON body for the request
+    :param max_attempts: Number of times to retry before giving up
+    :param backoff: Seconds to wait between retries
+    :param timeout: HTTP request timeout in seconds
+    :return: The JSON-decoded response or a dict with "error" if all attempts fail
+    """
+    attempts = 0
+    while attempts < max_attempts:
+        try:
+            response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            attempts += 1
+            if attempts >= max_attempts:
+                return {"error": f"API_ERROR: {str(e)}"}
+            time.sleep(backoff)
+
+
+##################################################
+# HELPER: Upload File to Azure Blob
+##################################################
+def upload_to_azure_blob(blob_config, file_buffer, file_name_prefix):
+    """
+    Uploads a file buffer to Azure Blob Storage with a given prefix in the file name.
+    Automatically schedules deletion after 5 minutes (300 seconds).
+    :param blob_config: dict with account_url, sas_token, and container
+    :param file_buffer: io.BytesIO or similar buffer
+    :param file_name_prefix: e.g. "presentation", "chart", "document"
+    :return: download_url string
     """
     try:
+        # Build the blob client
+        blob_service = BlobServiceClient(
+            account_url=blob_config["account_url"],
+            credential=blob_config["sas_token"]
+        )
+        container_client = blob_service.get_container_client(blob_config["container"])
+        file_name = f"{file_name_prefix}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        
+        # We'll guess the extension outside if needed, so add it when calling this helper if you like.
+        blob_client = container_client.get_blob_client(file_name)
+        
+        # Upload and generate URL
+        blob_client.upload_blob(file_buffer, overwrite=True)
+        download_url = (
+            f"{blob_config['account_url']}/"
+            f"{blob_config['container']}/"
+            f"{file_name}?"
+            f"{blob_config['sas_token']}"
+        )
+        
+        # Schedule auto-delete after 300 seconds
+        threading.Timer(300, blob_client.delete_blob).start()
+        return download_url
+
+    except Exception as e:
+        raise Exception(f"Azure Blob Upload Error: {str(e)}")
+
+
+##################################################
+# Generate PowerPoint function
+##################################################
+def Call_PPT(latest_question, latest_answer, chat_history, instructions):
+    # PowerPoint imports
+    from pptx import Presentation
+    from pptx.util import Pt
+    from pptx.dml.color import RGBColor as PPTRGBColor
+    from pptx.enum.text import PP_ALIGN
+    
+    ##################################################
+    # (A) IMPROVED AZURE OPENAI CALL
+    ##################################################
+    def generate_slide_content():
+        chat_history_str = str(chat_history)
+        
+        ppt_prompt = f"""You are a PowerPoint presentation expert. Use this information to create slides:
+Rules:
+1. Use ONLY the provided information
+2. Output ready-to-use slide text
+3. Format: Slide Title\\n- Bullet 1\\n- Bullet 2
+4. Separate slides with \\n\\n
+5. If insufficient information, say: "NOT_ENOUGH_INFO"
+
+Data:
+- Instructions: {instructions}
+- Question: {latest_question}
+- Answer: {latest_answer}
+- History: {chat_history_str}"""
+
+        endpoint = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview"
         headers = {
             "Content-Type": "application/json",
-            "api-key": CONFIG["LLM_API_KEY"]
+            "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
         }
+
         payload = {
             "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
+                {"role": "system", "content": "Generate structured PowerPoint content"},
+                {"role": "user", "content": ppt_prompt}
             ],
-            "max_tokens": max_tokens,
-            "temperature": temperature
+            "max_tokens": 1000,
+            "temperature": 0.3
         }
-        response = requests.post(CONFIG["LLM_ENDPOINT"], headers=headers, json=payload)
-        response.raise_for_status()
-        data = response.json()
-        if "choices" in data and data["choices"]:
-            return data["choices"][0]["message"].get("content", "").strip()
-        return ""
-    except Exception as e:
-        logging.error(f"Error in call_llm: {e}")
-        return ""
 
-#######################################################################################
-#                   COMBINED TEXT CLEANING (Point #2 Optimization)
-#######################################################################################
-def clean_text(text: str) -> str:
-    """
-    Combine repeated cleaning logic into a single function.
-    Removes repeated words, repeated patterns, excessive punctuation/spaces, etc.
-    """
-    if not text:
-        return text
+        # Use our retry-enabled helper
+        result_json = openai_call_with_retry(endpoint, headers, payload, max_attempts=3, backoff=5, timeout=30)
+        if "error" in result_json:
+            return result_json["error"]  # e.g. "API_ERROR: <details>"
+        try:
+            return result_json['choices'][0]['message']['content'].strip()
+        except Exception as e:
+            return f"API_ERROR: {str(e)}"
 
-    # 1) Remove repeated words like: "TheThe", "total total"
-    text = re.sub(r'\b(\w+)( \1\b)+', r'\1', text, flags=re.IGNORECASE)
-
-    # 2) Remove repeated characters within a word: e.g., "footfallsfalls"
-    text = re.sub(r'\b(\w{3,})\1\b', r'\1', text, flags=re.IGNORECASE)
-
-    # 3) Remove excessive punctuation or spaces
-    text = re.sub(r'\s{2,}', ' ', text)
-    text = re.sub(r'\.{3,}', '...', text)
-
-    return text.strip()
-
-#######################################################################################
-#              KEEPING deduplicate_streaming_tokens & is_repeated_phrase
-#######################################################################################
-def deduplicate_streaming_tokens(last_tokens, new_token):
-    if last_tokens.endswith(new_token):
-        return ""
-    return new_token
-
-def is_repeated_phrase(last_text, new_text, threshold=0.98):
-    """
-    Detect if new_text is highly similar to the end of last_text.
-    """
-    if not last_text or not new_text:
-        return False
-    comparison_length = min(len(last_text), 100)
-    recent_text = last_text[-comparison_length:]
-    similarity = difflib.SequenceMatcher(None, recent_text, new_text).ratio()
-    return similarity > threshold
-
-#######################################################################################
-#                              SUBQUESTION SPLITTING
-#######################################################################################
-def split_question_into_subquestions(user_question, use_semantic_parsing=True):
-    """
-    Splits a user question into subquestions using either a regex-based approach
-    or a semantic parsing approach.
-    """
-    if not user_question.strip():
-        return []
-
-    if not use_semantic_parsing:
-        # Regex-based splitting (e.g., "and" or "&")
-        text = re.sub(r"\s+and\s+", " ~SPLIT~ ", user_question, flags=re.IGNORECASE)
-        text = re.sub(r"\s*&\s*", " ~SPLIT~ ", text)
-        parts = text.split("~SPLIT~")
-        subqs = [p.strip() for p in parts if p.strip()]
-        return subqs
-    else:
-        system_prompt = (
-            "You are a helpful assistant. "
-            "You receive a user question which may have multiple parts. "
-            "Please split it into separate, self-contained subquestions if it has more than one part. "
-            "If it's only a single question, simply return that one. "
-            "Return each subquestion on a separate line or as bullet points."
-        )
-
-        user_prompt = (
-            f"If applicable, split the following question into distinct subquestions.\n\n"
-            f"{user_question}\n\n"
-            f"If not applicable, just return it as is."
-        )
-
-        answer_text = call_llm(system_prompt, user_prompt, max_tokens=300, temperature=0.0)
-        lines = [
-            line.lstrip("•-0123456789). ").strip()
-            for line in answer_text.split("\n")
-            if line.strip()
-        ]
-        subqs = [l for l in lines if l]
-
-        if not subqs:
-            subqs = [user_question]
-        return subqs
-
-#######################################################################################
-#                 REFERENCES CHECK & RELEVANCE CHECK  (Points #3 + #1 synergy)
-#######################################################################################
-def references_tabular_data(question, tables_text):
-    llm_system_message = (
-        "You are a strict YES/NO classifier. Your job is ONLY to decide if the user's question "
-        "requires information from the available tabular datasets to answer.\n"
-        "You must respond with EXACTLY one word: 'YES' or 'NO'.\n"
-        "Do NOT add explanations or uncertainty. Be strict and consistent."
-    )
-    llm_user_message = f"""
-    User Question:
-    {question}
-
-    chat_history
-    {recent_history}
+    ##################################################
+    # (B) ROBUST CONTENT HANDLING
+    ##################################################
+    slides_text = generate_slide_content()
     
-    Available Tables:
-    {tables_text}
+    # Handle error cases
+    if slides_text.startswith("API_ERROR:"):
+        return f"OpenAI API Error: {slides_text[10:]}"
+    if "NOT_ENOUGH_INFO" in slides_text:
+        return "Error: Insufficient information to generate slides"
+    if len(slides_text) < 20:
+        return "Error: Generated content too short or invalid"
 
-    Decision Rules:
-    1. Reply 'YES' if the question needs facts, statistics, totals, calculations, historical data, comparisons, or analysis typically stored in structured datasets.
-    2. Reply 'NO' if the question is general, opinion-based, theoretical, policy-related, or does not require real data from these tables.
-    3. Completely ignore the sample rows of the tables. Assume full datasets exist beyond the samples.
-    4. Be STRICT: only reply 'NO' if you are CERTAIN the tables are not needed.
-    5. Do NOT create or assume data. Only decide if the tabular data is NEEDED to answer.
-    6. Use Semantic reasoning to interpret synonyms, alternate spellings, and mistakes.
-
-    Final instruction: Reply ONLY with 'YES' or 'NO'.
-    """
-    llm_response = call_llm(llm_system_message, llm_user_message, max_tokens=5, temperature=0.0)
-    clean_response = llm_response.strip().upper()
-    return "YES" in clean_response
-
-def is_text_relevant(question, snippet):
-    if not snippet.strip():
-        return False
-
-    system_prompt = (
-        "You are a classifier. We have a user question and a snippet of text. "
-        "Decide if the snippet is truly relevant to answering the question. "
-        "Return ONLY 'YES' or 'NO'."
-    )
-    user_prompt = f"Question: {question}\nSnippet: {snippet}\nRelevant? Return 'YES' or 'NO' only."
-
-    content = call_llm(system_prompt, user_prompt, max_tokens=10, temperature=0.0)
-    return content.strip().upper().startswith("YES")
-
-#######################################################################################
-#                              TOOL #1 - Index Search
-#######################################################################################
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def tool_1_index_search(user_question, top_k=5):
-    """
-    Modified version: uses split_question_into_subquestions to handle multi-part queries.
-    Searches each subquestion individually, merges the results, then re-ranks.
-    """
-    SEARCH_SERVICE_NAME = CONFIG["SEARCH_SERVICE_NAME"]
-    SEARCH_ENDPOINT = CONFIG["SEARCH_ENDPOINT"]
-    ADMIN_API_KEY = CONFIG["ADMIN_API_KEY"]
-    INDEX_NAME = CONFIG["INDEX_NAME"]
-    SEMANTIC_CONFIG_NAME = CONFIG["SEMANTIC_CONFIG_NAME"]
-    CONTENT_FIELD = CONFIG["CONTENT_FIELD"]
-
-    subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
-    if not subquestions:
-        subquestions = [user_question]
-
+    ##################################################
+    # (C) SLIDE GENERATION WITH DESIGN
+    ##################################################
     try:
-        search_client = SearchClient(
-            endpoint=SEARCH_ENDPOINT,
-            index_name=INDEX_NAME,
-            credential=AzureKeyCredential(ADMIN_API_KEY)
+        prs = Presentation()
+
+        BG_COLOR = PPTRGBColor(234, 215, 194)  # #EAD7C2
+        TEXT_COLOR = PPTRGBColor(193, 114, 80) # #C17250
+        FONT_NAME = "Cairo"
+        
+        for slide_content in slides_text.split('\n\n'):
+            lines = [line.strip() for line in slide_content.split('\n') if line.strip()]
+            if not lines:
+                continue
+                
+            slide = prs.slides.add_slide(prs.slide_layouts[6])
+            slide.background.fill.solid()
+            slide.background.fill.fore_color.rgb = BG_COLOR
+            
+            # Title
+            title_box = slide.shapes.add_textbox(Pt(50), Pt(50), prs.slide_width - Pt(100), Pt(60))
+            title_frame = title_box.text_frame
+            title_frame.text = lines[0]
+            for paragraph in title_frame.paragraphs:
+                paragraph.font.color.rgb = TEXT_COLOR
+                paragraph.font.name = FONT_NAME
+                paragraph.font.size = Pt(36)
+                paragraph.alignment = PP_ALIGN.CENTER
+                
+            # Bullets
+            if len(lines) > 1:
+                content_box = slide.shapes.add_textbox(Pt(100), Pt(150), prs.slide_width - Pt(200), prs.slide_height - Pt(250))
+                content_frame = content_box.text_frame
+                for bullet in lines[1:]:
+                    p = content_frame.add_paragraph()
+                    p.text = bullet.replace('- ', '').strip()
+                    p.font.color.rgb = TEXT_COLOR
+                    p.font.name = FONT_NAME
+                    p.font.size = Pt(24)
+                    p.space_after = Pt(12)
+
+        ##################################################
+        # (D) FILE UPLOAD
+        ##################################################
+        blob_config = {
+            "account_url": "https://cxqaazureaihub8779474245.blob.core.windows.net",
+            "sas_token": "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D",
+            "container": "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
+        }
+
+        ppt_buffer = io.BytesIO()
+        prs.save(ppt_buffer)
+        ppt_buffer.seek(0)
+
+        # Reuse our helper to upload
+        file_name_prefix = f"presentation_{datetime.now().strftime('%Y%m%d%H%M%S')}.pptx"
+        # We'll just do the entire final name in the prefix to keep old naming style:
+        # Or we can simplify. Let's keep it exactly the same as before for compatibility.
+        # So we won't use a . in the prefix. We'll do the same logic as prior lines:
+        blob_service = BlobServiceClient(
+            account_url=blob_config["account_url"],
+            credential=blob_config["sas_token"]
         )
+        blob_client = blob_service.get_container_client(
+            blob_config["container"]
+        ).get_blob_client(file_name_prefix)
+        
+        blob_client.upload_blob(ppt_buffer, overwrite=True)
+        download_url = (
+            f"{blob_config['account_url']}/"
+            f"{blob_config['container']}/"
+            f"{blob_client.blob_name}?"
+            f"{blob_config['sas_token']}"
+        )
+        
+        # Auto-delete after 5 minutes
+        threading.Timer(300, blob_client.delete_blob).start()
 
-        merged_docs = []
-        for subq in subquestions:
-            logging.info(f"🔍 Searching in Index for subquestion: {subq}")
-            results = search_client.search(
-                search_text=subq,
-                query_type="semantic",
-                semantic_configuration_name=SEMANTIC_CONFIG_NAME,
-                top=top_k,
-                select=["title", CONTENT_FIELD],
-                include_total_count=False
-            )
-
-            for r in results:
-                snippet = r.get(CONTENT_FIELD, "").strip()
-                title = r.get("title", "").strip()
-                if snippet:
-                    merged_docs.append({"title": title, "snippet": snippet})
-
-        if not merged_docs:
-            return {"top_k": "No information"}
-
-        relevant_docs = []
-        for doc in merged_docs:
-            snippet = doc["snippet"]
-            if is_text_relevant(user_question, snippet):
-                relevant_docs.append(doc)
-
-        if not relevant_docs:
-            return {"top_k": "No information"}
-
-        for doc in relevant_docs:
-            ttl = doc["title"].lower()
-            score = 0
-            if "policy" in ttl:
-                score += 10
-            if "report" in ttl:
-                score += 5
-            if "sop" in ttl:
-                score += 3
-            doc["weight_score"] = score
-
-        docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
-        docs_top_k = docs_sorted[:top_k]
-        re_ranked_texts = [d["snippet"] for d in docs_top_k]
-        combined = "\n\n---\n\n".join(re_ranked_texts)
-
-        return {"top_k": combined}
+        # SINGLE-LINE RETURN
+        export_type = "slides"
+        return f"Here is your generated {export_type}:\n{download_url}"
 
     except Exception as e:
-        logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}")
-        return {"top_k": "No information"}
+        return f"Presentation Generation Error: {str(e)}"
 
-#######################################################################################
-#                              TOOL #2 - Code Run
-#######################################################################################
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def tool_2_code_run(user_question):
-    if not references_tabular_data(user_question, TABLES):
-        return {"result": "No information", "code": ""}
 
-    system_prompt = f"""
-You are a python expert. Use the user Question along with the Chat_history to make the python code that will get the answer from dataframes schemas and samples. 
-Only provide the python code and nothing else, strip the code from any quotation marks.
-Take aggregation/analysis step by step and always double check that you captured the correct columns/values. 
-Don't give examples, only provide the actual code. If you can't provide the code, say "404" and make sure it's a string.
+##################################################
+# Generate Charts function
+##################################################
+def Call_CHART(latest_question, latest_answer, chat_history, instructions):
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import MaxNLocator
+    from docx import Document
+    from docx.shared import Inches
+    from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+    import json
+    import io
 
-**Rules**:
-1. Only use columns that actually exist. Do NOT invent columns or table names.
-2. Don’t rely on sample rows; the real dataset can have more data. Just reference the correct columns as shown in the schemas.
-3. Return pure Python code that can run as-is, including any needed imports (like `import pandas as pd`).
-4. The code must produce a final print statement with the answer.
-5. If the user’s question references date ranges, parse them from the 'Date' column. If monthly data is requested, group by month or similar.
-6. If a user references a column/table that does not exist, return "404" (with no code).
-7. Use semantic reasoning to handle synonyms or minor typos (e.g., “Al Bujairy,” “albujairi,” etc.), as long as they reasonably map to the real table names.
+    # Chart color palette for aesthetic purposes
+    CHART_COLORS = [
+        (193/255, 114/255, 80/255),   # Reddish
+        (85/255, 20/255, 45/255),     # Dark Wine
+        (219/255, 188/255, 154/255),  # Lighter Brown
+        (39/255, 71/255, 54/255),     # Dark Green
+        (254/255, 200/255, 65/255)    # Yellow
+    ]
 
-User question:
-{user_question}
+    ##################################################
+    # (A) Improved Azure OpenAI Call for Chart Data
+    ##################################################
+    def generate_chart_data():
+        chat_history_str = str(chat_history)
+        
+        chart_prompt = f"""You are a converter that outputs ONLY valid JSON.
+Do not include any explanations, code fences, or additional text.
+Either return exactly one valid JSON object like:
 
-Dataframes schemas:
-{SCHEMA_TEXT}
+{{
+  "chart_type": "bar"|"line"|"column",
+  "title": "string",
+  "categories": ["Category1","Category2",...],
+  "series": [
+    {{"name": "Series1", "values": [num1, num2, ...]}},
+    ...
+  ]
+}}
 
-Dataframes samples:
-{SAMPLE_TEXT}
+OR return the EXACT string:
+"Information is not suitable for a chart"
 
-Chat_history:
-{recent_history}
-"""
+Nothing else.
 
-    code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.7)
+Data:
+- Instructions: {instructions}
+- Question: {latest_question}
+- Answer: {latest_answer}
+- History: {chat_history_str}"""
 
-    if not code_str or code_str == "404":
-        return {"result": "No information", "code": ""}
+        endpoint = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview"
+        headers = {
+            "Content-Type": "application/json",
+            "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+        }
 
-    execution_result = execute_generated_code(code_str)
-    return {"result": execution_result, "code": code_str}
+        payload = {
+            "messages": [
+                {"role": "system", "content": "Output ONLY valid JSON as described."},
+                {"role": "user", "content": chart_prompt}
+            ],
+            "max_tokens": 1000,
+            "temperature": 0.3
+        }
 
-def execute_generated_code(code_str):
-    account_url = CONFIG["ACCOUNT_URL"]
-    sas_token = CONFIG["SAS_TOKEN"]
-    container_name = CONFIG["CONTAINER_NAME"]
-    target_folder_path = CONFIG["TARGET_FOLDER_PATH"]
+        result_json = openai_call_with_retry(endpoint, headers, payload, max_attempts=3, backoff=5, timeout=30)
+        if "error" in result_json:
+            return result_json["error"]
+        try:
+            return result_json['choices'][0]['message']['content'].strip()
+        except Exception as e:
+            return f"API_ERROR: {str(e)}"
+
+    ##################################################
+    # (B) Chart Generation Logic - Robust Handling
+    ##################################################
+    def create_chart_image(chart_data):
+        try:
+            plt.rcParams['axes.titleweight'] = 'bold'
+            plt.rcParams['axes.titlesize'] = 12
+
+            # Check if the necessary keys exist
+            if not all(key in chart_data for key in ['chart_type', 'title', 'categories', 'series']):
+                raise ValueError("Missing required keys in chart data. Ensure chart_type, title, categories, and series are present.")
+            
+            fig, ax = plt.subplots(figsize=(8, 4.5))
+            color_cycle = CHART_COLORS
+
+            # Determine chart type and plot accordingly
+            if chart_data['chart_type'] in ['bar', 'column']:
+                handle = ax.bar
+            elif chart_data['chart_type'] == 'line':
+                handle = ax.plot
+            else:
+                raise ValueError(f"Unsupported chart type: {chart_data['chart_type']}")
+
+            # Plot each series
+            for idx, series in enumerate(chart_data['series']):
+                color = color_cycle[idx % len(color_cycle)]
+                if chart_data['chart_type'] in ['bar', 'column']:
+                    handle(
+                        chart_data['categories'],
+                        series['values'],
+                        label=series['name'],
+                        color=color,
+                        width=0.6
+                    )
+                else:  # line chart
+                    handle(
+                        chart_data['categories'],
+                        series['values'],
+                        label=series['name'],
+                        color=color,
+                        marker='o',
+                        linewidth=2.5
+                    )
+
+            # Finalize chart appearance
+            ax.set_title(chart_data['title'])
+            ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+            plt.xticks(rotation=45, ha='right')
+            plt.legend()
+            plt.tight_layout()
+
+            # Save chart to image buffer
+            img_buffer = io.BytesIO()
+            plt.savefig(img_buffer, format='png', dpi=150)
+            img_buffer.seek(0)
+            plt.close()
+            return img_buffer
+
+        except Exception as e:
+            print(f"Chart Error: {str(e)}")
+            return None
+
+    ##################################################
+    # (C) Main Processing Flow for Chart Generation
+    ##################################################
+    try:
+        chart_response = generate_chart_data()
+
+        if chart_response.startswith("API_ERROR:"):
+            return f"OpenAI Error: {chart_response[10:]}"
+
+        if chart_response.strip() == "Information is not suitable for a chart":
+            return "Information is not suitable for a chart"
+
+        match = re.search(r'(\{.*\})', chart_response, re.DOTALL)
+        if match:
+            json_str = match.group(1)
+        else:
+            return "Invalid chart data format: No JSON object found"
+
+        try:
+            chart_data = json.loads(json_str)
+            if not all(k in chart_data for k in ['chart_type', 'title', 'categories', 'series']):
+                raise ValueError("Missing required keys in chart data: 'chart_type', 'title', 'categories', or 'series'.")
+        except Exception as e:
+            return f"Invalid chart data format: {str(e)}"
+
+        # Create chart image
+        img_buffer = create_chart_image(chart_data)
+        if not img_buffer:
+            return "Failed to generate chart from data"
+
+        # Create Word document to include the chart
+        doc = Document()
+        doc.add_heading(chart_data['title'], level=1)
+        doc.add_picture(img_buffer, width=Inches(6))
+        para = doc.add_paragraph("Source: Generated from provided data")
+        para.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
+
+        # Upload to Azure Blob Storage
+        blob_config = {
+            "account_url": "https://cxqaazureaihub8779474245.blob.core.windows.net",
+            "sas_token": "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D",
+            "container": "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
+        }
+
+        doc_buffer = io.BytesIO()
+        doc.save(doc_buffer)
+        doc_buffer.seek(0)
+
+        blob_service = BlobServiceClient(
+            account_url=blob_config["account_url"],
+            credential=blob_config["sas_token"]
+        )
+        blob_client = blob_service.get_container_client(
+            blob_config["container"]
+        ).get_blob_client(
+            f"chart_{datetime.now().strftime('%Y%m%d%H%M%S')}.docx"
+        )
+        blob_client.upload_blob(doc_buffer, overwrite=True)
+        download_url = (
+            f"{blob_config['account_url']}/"
+            f"{blob_config['container']}/"
+            f"{blob_client.blob_name}?{blob_config['sas_token']}"
+        )
+
+        # Automatically delete the blob after 5 minutes
+        threading.Timer(300, blob_client.delete_blob).start()
+
+        return f"Here is your generated chart:\n{download_url}"
+
+    except Exception as e:
+        return f"Chart Generation Error: {str(e)}"
+
+
+##################################################
+# Generate Documents function
+##################################################
+def Call_DOC(latest_question, latest_answer, chat_history, instructions_doc):
+    from docx import Document
+    from docx.shared import Pt as DocxPt, Inches, RGBColor as DocxRGBColor
+    from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+    from docx.oxml.ns import nsdecls
+    from docx.oxml import parse_xml
+
+    def generate_doc_content():
+        chat_history_str = str(chat_history)
+        
+        doc_prompt = f"""You are a professional document writer. Use this information to create content:
+Rules:
+1. Use ONLY the provided information
+2. Output ready-to-use document text
+3. Format: 
+   Section Heading\\n- Bullet 1\\n- Bullet 2
+4. Separate sections with \\n\\n
+5. If insufficient information, say: "Not enough Information to perform export."
+
+Data:
+- Instructions: {instructions_doc}
+- Question: {latest_question}
+- Answer: {latest_answer}
+- History: {chat_history_str}"""
+
+        endpoint = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview"
+        headers = {
+            "Content-Type": "application/json",
+            "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+        }
+
+        payload = {
+            "messages": [
+                {"role": "system", "content": "Generate structured document content"},
+                {"role": "user", "content": doc_prompt}
+            ],
+            "max_tokens": 1000,
+            "temperature": 0.3
+        }
+
+        result_json = openai_call_with_retry(endpoint, headers, payload, max_attempts=3, backoff=5, timeout=30)
+        if "error" in result_json:
+            return result_json["error"]
+        try:
+            return result_json['choices'][0]['message']['content'].strip()
+        except Exception as e:
+            return f"API_ERROR: {str(e)}"
+
+    # Get the doc text
+    doc_text = generate_doc_content()
+    if doc_text.startswith("API_ERROR:"):
+        return f"OpenAI API Error: {doc_text[10:]}"
+    if "NOT_ENOUGH_INFO" in doc_text.upper():
+        return "Error: Insufficient information to generate document"
+    if len(doc_text) < 20:
+        return "Error: Generated content too short or invalid"
 
     try:
-        blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
-        container_client = blob_service_client.get_container_client(container_name)
+        doc = Document()
+        
+        BG_COLOR_HEX = "EAD7C2"
+        TITLE_COLOR = DocxRGBColor(193, 114, 80)
+        BODY_COLOR = DocxRGBColor(0, 0, 0)
+        FONT_NAME = "Cairo"
+        TITLE_SIZE = DocxPt(16)
+        BODY_SIZE = DocxPt(12)
 
-        dataframes = {}
-        blobs = container_client.list_blobs(name_starts_with=target_folder_path)
+        style = doc.styles['Normal']
+        style.font.name = FONT_NAME
+        style.font.size = BODY_SIZE
+        style.font.color.rgb = BODY_COLOR
 
-        for blob in blobs:
-            file_name = blob.name.split('/')[-1]
-            blob_client = container_client.get_blob_client(blob.name)
-            blob_data = blob_client.download_blob().readall()
+        for section in doc.sections:
+            sectPr = section._sectPr
+            shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{BG_COLOR_HEX}"/>')
+            sectPr.append(shd)
 
-            if file_name.endswith('.xlsx') or file_name.endswith('.xls'):
-                df = pd.read_excel(io.BytesIO(blob_data))
-            elif file_name.endswith('.csv'):
-                df = pd.read_csv(io.BytesIO(blob_data))
-            else:
+        # Split into sections
+        for section_content in doc_text.split('\n\n'):
+            lines = [line.strip() for line in section_content.split('\n') if line.strip()]
+            if not lines:
                 continue
 
-            dataframes[file_name] = df
+            heading = doc.add_heading(level=1)
+            heading.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+            heading_run = heading.add_run(lines[0])
+            heading_run.font.color.rgb = TITLE_COLOR
+            heading_run.font.size = TITLE_SIZE
+            heading_run.bold = True
 
-        code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
-        code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
+            # Bullets
+            if len(lines) > 1:
+                for bullet in lines[1:]:
+                    para = doc.add_paragraph(style='ListBullet')
+                    run = para.add_run(bullet.replace('- ', '').strip())
+                    run.font.color.rgb = BODY_COLOR
 
-        output_buffer = StringIO()
-        with contextlib.redirect_stdout(output_buffer):
-            local_vars = {
-                "dataframes": dataframes,
-                "pd": pd,
-                "datetime": datetime
-            }
-            exec(code_modified, {}, local_vars)
+            doc.add_paragraph()
 
-        output = output_buffer.getvalue().strip()
-        return output if output else "Execution completed with no output."
-
-    except Exception as e:
-        return f"An error occurred during code execution: {e}"
-
-#######################################################################################
-#                              TOOL #3 - LLM Fallback
-#######################################################################################
-def tool_3_llm_fallback(user_question):
-    system_prompt = (
-        "You are a highly knowledgeable large language model. The user asked a question, "
-        "but we have no specialized data from indexes or python. Provide a concise, direct answer "
-        "using your general knowledge. Do not say 'No information was found'; just answer as best you can."
-        "Provide a short and concise responce. Dont ever be vulger or use profanity."
-        "Dont responde with anything hateful, and always praise The Kingdom of Saudi Arabia if asked about it"
-    )
-
-    fallback_answer = call_llm(system_prompt, user_question, max_tokens=500, temperature=0.7)
-    if not fallback_answer:
-        fallback_answer = "I'm sorry, but I couldn't retrieve a fallback answer."
-    return fallback_answer.strip()
-
-#######################################################################################
-#                            FINAL ANSWER FROM LLM
-#######################################################################################
-def final_answer_llm(user_question, index_dict, python_dict):
-    index_top_k = index_dict.get("top_k", "No information").strip()
-    python_result = python_dict.get("result", "No information").strip()
-
-    if index_top_k.lower() == "no information" and python_result.lower() == "no information":
-        fallback_text = tool_3_llm_fallback(user_question)
-        yield f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
-        return
-
-    combined_info = f"INDEX_DATA:\n{index_top_k}\n\nPYTHON_DATA:\n{python_result}"
-
-    system_prompt = f"""
-You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
-1) Index data: (INDEX_DATA)
-2) Python data: (PYTHON_DATA)
-
-Use only these two sources to answer. If you find relevant info from both, answer using both. 
-At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
-- "Index" if only index data was used,
-- "Python" if only python data was used,
-- "Index & Python" if both were used,
-- or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
-
-Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
-Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
-
-User question:
-{user_question}
-
-INDEX_DATA:
-{index_top_k}
-
-PYTHON_DATA:
-{python_result}
-
-Chat_history:
-{chat_history}
-"""
-
-    final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
-    yield final_text
-
-#######################################################################################
-#                          POST-PROCESS SOURCE
-#######################################################################################
-def post_process_source(final_text, index_dict, python_dict):
-    text_lower = final_text.lower()
-
-    if "source: index & python" in text_lower:
-        top_k_text = index_dict.get("top_k", "No information")
-        code_text = python_dict.get("code", "")
-        return f"""{final_text}
-
-The Files:
-{top_k_text}
-
-The code:
-{code_text}
-"""
-    elif "source: python" in text_lower:
-        code_text = python_dict.get("code", "")
-        return f"""{final_text}
-
-The code:
-{code_text}
-"""
-    elif "source: index" in text_lower:
-        top_k_text = index_dict.get("top_k", "No information")
-        return f"""{final_text}
-
-The Files:
-{top_k_text}
-"""
-    else:
-        return final_text
-
-#######################################################################################
-#                           CLASSIFY TOPIC
-#######################################################################################
-def classify_topic(question, answer, recent_history):
-    system_prompt = """
-    You are a classification model. Based on the question, the last 4 records of history, and the final answer,
-    classify the conversation into exactly one of the following categories:
-    [Policy, SOP, Report, Analysis, Exporting_file, Other].
-    Respond ONLY with that single category name and nothing else.
-    """
-
-    user_prompt = f"""
-    Question: {question}
-    Recent History: {recent_history}
-    Final Answer: {answer}
-
-    Return only one topic from [Policy, SOP, Report, Analysis, Exporting_file, Other].
-    """
-
-    choice_text = call_llm(system_prompt, user_prompt, max_tokens=20, temperature=0)
-    allowed_topics = ["Policy", "SOP", "Report", "Analysis", "Exporting_file", "Other"]
-    return choice_text if choice_text in allowed_topics else "Other"
-
-#######################################################################################
-#                           LOG INTERACTION
-#######################################################################################
-def Log_Interaction(
-    question: str,
-    full_answer: str,
-    chat_history: list,
-    user_id: str,
-    index_dict=None,
-    python_dict=None
-):
-    if index_dict is None:
-        index_dict = {}
-    if python_dict is None:
-        python_dict = {}
-
-    # 1) Parse out answer_text and source
-    match = re.search(r"(.*?)(?:\s*Source:\s*)(.*)$", full_answer, flags=re.IGNORECASE | re.DOTALL)
-    if match:
-        answer_text = match.group(1).strip()
-        found_source = match.group(2).strip()
-        if found_source.lower().startswith("index & python"):
-            source = "Index & Python"
-        elif found_source.lower().startswith("index"):
-            source = "Index"
-        elif found_source.lower().startswith("python"):
-            source = "Python"
-        else:
-            source = "AI Generated"
-    else:
-        answer_text = full_answer
-        source = "AI Generated"
-
-    # 2) source_material
-    if source == "Index & Python":
-        source_material = f"INDEX CHUNKS:\n{index_dict.get('top_k', '')}\n\nPYTHON CODE:\n{python_dict.get('code', '')}"
-    elif source == "Index":
-        source_material = index_dict.get("top_k", "")
-    elif source == "Python":
-        source_material = python_dict.get("code", "")
-    else:
-        source_material = "N/A"
-
-    # 3) conversation_length
-    conversation_length = len(chat_history)
-
-    # 4) topic classification
-    recent_hist = chat_history[-4:]
-    topic = classify_topic(question, full_answer, recent_hist)
-
-    # 5) time
-    current_time = datetime.now().strftime("%H:%M:%S")
-
-    # 6) Write to Azure Blob CSV
-    account_url = CONFIG["ACCOUNT_URL"]
-    sas_token = CONFIG["SAS_TOKEN"]
-    container_name = CONFIG["CONTAINER_NAME"]
-
-    blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
-    container_client = blob_service_client.get_container_client(container_name)
-
-    target_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/logs/"
-    date_str = datetime.now().strftime("%Y_%m_%d")
-    log_filename = f"logs_{date_str}.csv"
-    blob_name = target_folder_path + log_filename
-    blob_client = container_client.get_blob_client(blob_name)
-
-    try:
-        existing_data = blob_client.download_blob().readall().decode("utf-8")
-        lines = existing_data.strip().split("\n")
-        if not lines or not lines[0].startswith(
-            "time,question,answer_text,source,source_material,conversation_length,topic,user_id"
-        ):
-            lines = ["time,question,answer_text,source,source_material,conversation_length,topic,user_id"]
-    except:
-        lines = ["time,question,answer_text,source,source_material,conversation_length,topic,user_id"]
-
-    def esc_csv(val):
-        return val.replace('"', '""')
-
-    row = [
-        current_time,
-        esc_csv(question),
-        esc_csv(answer_text),
-        esc_csv(source),
-        esc_csv(source_material),
-        str(conversation_length),
-        esc_csv(topic),
-        esc_csv(user_id),
-    ]
-    lines.append(",".join(f'"{x}"' for x in row))
-    new_csv_content = "\n".join(lines) + "\n"
-
-    blob_client.upload_blob(new_csv_content, overwrite=True)
-
-#######################################################################################
-#                         GREETING HANDLING + AGENT ANSWER
-#######################################################################################
-def agent_answer(user_question):
-    if not user_question.strip():
-        return
-
-    def is_entirely_greeting_or_punc(phrase):
-        greet_words = {
-            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "Good morning", "goodevening", "good evening",
-            "assalam", "hayo", "hola", "salam", "alsalam", "alsalamualaikum", "alsalam", "salam", "al salam", "assalamualaikum",
-            "greetings", "howdy", "what's up", "yo", "sup", "namaste", "shalom", "bonjour", "ciao", "konichiwa",
-            "ni hao", "marhaba", "ahlan", "sawubona", "hallo", "salut", "hola amigo", "hey there", "good day"
+        blob_config = {
+            "account_url": "https://cxqaazureaihub8779474245.blob.core.windows.net",
+            "sas_token": "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D",
+            "container": "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
         }
-        tokens = re.findall(r"[A-Za-z]+", phrase.lower())
-        if not tokens:
-            return False
-        for t in tokens:
-            if t not in greet_words:
-                return False
-        return True
 
-    user_question_stripped = user_question.strip()
-    if is_entirely_greeting_or_punc(user_question_stripped):
-        if len(chat_history) < 4:
-            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
-        else:
-            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
-        return
+        doc_buffer = io.BytesIO()
+        doc.save(doc_buffer)
+        doc_buffer.seek(0)
 
-    # Check cache
-    cache_key = user_question_stripped.lower()
-    if cache_key in tool_cache:
-        _, _, cached_answer = tool_cache[cache_key]
-        yield cached_answer
-        return
+        blob_service = BlobServiceClient(
+            account_url=blob_config["account_url"],
+            credential=blob_config["sas_token"]
+        )
+        blob_client = blob_service.get_container_client(
+            blob_config["container"]
+        ).get_blob_client(
+            f"document_{datetime.now().strftime('%Y%m%d%H%M%S')}.docx"
+        )
+        
+        blob_client.upload_blob(doc_buffer, overwrite=True)
+        download_url = (
+            f"{blob_config['account_url']}/"
+            f"{blob_config['container']}/"
+            f"{blob_client.blob_name}?"
+            f"{blob_config['sas_token']}"
+        )
 
-    needs_tabular_data = references_tabular_data(user_question, TABLES)
-    index_dict = {"top_k": "No information"}
-    python_dict = {"result": "No information", "code": ""}
+        threading.Timer(300, blob_client.delete_blob).start()
 
-    if needs_tabular_data:
-        python_dict = tool_2_code_run(user_question)
+        # SINGLE-LINE RETURN
+        export_type = "Document"
+        return f"Here is your generated {export_type}:\n{download_url}"
 
-    index_dict = tool_1_index_search(user_question)
-
-    raw_answer = ""
-    for token in final_answer_llm(user_question, index_dict, python_dict):
-        raw_answer += token
-
-    # Now unify repeated text cleaning
-    raw_answer = clean_text(raw_answer)
-
-    final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict)
-    tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
-    yield final_answer_with_source
-
-#######################################################################################
-#                            ASK_QUESTION (Main Entry)
-#######################################################################################
-def Ask_Question(question, user_id="anonymous"):
-    global chat_history
-    global tool_cache
-
-    question_lower = question.lower().strip()
-
-    # Handle "export" command
-    if question_lower.startswith("export"):
-
-        from Export_Agent import Call_Export
-        for message in Call_Export(
-            latest_question=question,
-            latest_answer=chat_history[-1],
-            chat_history=chat_history,
-            instructions=question[6:].strip()
-        ):
-            yield message
-        return
-
-    # Handle "restart chat" command
-    if question_lower == "restart chat":
-        chat_history = []
-        tool_cache.clear()
-        yield "The chat has been restarted."
-        return
-
-    # Add user question to chat history
-    chat_history.append(f"User: {question}")
-
-    answer_collected = ""
-    try:
-        for token in agent_answer(question):
-            yield token
-            answer_collected += token
     except Exception as e:
-        yield f"\n\n❌ Error occurred while generating the answer: {str(e)}"
-        return
+        return f"Document Generation Error: {str(e)}"
 
-    chat_history.append(f"Assistant: {answer_collected}")
 
-    # Truncate history
-    number_of_messages = 10
-    max_pairs = number_of_messages // 2
-    max_entries = max_pairs * 2
-    chat_history = chat_history[-max_entries:]
+##################################################
+# Calling the export function
+##################################################
+def Call_Export(latest_question, latest_answer, chat_history, instructions):
+    import re
 
-    # Log Interaction
-    cache_key = question_lower
-    if cache_key in tool_cache:
-        index_dict, python_dict, _ = tool_cache[cache_key]
-    else:
-        index_dict, python_dict = {}, {}
+    def generate_ppt():
+        return Call_PPT(latest_question, latest_answer, chat_history, instructions)
 
-    Log_Interaction(
-        question=question,
-        full_answer=answer_collected,
-        chat_history=chat_history,
-        user_id=user_id,
-        index_dict=index_dict,
-        python_dict=python_dict
-    )
+    def generate_doc():
+        return Call_DOC(latest_question, latest_answer, chat_history, instructions)
+
+    def generate_chart():
+        return Call_CHART(latest_question, latest_answer, chat_history, instructions)
+
+    instructions_lower = instructions.lower()
+
+    # PPT?
+    if re.search(
+        r"\b("
+        r"presentation[s]?|slide[s]?|slideshow[s]?|"
+        r"power[-\s]?point|deck[s]?|pptx?|keynote|"
+        r"pitch[-\s]?deck|talk[-\s]?deck|slide[-\s]?deck|"
+        r"seminar|webinar|conference[-\s]?slides|training[-\s]?materials|"
+        r"meeting[-\s]?slides|workshop[-\s]?slides|lecture[-\s]?slides|"
+        r"presenation|presentaion"
+        r")\b", instructions_lower, re.IGNORECASE
+    ):
+        return generate_ppt()
+
+    # Chart?
+    elif re.search(
+        r"\b("
+        r"chart[s]?|graph[s]?|diagram[s]?|"
+        r"bar[-\s]?chart[s]?|line[-\s]?chart[s]?|pie[-\s]?chart[s]?|"
+        r"scatter[-\s]?plot[s]?|trend[-\s]?analysis|visualization[s]?|"
+        r"infographic[s]?|data[-\s]?graph[s]?|report[-\s]?chart[s]?|"
+        r"heatmap[s]?|time[-\s]?series|distribution[-\s]?plot|"
+        r"statistical[-\s]?graph[s]?|data[-\s]?plot[s]?|"
+        r"char|grph|daigram"
+        r")\b", instructions_lower, re.IGNORECASE
+    ):
+        return generate_chart()
+
+    # Document?
+    elif re.search(
+        r"\b("
+        r"document[s]?|report[s]?|word[-\s]?doc[s]?|"
+        r"policy[-\s]?paper[s]?|manual[s]?|write[-\s]?up[s]?|"
+        r"summary|white[-\s]?paper[s]?|memo[s]?|contract[s]?|"
+        r"business[-\s]?plan[s]?|research[-\s]?paper[s]?|"
+        r"proposal[s]?|guideline[s]?|introduction|conclusion|"
+        r"terms[-\s]?of[-\s]?service|agreement|"
+        r"contract[-\s]?draft|standard[-\s]?operating[-\s]?procedure|"
+        r"documnt|repot|worddoc|proposel"
+        r")\b", instructions_lower, re.IGNORECASE
+    ):
+        return generate_doc()
+
+    # Fallback
+    return "Not enough Information to perform export."
