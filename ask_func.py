@@ -1,4 +1,32 @@
-# new v 17b:
+# Version 18:
+# =========================================================================================
+#                                     CHANGELOG (RBAC UPDATE)
+# =========================================================================================
+# 1. New RBAC Functions:
+#    - get_rbac_data(): Loads the rbac.xlsx file, caching user-tier and table-tier mappings.
+#    - get_user_tier(user_id): Returns the user’s tier (t0–t4), defaulting to t1 if not found.
+#    - get_table_required_tier(table_name): Returns the required tier for a table, defaulting to t1.
+#    - tiers_user_can_access(user_tier): Yields the list of tiers a user may access.
+#
+# 2. Updated Function Signatures:
+#    - tool_1_index_search(user_question, user_id, top_k=5):
+#      * Accepts user_id to perform RBAC checks and filter out index chunks the user cannot access.
+#    - tool_2_code_run(user_question, user_id):
+#      * Accepts user_id to perform RBAC checks; rejects unauthorized table usage in generated code.
+#    - agent_answer(user_question, user_id="anonymous"):
+#      * Now passes user_id through to tool_1_index_search and tool_2_code_run for RBAC filtering.
+#    - Ask_Question(question, user_id="anonymous"):
+#      * Passes user_id to agent_answer, ensuring consistent RBAC checks throughout.
+#
+# 3. RBAC Enforcement:
+#    - If user_tier == "t0", all data queries immediately fall back to tool_3_llm_fallback().
+#    - In tool_1_index_search, only chunks with tier in the user’s allowed tiers are returned.
+#    - In tool_2_code_run, if the user references a table outside their allowed tiers, code is replaced
+#      with a '404'-style response ("No information") and not executed.
+#
+# No other functionality was removed or changed; the flow remains the same. These additions
+# simply ensure tier-based restrictions are properly applied for both index chunks and table data.
+
 import os
 import io
 import re
@@ -290,13 +318,111 @@ def is_text_relevant(question, snippet):
     return content.strip().upper().startswith("YES")
 
 #######################################################################################
+#        NEW: RBAC LOOKUP & HELPER FUNCTIONS TO DETERMINE USER + TABLE TIERS
+#######################################################################################
+@lru_cache(maxsize=None)
+def get_rbac_data():
+    """
+    Reads the 'rbac.xlsx' from the same container/folder.  
+    We assume it has:
+      - A sheet or area with columns: [User_ID, Tier_Level]
+      - A sheet or area with columns: [Table_Name, Table_Tier]
+    Returns:
+      user_tier_map = {user_id -> 't1'/'t2'/...} 
+      table_tier_map = {table_name -> 't1'/'t2'/...}
+    """
+    account_url = CONFIG["ACCOUNT_URL"]
+    sas_token = CONFIG["SAS_TOKEN"]
+    container_name = CONFIG["CONTAINER_NAME"]
+    blob_path = "UI/2024-11-20_142337_UTC/cxqa_data/RBAC/rbac.xlsx"  # provided path
+
+    blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
+    container_client = blob_service_client.get_container_client(container_name)
+    blob_client = container_client.get_blob_client(blob_path)
+
+    data = blob_client.download_blob().readall()
+    # Read into DataFrame. If multiple sheets, read them all or just one with skiprows, etc.
+    # For illustration, we'll assume sheet_names = [0, 1], or a single sheet with distinct sections.
+    # We'll do a simple approach: read single sheet, then separate it by columns.
+    # Adjust as needed for your actual file format.
+
+    df = pd.read_excel(BytesIO(data), sheet_name=0)
+    # Expect at least columns: "User_ID", "Tier_Level" and "Table_Name", "Table_Tier".
+    # If they are on separate sheets, you would read them with `sheet_name=...` in multiple calls.
+
+    user_tier_map = {}
+    table_tier_map = {}
+
+    # We'll try to gather user-tier rows
+    user_mask = df.columns.str.lower().tolist()
+    # If we see "User_ID" and "Tier_Level" columns:
+    if "User_ID" in df.columns and "Tier_Level" in df.columns:
+        # We'll filter rows that have non-empty user_id
+        user_rows = df[~df["User_ID"].isna()]
+        for _, row in user_rows.iterrows():
+            uid = str(row["User_ID"]).strip()
+            tlv = str(row["Tier_Level"]).strip().lower()  # e.g. 't1', 't2', ...
+            user_tier_map[uid] = tlv
+
+    # We'll also try to gather table-tier rows if the columns exist
+    if "Table_Name" in df.columns and "Table_Tier" in df.columns:
+        tbl_rows = df[~df["Table_Name"].isna()]
+        for _, row in tbl_rows.iterrows():
+            tname = str(row["Table_Name"]).strip()  # e.g. "Al-Bujairy Terrace Footfalls.xlsx"
+            ttier = str(row["Table_Tier"]).strip().lower()  # e.g. 't2'
+            table_tier_map[tname] = ttier
+
+    return user_tier_map, table_tier_map
+
+def get_user_tier(user_id: str) -> str:
+    """
+    Returns the user's tier. If not found => 't1'.
+    If user is found to be t0 => blocked from everything => fallback.
+    """
+    user_tier_map, _ = get_rbac_data()
+    # default t1 if not found
+    tier = user_tier_map.get(user_id, "t1").lower()
+    return tier
+
+def get_table_required_tier(table_name: str) -> str:
+    """
+    Returns the tier needed for a given table. If not found, default = 't1' 
+    """
+    _, table_tier_map = get_rbac_data()
+    return table_tier_map.get(table_name, "t1").lower()
+
+def tiers_user_can_access(user_tier: str):
+    """
+    Returns the list of tiers that the user can actually see.
+    t0 => []
+    t1 => ['t1']
+    t2 => ['t1','t2']
+    t3 => ['t1','t2','t3']
+    t4 => ['t1','t2','t3','t4']
+    """
+    if user_tier == "t0":
+        return []
+    elif user_tier == "t1":
+        return ["t1"]
+    elif user_tier == "t2":
+        return ["t1", "t2"]
+    elif user_tier == "t3":
+        return ["t1", "t2", "t3"]
+    elif user_tier == "t4":
+        return ["t1", "t2", "t3", "t4"]
+    else:
+        # fallback if unknown
+        return ["t1"]
+
+#######################################################################################
 #                              TOOL #1 - Index Search
 #######################################################################################
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def tool_1_index_search(user_question, top_k=5):
+def tool_1_index_search(user_question, user_id, top_k=5):
     """
     Modified version: uses split_question_into_subquestions to handle multi-part queries.
     Searches each subquestion individually, merges the results, then re-ranks.
+    Now includes RBAC-based chunk filtering by doc['tier'].
     """
     SEARCH_SERVICE_NAME = CONFIG["SEARCH_SERVICE_NAME"]
     SEARCH_ENDPOINT = CONFIG["SEARCH_ENDPOINT"]
@@ -305,6 +431,14 @@ def tool_1_index_search(user_question, top_k=5):
     SEMANTIC_CONFIG_NAME = CONFIG["SEMANTIC_CONFIG_NAME"]
     CONTENT_FIELD = CONFIG["CONTENT_FIELD"]
 
+    # Check user tier
+    user_tier = get_user_tier(user_id)
+    if user_tier == "t0":
+        # immediate fallback
+        return {"top_k": "No information"}
+
+    allowed_tiers = tiers_user_can_access(user_tier)
+    
     subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
     if not subquestions:
         subquestions = [user_question]
@@ -324,15 +458,20 @@ def tool_1_index_search(user_question, top_k=5):
                 query_type="semantic",
                 semantic_configuration_name=SEMANTIC_CONFIG_NAME,
                 top=top_k,
-                select=["title", CONTENT_FIELD],
+                select=["title", CONTENT_FIELD, "tier"],  # we assume there's a 'tier' field
                 include_total_count=False
             )
 
             for r in results:
                 snippet = r.get(CONTENT_FIELD, "").strip()
                 title = r.get("title", "").strip()
+                doc_tier = str(r.get("tier", "t1")).lower()  # if missing, treat as t1
                 if snippet:
-                    merged_docs.append({"title": title, "snippet": snippet})
+                    merged_docs.append({
+                        "title": title, 
+                        "snippet": snippet,
+                        "doc_tier": doc_tier
+                    })
 
         if not merged_docs:
             return {"top_k": "No information"}
@@ -340,12 +479,15 @@ def tool_1_index_search(user_question, top_k=5):
         relevant_docs = []
         for doc in merged_docs:
             snippet = doc["snippet"]
-            if is_text_relevant(user_question, snippet):
+            doc_tier = doc["doc_tier"]
+            # Check if snippet relevant & doc_tier is allowed
+            if doc_tier in allowed_tiers and is_text_relevant(user_question, snippet):
                 relevant_docs.append(doc)
 
         if not relevant_docs:
             return {"top_k": "No information"}
 
+        # rudimentary weighting
         for doc in relevant_docs:
             ttl = doc["title"].lower()
             score = 0
@@ -372,8 +514,20 @@ def tool_1_index_search(user_question, top_k=5):
 #                              TOOL #2 - Code Run
 #######################################################################################
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def tool_2_code_run(user_question):
+def tool_2_code_run(user_question, user_id):
+    """
+    If references_tabular_data is True, generate Python code using LLM.
+    Then check user tier & table-tier. If user is T0 => immediate fallback.
+    If code references tables user doesn't have => return "404".
+    Else execute the code and return result.
+    """
     if not references_tabular_data(user_question, TABLES):
+        return {"result": "No information", "code": ""}
+
+    # Check user tier
+    user_tier = get_user_tier(user_id)
+    if user_tier == "t0":
+        # immediate fallback
         return {"result": "No information", "code": ""}
 
     system_prompt = f"""
@@ -403,12 +557,26 @@ Dataframes samples:
 Chat_history:
 {recent_history}
 """
-
     code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.7)
 
     if not code_str or code_str == "404":
         return {"result": "No information", "code": ""}
 
+    # Before we execute, confirm that all tables used are allowed for this user:
+    # We'll do a simple search for known table references in the code
+    # and compare with the table tier from rbac. If user is missing access => return "404".
+    # This is a simplistic approach that looks for ...("SomeTable.xlsx"
+    used_tables = re.findall(r'dataframes\.get\(\s*["\']([^"\']+)["\']', code_str)
+    # ^ looks for lines like dataframes.get("Al-Bujairy Terrace Footfalls.xlsx")
+
+    allowed_tiers = tiers_user_can_access(user_tier)
+    for tbl in used_tables:
+        required_tier = get_table_required_tier(tbl)
+        if required_tier not in allowed_tiers:
+            # user does not have access -> "404"
+            return {"result": "No information", "code": ""}
+
+    # If everything is allowed, proceed to run
     execution_result = execute_generated_code(code_str)
     return {"result": execution_result, "code": code_str}
 
@@ -690,16 +858,17 @@ def Log_Interaction(
 #######################################################################################
 #                         GREETING HANDLING + AGENT ANSWER
 #######################################################################################
-def agent_answer(user_question):
+def agent_answer(user_question, user_id="anonymous"):
     if not user_question.strip():
         return
 
     def is_entirely_greeting_or_punc(phrase):
         greet_words = {
-            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "Good morning", "goodevening", "good evening",
-            "assalam", "hayo", "hola", "salam", "alsalam", "alsalamualaikum", "alsalam", "salam", "al salam", "assalamualaikum",
-            "greetings", "howdy", "what's up", "yo", "sup", "namaste", "shalom", "bonjour", "ciao", "konichiwa",
-            "ni hao", "marhaba", "ahlan", "sawubona", "hallo", "salut", "hola amigo", "hey there", "good day"
+            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "Good morning", 
+            "goodevening", "good evening", "assalam", "hayo", "hola", "salam", "alsalam", "alsalamualaikum",
+            "al salam", "assalamualaikum", "greetings", "howdy", "what's up", "yo", "sup", "namaste", 
+            "shalom", "bonjour", "ciao", "konichiwa", "ni hao", "marhaba", "ahlan", "sawubona", "hallo", 
+            "salut", "hola amigo", "hey there", "good day"
         }
         tokens = re.findall(r"[A-Za-z]+", phrase.lower())
         if not tokens:
@@ -712,9 +881,13 @@ def agent_answer(user_question):
     user_question_stripped = user_question.strip()
     if is_entirely_greeting_or_punc(user_question_stripped):
         if len(chat_history) < 4:
-            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+            yield ("Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n"
+                   "- To reset the conversation type 'restart chat'.\n"
+                   "- To generate Slides, Charts or Document, type 'export followed by your requirements.")
         else:
-            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+            yield ("Hello! How may I assist you?\n"
+                   "- To reset the conversation type 'restart chat'.\n"
+                   "- To generate Slides, Charts or Document, type 'export followed by your requirements.")
         return
 
     # Check cache
@@ -725,19 +898,20 @@ def agent_answer(user_question):
         return
 
     needs_tabular_data = references_tabular_data(user_question, TABLES)
-    index_dict = {"top_k": "No information"}
+
+    # For Index-based result
+    index_dict = tool_1_index_search(user_question, user_id, top_k=5)
+
+    # For Python-based result (only if we detect reference to tabular data)
     python_dict = {"result": "No information", "code": ""}
-
     if needs_tabular_data:
-        python_dict = tool_2_code_run(user_question)
-
-    index_dict = tool_1_index_search(user_question)
+        python_dict = tool_2_code_run(user_question, user_id)
 
     raw_answer = ""
     for token in final_answer_llm(user_question, index_dict, python_dict):
         raw_answer += token
 
-    # Now unify repeated text cleaning
+    # Clean final
     raw_answer = clean_text(raw_answer)
 
     final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict)
@@ -748,6 +922,11 @@ def agent_answer(user_question):
 #                            ASK_QUESTION (Main Entry)
 #######################################################################################
 def Ask_Question(question, user_id="anonymous"):
+    """
+    Primary entry point for user queries. 
+    :param question: The user's prompt
+    :param user_id: The ID of the current user, used for RBAC tier checks. Defaults to 'anonymous'
+    """
     global chat_history
     global tool_cache
 
@@ -755,11 +934,10 @@ def Ask_Question(question, user_id="anonymous"):
 
     # Handle "export" command
     if question_lower.startswith("export"):
-
         from Export_Agent import Call_Export
         for message in Call_Export(
             latest_question=question,
-            latest_answer=chat_history[-1],
+            latest_answer=chat_history[-1] if chat_history else "",
             chat_history=chat_history,
             instructions=question[6:].strip()
         ):
@@ -778,7 +956,7 @@ def Ask_Question(question, user_id="anonymous"):
 
     answer_collected = ""
     try:
-        for token in agent_answer(question):
+        for token in agent_answer(question, user_id):
             yield token
             answer_collected += token
     except Exception as e:
