@@ -570,8 +570,14 @@ def classify_topic(question, answer, recent_history):
     system_prompt = """
     You are a classification model. Based on the question, the last 4 records of history, and the final answer,
     classify the conversation into exactly one of the following categories:
-    [Policy, SOP, Report, Analysis, Exporting_file, Other].
+    [Policy, SOP, Report, Analysis, Other].
     Respond ONLY with that single category name and nothing else.
+    
+    - **Policy**: When the title has the word Policy or Question/Answer is related to rules and procedures for specific situations.
+    - **SOP**: When the title has the word SOP or Question/Answer is related to Pertains to standard operating procedures for groups.
+    - **Report**: When the title has the word Report or Question/Answer is related to Involves logs or records of incidents.
+    - **Analysis**: When the title has the word Analysis or Question/Answer is related to Concerns aggregation or forecasting based on data.
+    - **Other**: Any topics that do not fit the above categories.
     """
 
     user_prompt = f"""
@@ -583,7 +589,7 @@ def classify_topic(question, answer, recent_history):
     """
 
     choice_text = call_llm(system_prompt, user_prompt, max_tokens=20, temperature=0)
-    allowed_topics = ["Policy", "SOP", "Report", "Analysis", "Exporting_file", "Other"]
+    allowed_topics = ["Policy", "SOP", "Report", "Analysis", "Other"]
     return choice_text if choice_text in allowed_topics else "Other"
 
 #######################################################################################
