@@ -306,6 +306,42 @@ def is_text_relevant(question, snippet):
     return content.strip().upper().startswith("YES")
 
 #######################################################################################
+#             NEW: LOAD text_tier.xlsx FOR DOC TIER (REPLACES doc["tier"] FIELD)
+#######################################################################################
+@lru_cache(maxsize=None)
+def get_text_tier_data():
+    """
+    Loads "text_tier.xlsx" from the same RBAC folder, containing columns:
+       Doc_Name, Tier_Level
+    E.g.:
+        Doc_Name           Tier_Level
+        Fire_Safety        t3
+        Evacuation_Plan    t4
+    Returns a dictionary: { "Fire_Safety" : "t3", ... }
+    We'll match 'title' from the index to Doc_Name. If not found, default t1.
+    """
+    account_url = CONFIG["ACCOUNT_URL"]
+    sas_token = CONFIG["SAS_TOKEN"]
+    container_name = CONFIG["CONTAINER_NAME"]
+    blob_path = "UI/2024-11-20_142337_UTC/cxqa_data/RBAC/text_tier.xlsx"  # Replace if needed
+
+    blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
+    container_client = blob_service_client.get_container_client(container_name)
+    blob_client = container_client.get_blob_client(blob_path)
+
+    data = blob_client.download_blob().readall()
+    df = pd.read_excel(BytesIO(data), sheet_name=0)
+
+    text_tier_map = {}
+    # Expect columns: "Doc_Name", "Tier_Level"
+    for _, row in df.iterrows():
+        doc_name = str(row["Doc_Name"]).strip()
+        doc_tier = str(row["Tier_Level"]).strip().lower()  # e.g., "t3"
+        text_tier_map[doc_name] = doc_tier
+
+    return text_tier_map
+
+#######################################################################################
 #        NEW: RBAC LOOKUP & HELPER FUNCTIONS TO DETERMINE USER + TABLE TIERS
 #######################################################################################
 @lru_cache(maxsize=None)
@@ -350,7 +386,6 @@ def get_rbac_data():
 
     return user_tier_map, table_tier_map
 
-
 def get_user_tier(user_id: str) -> str:
     """
     Returns the user's tier. If not found => 't1'.
@@ -359,14 +394,12 @@ def get_user_tier(user_id: str) -> str:
     user_tier_map, _ = get_rbac_data()
     return user_tier_map.get(user_id, "t1").lower()
 
-
 def get_table_required_tier(table_name: str) -> str:
     """
-    Returns the tier needed for a given table. If not found, default = 't1'
+    Returns the tier needed for a given table. If not found, default = 't1' 
     """
     _, table_tier_map = get_rbac_data()
     return table_tier_map.get(table_name, "t1").lower()
-
 
 def tiers_user_can_access(user_tier: str):
     """
@@ -391,57 +424,30 @@ def tiers_user_can_access(user_tier: str):
         return ["t1"]
 
 #######################################################################################
-#         NEW: TEXT TIER LOOKUP (For Docs) AND UPDATED tool_1_index_search
-#######################################################################################
-@lru_cache(maxsize=None)
-def get_text_tier_data():
-    """
-    Reads a 'text_tier.xlsx' file from the same container/folder, which maps:
-    Doc_Name, Tier_Level
-    We'll assume columns are exactly: [Doc_Name, Tier_Level]
-    """
-    account_url = CONFIG["ACCOUNT_URL"]
-    sas_token = CONFIG["SAS_TOKEN"]
-    container_name = CONFIG["CONTAINER_NAME"]
-    # Adjust path/filename if needed:
-    blob_path = "UI/2024-11-20_142337_UTC/cxqa_data/RBAC/text_tier.xlsx"
-
-    blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
-    container_client = blob_service_client.get_container_client(container_name)
-    blob_client = container_client.get_blob_client(blob_path)
-
-    data = blob_client.download_blob().readall()
-    df = pd.read_excel(BytesIO(data), sheet_name=0)
-
-    text_tier_map = {}
-    for _, row in df.iterrows():
-        doc_name = str(row["Doc_Name"]).strip()
-        doc_tier = str(row["Tier_Level"]).strip().lower()
-        text_tier_map[doc_name] = doc_tier
-
-    return text_tier_map
-
-#######################################################################################
-#                              TOOL #1 - Index Search (updated)
+#                              TOOL #1 - Index Search
 #######################################################################################
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def tool_1_index_search(user_question, user_id, top_k=5):
     """
-    Now: we do NOT rely on 'tier' field from the index. Instead, we look up each doc's 'title'
-    in text_tier.xlsx to determine tier-level. Then we do normal RBAC filtering.
+    Modified version: uses split_question_into_subquestions to handle multi-part queries.
+    Searches each subquestion, merges results, then re-ranks.
+    Now includes RBAC-based chunk filtering by doc tier from text_tier.xlsx
+    (Matching the doc 'title' to text_tier_map).
     """
+    SEARCH_SERVICE_NAME = CONFIG["SEARCH_SERVICE_NAME"]
     SEARCH_ENDPOINT = CONFIG["SEARCH_ENDPOINT"]
     ADMIN_API_KEY = CONFIG["ADMIN_API_KEY"]
     INDEX_NAME = CONFIG["INDEX_NAME"]
     SEMANTIC_CONFIG_NAME = CONFIG["SEMANTIC_CONFIG_NAME"]
     CONTENT_FIELD = CONFIG["CONTENT_FIELD"]
 
+    # Check user tier
     user_tier = get_user_tier(user_id)
     if user_tier == "t0":
-        return {"top_k": "No information"}
+        return {"top_k": "No information"}  # immediate fallback
 
     allowed_tiers = tiers_user_can_access(user_tier)
-    text_tier_map = get_text_tier_data()
+    text_tier_map = get_text_tier_data()  # new map from text_tier.xlsx
 
     subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
     if not subquestions:
@@ -462,20 +468,23 @@ def tool_1_index_search(user_question, user_id, top_k=5):
                 query_type="semantic",
                 semantic_configuration_name=SEMANTIC_CONFIG_NAME,
                 top=top_k,
-                select=["title", CONTENT_FIELD],  # no direct 'tier' field
+                select=["title", CONTENT_FIELD],  # no 'tier' field needed
                 include_total_count=False
             )
 
             for r in results:
                 snippet = r.get(CONTENT_FIELD, "").strip()
                 title = r.get("title", "").strip()
+
+                # Look up doc_tier in text_tier_map
+                # default to 't1' if not found
+                doc_tier = text_tier_map.get(title, "t1")
+
                 if snippet:
-                    # Determine doc tier from text_tier.xlsx
-                    doc_tier = text_tier_map.get(title, "t1")  # default t1 if not found
                     merged_docs.append({
                         "title": title,
                         "snippet": snippet,
-                        "doc_tier": doc_tier.lower()
+                        "doc_tier": doc_tier
                     })
 
         if not merged_docs:
@@ -484,7 +493,7 @@ def tool_1_index_search(user_question, user_id, top_k=5):
         relevant_docs = []
         for doc in merged_docs:
             snippet = doc["snippet"]
-            doc_tier = doc["doc_tier"]
+            doc_tier = doc["doc_tier"].lower()
             if doc_tier in allowed_tiers and is_text_relevant(user_question, snippet):
                 relevant_docs.append(doc)
 
@@ -514,7 +523,6 @@ def tool_1_index_search(user_question, user_id, top_k=5):
         logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}")
         return {"top_k": "No information"}
 
-
 #######################################################################################
 #                              TOOL #2 - Code Run
 #######################################################################################
@@ -523,7 +531,7 @@ def tool_2_code_run(user_question, user_id):
     """
     If references_tabular_data is True, generate Python code using LLM.
     Then check user tier & table-tier. If user is T0 => immediate fallback.
-    If code references tables user doesn't have => return "404".
+    If code references tables user doesn't have => return "No information".
     Else execute the code and return result.
     """
     if not references_tabular_data(user_question, TABLES):
@@ -565,8 +573,9 @@ Chat_history:
     if not code_str or code_str == "404":
         return {"result": "No information", "code": ""}
 
-    used_tables = re.findall(r'dataframes\.get\(\s*["\']([^"\']+)["\']', code_str)
     allowed_tiers = tiers_user_can_access(user_tier)
+    used_tables = re.findall(r'dataframes\.get\(\s*["\']([^"\']+)["\']', code_str)
+
     for tbl in used_tables:
         required_tier = get_table_required_tier(tbl)
         if required_tier not in allowed_tiers:
@@ -574,7 +583,6 @@ Chat_history:
 
     execution_result = execute_generated_code(code_str)
     return {"result": execution_result, "code": code_str}
-
 
 def execute_generated_code(code_str):
     account_url = CONFIG["ACCOUNT_URL"]
@@ -799,6 +807,7 @@ def Log_Interaction(
     conversation_length = len(chat_history)
     recent_hist = chat_history[-4:]
     topic = classify_topic(question, full_answer, recent_hist)
+
     current_time = datetime.now().strftime("%H:%M:%S")
 
     account_url = CONFIG["ACCOUNT_URL"]
@@ -851,10 +860,10 @@ def agent_answer(user_question, user_id="anonymous"):
 
     def is_entirely_greeting_or_punc(phrase):
         greet_words = {
-            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "Good morning", 
+            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "Good morning",
             "goodevening", "good evening", "assalam", "hayo", "hola", "salam", "alsalam", "alsalamualaikum",
-            "al salam", "assalamualaikum", "greetings", "howdy", "what's up", "yo", "sup", "namaste", 
-            "shalom", "bonjour", "ciao", "konichiwa", "ni hao", "marhaba", "ahlan", "sawubona", "hallo", 
+            "al salam", "assalamualaikum", "greetings", "howdy", "what's up", "yo", "sup", "namaste",
+            "shalom", "bonjour", "ciao", "konichiwa", "ni hao", "marhaba", "ahlan", "sawubona", "hallo",
             "salut", "hola amigo", "hey there", "good day"
         }
         tokens = re.findall(r"[A-Za-z]+", phrase.lower())
@@ -877,6 +886,7 @@ def agent_answer(user_question, user_id="anonymous"):
                    "- To generate Slides, Charts or Document, type 'export followed by your requirements.")
         return
 
+    # Check cache
     cache_key = user_question_stripped.lower()
     if cache_key in tool_cache:
         _, _, cached_answer = tool_cache[cache_key]
@@ -884,8 +894,11 @@ def agent_answer(user_question, user_id="anonymous"):
         return
 
     needs_tabular_data = references_tabular_data(user_question, TABLES)
+
+    # For Index-based result
     index_dict = tool_1_index_search(user_question, user_id, top_k=5)
 
+    # For Python-based result (only if we detect reference to tabular data)
     python_dict = {"result": "No information", "code": ""}
     if needs_tabular_data:
         python_dict = tool_2_code_run(user_question, user_id)
@@ -896,6 +909,7 @@ def agent_answer(user_question, user_id="anonymous"):
 
     raw_answer = clean_text(raw_answer)
     final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict)
+
     tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
     yield final_answer_with_source
 
@@ -913,6 +927,7 @@ def Ask_Question(question, user_id="anonymous"):
 
     question_lower = question.lower().strip()
 
+    # Handle "export" command
     if question_lower.startswith("export"):
         from Export_Agent import Call_Export
         for message in Call_Export(
@@ -924,12 +939,14 @@ def Ask_Question(question, user_id="anonymous"):
             yield message
         return
 
+    # Handle "restart chat" command
     if question_lower == "restart chat":
         chat_history = []
         tool_cache.clear()
         yield "The chat has been restarted."
         return
 
+    # Add user question to chat history
     chat_history.append(f"User: {question}")
 
     answer_collected = ""
@@ -943,6 +960,7 @@ def Ask_Question(question, user_id="anonymous"):
 
     chat_history.append(f"Assistant: {answer_collected}")
 
+    # Truncate history
     number_of_messages = 10
     max_pairs = number_of_messages // 2
     max_entries = max_pairs * 2
