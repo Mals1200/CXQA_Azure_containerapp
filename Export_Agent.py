@@ -1,3 +1,7 @@
+# Version 4
+# now can call SOP to produce Standard Operation Proceadures.
+
+
 import re
 import requests
 import json
@@ -6,6 +10,20 @@ import threading
 import time
 from datetime import datetime
 
+#SOP imports######
+import fitz  # PyMuPDF
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import Paragraph, Frame, Spacer, Table, TableStyle
+from reportlab.lib.units import inch
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.utils import ImageReader
+
+##################################################
 # Azure Blob Storage
 from azure.storage.blob import BlobServiceClient
 
@@ -580,6 +598,543 @@ Data:
     except Exception as e:
         return f"Document Generation Error: {str(e)}"
 
+def Call_SOP(latest_question, latest_answer, chat_history, instructions):
+    """
+    Generates a Standard Operating Procedure (SOP) PDF by:
+      1) Calling GPT to get JSON data with these fields:
+         title, table_of_contents, overview, scope, policy, provisions, definitions,
+         process_responsibilities, process, procedures, related_docs, sop_form, sop_log.
+      2) Parsing that JSON and converting each field into a normal SOP layout:
+         - Front page with a logo, metadata, and "Standard Operating Procedure Document"
+         - Then each SOP section (overview, scope, etc.) as headings/paragraphs
+      3) Uploading the PDF to Azure Blob Storage and returning the final download URL.
+
+    Parameters:
+    - latest_question: The user's prompt or question
+    - latest_answer: Any existing 'answer' from conversation or prior steps
+    - chat_history: The conversation history
+    - instructions: Additional user instructions (e.g., "We want an SOP...")
+
+    Returns:
+      A string with either an error or
+      "Here is your generated SOP:\n<URL>" (the Azure Blob URL).
+    """
+
+    import re
+    import json
+    import io
+    import threading
+    from datetime import datetime
+
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.utils import ImageReader
+    from azure.storage.blob import BlobServiceClient
+    import fitz  # PyMuPDF
+
+    ##################################################
+    # (A) GPT Call: Return ONLY valid JSON with SOP fields
+    ##################################################
+    def generate_sop_content():
+        """
+        Calls Azure OpenAI with a prompt that instructs it to produce
+        a JSON object. The JSON object must have:
+          title, table_of_contents, overview, scope, policy, provisions,
+          definitions, process_responsibilities, process, procedures,
+          related_docs, sop_form, sop_log
+
+        If GPT returns insufficient data or an error, we handle it.
+        """
+        chat_history_str = str(chat_history)
+
+        sop_prompt = f"""
+You are an SOP writer. Using the conversation below, produce a JSON object with fields:
+title, table_of_contents, overview, scope, policy, provisions, definitions,
+process_responsibilities, process, procedures, related_docs, sop_form, sop_log.
+
+Return only valid JSON. Do not include code fences or any additional commentary.
+
+- Section "title" is the official SOP name.
+- "table_of_contents" is short. For example, "1 Overview, 1.1 Scope, 2 Policy ... etc."
+- "overview" is the text for the main overview.
+- "scope" is the text for the scope.
+- "policy" is policy & references.
+- "provisions" are the general provisions.
+- "definitions" is terms & definitions.
+- "process_responsibilities" is a summary of process + responsibilities table, if any.
+- "process" describes the main <SOP Title> Process details.
+- "procedures" is the detailed procedure steps.
+- "related_docs" is a short summary or bullet list of related docs.
+- "sop_form" is the name and details of the primary form used.
+- "sop_log" is the name and details of the main log used.
+
+Conversation:
+{chat_history}
+
+User's request:
+{latest_question}
+
+The final answer to the user was:
+{latest_answer}
+
+This is an example content of an SOP Document about Lost and found, the file:Lost and found
+Standard Operating Procedure Document
+ClassificationRedacted
+Document Name: Lost & Found Standard Operating Procedure
+Document Owner: Department1
+Approved Date: August 1, 2024
+Version: 000
+Document Prepared By: Standards & delivery
+ii
+ClassificationRedacted
+Document Control
+DOCUMENTCODEREDACTED August 1, 2024 000 Approved
+Procedure Owner/Document Owner Approvals
+Asset
+Name1Location
+Senior Officer
+Location fffffff ffffff 01/09/2024
+Management Abdullah AlAti Assistant
+Manager
+Name3Location
+Director
+fwffwf ddd 02/09/2024
+DEPARTMENT3 Approvals
+Name4Performance Excellence
+Manager
+DEPARTMENT3 Name5Documentation & Delivery
+Manager
+Name6Directortitle
+11/08/2024
+Asset Yunusa Aminu Management
+Executive Approvals
+Technical 
+Excellence 
+Senior Director
+DEPARTMENT3 Name8DEPARTMENT3 Advisor
+Function Name Position Signature Date
+Function Name Position Signature Date
+Release No. Date Version Change Control
+8/21/2024
+Function Name Position Signature Date
+11/08/2024
+09/02/2024
+02/09/2024
+Noble Coker 0 3 /0 9 /2 4
+Document Name: Lost & Found Standard Operating Procedure
+Document Owner: Department1
+Approved Date: August 1, 2024
+Version: 000
+Document Prepared By: Standards & delivery
+ClassificationRedacted
+Table of Contents
+1 Overview ......................................................................................................................................................................1
+1.1 Scope..............................................................................................................................................................................................1
+2 Policy and References..............................................................................................................................................1
+3 General Provisions....................................................................................................................................................1
+4 Terms and Definitions .............................................................................................................................................1
+5 Process and Responsibilities.................................................................................................................................2
+5.1 Lost and Found Process .........................................................................................................................................................2
+5.2 Disposal of Unclaimed Items................................................................................................................................................2
+6 Procedures...................................................................................................................................................................2
+6.1 Lost and Found..........................................................................................................................................................................2
+7 Related Documents and Records .........................................................................................................................3
+7.1 Lost and Found Items Form.................................................................................................................................................3
+7.2 Lost and Found Log..................................................................................................................................................................3
+iii
+Document Name: Lost & Found Standard Operating Procedure
+Document Owner: Department1
+Approved Date: August 1, 2024
+Version: 000
+Document Prepared By: Standards & delivery
+ClassificationRedacted
+1 Overview
+This SOP outlines the procedure for guest’s items which have been lost and found.
+Department4 is responsible for storing and keeping any lost and found items that are found
+in any ORGANIZATION assets through Lost and Found offices which can be found throughout
+the ORGANIZATION assets. All lost and found items should be maintained in the original
+condition and must be kept in secured area. The Lost and Found offices (which will be run by 
+the Security Team) should keep updated record for all these items and provide the 
+Department4 a copy on regular basis. Lost and Found office should report to the
+Department4 any lost and found items which have not been claim for more than three 
+months.
+1.1 Scope
+ This SOP applies to all ORGANIZATION colleagues.
+2 Policy and References
+1) Lost and Found policy.
+2) Department1s policy
+3 General Provisions
+1) The SOP will come into effect from the date of securing the relevant approvals.
+2) The SOP will supersede all previous practices.
+3) In an event an interpretation is required, the interpretation rights are given to Chief 
+of Department1 Officer.
+4 Terms and Definitions
+1
+SOP Standard Operating Procedure
+Term Definition
+Document Name: Lost & Found Standard Operating Procedure
+Document Owner: Department1
+Approved Date: August 1, 2024
+Version: 000
+Document Prepared By: Standards & delivery
+2
+ClassificationRedacted
+5 Process and Responsibilities
+5.1 Lost and Found Process
+Responsible Accountable Consult Inform
+Responsibility 
+Assignment
+Department1/Sec
+urity Operations
+Specialist
+Duty 
+Manager/Operations 
+Manager
+Director
+title
+Department4
+Process
+description
+Reporting the lost and found items to the Department4
+5.2 Disposal of Unclaimed Items
+Responsible Accountable Consult Inform
+Responsibility
+Assignment
+Security
+Department
+Operations
+Manager
+Directortitle Security
+Department
+Process
+description
+Disposal of any item that has not been claimed within three months
+6 Procedures
+6.1 Lost and Found
+ If someone loses an item, they should report it to the Guest Services Desk as soon as 
+possible. The Department1s Officer should complete the Lost & Found Items Form 
+which includes a description of the item, the location where it was lost, and the date 
+and time of the loss.
+ Location staff or guests who find lost items should immediately report them to the 
+Department1s Officer (GRO).
+ In case the guest who found the item refuses to provide the contact number, 
+security supervisor should summon the Department1s Officer and register the item 
+under their names both.
+ Security Team member ensures Secure Storage Area is in place for valuable items 
+and Identification Tags or Labels are available. Valuable items secured on safes only 
+accessible by security supervisor.
+ The logs of the valuable items should be shared on a weekly basis. Valuable items 
+have six(6) months storing period, if not collected within a year; should be handed 
+over to the police.
+ National IDs or relevant officials’ documents shall be withheld for fourteen (14) days 
+and handed over to police after fourteen days.
+Document Name: Lost & Found Standard Operating Procedure
+Document Owner: Department1
+Approved Date: August 1, 2024
+Version: 000
+Document Prepared By: Standards & delivery
+3
+ClassificationRedacted
+ Department1 Team member gathers detailed information about the lost item, 
+including description, location found, and any pertinent details provided by the 
+finder.
+ Security Team member logs the lost item in the designated Lost and Found logbook 
+Including date, description, location found, and finder's details.
+ Security Team member attaches a unique identification tag or label to each item for 
+easy tracking.
+ Department1 Team member assists guests who report a lost item by collecting all 
+relevant information, including the date and location of the loss.
+ Refer to the Lost and Found log to check for any matching descriptions.
+ When a potential match is found, request the owner to describe the lost item for 
+verification.
+ Once ownership is confirmed, document the reunification in the Lost and Found log, 
+including details of the owner.
+ Return the lost item to the owner, documenting the return in the log. 
+Unclaimed Items
+ Security Team member records details of items disposed of, including date and 
+method of disposal. The invaluable lost and found item will be disposed of after 30 
+days and valuable items will be disposed off after 60 days. The national IDs and 
+official cards will be handed over to Police after 14 days. The team member will 
+coordinate with security for disposal.
+ The Department4 should form a committee before disposing of any lost and found 
+items, the members of the committee will be selected through an official letter by 
+the Chief of Assets management.
+ All communication with regard the lost and found items should be maintained 
+through Location email InternalEmail@example.com.
+7 Related Documents and Records
+7.1 Lost and Found Items Form
+7.2 Lost and Found Log
+
+Now produce the JSON with the required fields.
+"""
+
+        endpoint = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview"
+        headers = {
+            "Content-Type": "application/json",
+            "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+        }
+
+        payload = {
+            "messages": [
+                {"role": "system", "content": "Generate SOP content in a structured manner."},
+                {"role": "user", "content": sop_prompt}
+            ],
+            "max_tokens": 1000,
+            "temperature": 0.3
+        }
+
+        result_json = openai_call_with_retry(endpoint, headers, payload, max_attempts=3, backoff=5, timeout=30)
+
+        if "error" in result_json:
+            return f"API_ERROR: {result_json['error']}"
+
+        try:
+            return result_json['choices'][0]['message']['content'].strip()
+        except Exception as e:
+            return f"API_ERROR: {str(e)}"
+
+
+    ##################################################
+    # (B) Parse JSON and build PDF (front page + SOP sections)
+    ##################################################
+    # 1) Get raw content from GPT (should be JSON)
+    raw_json = generate_sop_content()
+
+    # Check for errors or insufficient data
+    if raw_json.startswith("API_ERROR:"):
+        return f"OpenAI API Error: {raw_json[10:]}"
+    if "NOT_ENOUGH_INFO" in raw_json.upper():
+        return "Error: Insufficient information to generate SOP"
+    if len(raw_json) < 20:
+        return "Error: Generated content too short or invalid"
+
+    # 2) Parse the JSON into a dict
+    try:
+        sop_data = json.loads(raw_json)
+    except json.JSONDecodeError as e:
+        return f"Error: GPT output wasn't valid JSON. Details: {str(e)}"
+
+    # 3) Prepare our data fields from the JSON
+    # We'll call them with .get() so if something is missing, it's blank.
+    sop_title       = sop_data.get("title", "Untitled SOP")
+    toc_text        = sop_data.get("table_of_contents", "")
+    overview_text   = sop_data.get("overview", "")
+    scope_text      = sop_data.get("scope", "")
+    policy_text     = sop_data.get("policy", "")
+    provisions_data = sop_data.get("provisions", "")
+    definitions_data= sop_data.get("definitions", "")
+    proc_resp_data  = sop_data.get("process_responsibilities", "")
+    process_text    = sop_data.get("process", "")
+    procedures_data = sop_data.get("procedures", "")
+    related_docs    = sop_data.get("related_docs", "")
+    sop_form        = sop_data.get("sop_form", "")
+    sop_log         = sop_data.get("sop_log", "")
+
+    # 4) Now let's build a PDF with a front page + subsequent sections
+    try:
+        import io
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib import colors
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+        from reportlab.lib.styles import ParagraphStyle
+        from reportlab.lib.enums import TA_CENTER
+        from reportlab.lib.utils import ImageReader
+        import fitz
+
+        buffer_front = io.BytesIO()
+        c = canvas.Canvas(buffer_front, pagesize=A4)
+        page_width, page_height = A4
+
+        # Download images from Azure
+        blob_config = {
+            "account_url": "https://cxqaazureaihub8779474245.blob.core.windows.net",
+            "sas_token": (
+                "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&se=2030-11-21T02:02:26Z&"
+                "st=2024-11-20T18:02:26Z&spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8Z"
+                "W75yCsFM6nUmUw%3D"
+            ),
+            "container": "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
+        }
+
+        def fetch_image(img_name):
+            blob_service = BlobServiceClient(
+                account_url=blob_config["account_url"],
+                credential=blob_config["sas_token"]
+            )
+            container_client = blob_service.get_container_client(blob_config["container"])
+            blob_client = container_client.get_blob_client(img_name)
+            img_data = io.BytesIO()
+            blob_client.download_blob().readinto(img_data)
+            img_data.seek(0)
+            return img_data
+
+        # Attempt to fetch the same logo & art
+        try:
+            logo_img = ImageReader(fetch_image("UI/2024-11-20_142337_UTC/cxqa_data/export-resources/logo.png"))
+            art_img  = ImageReader(fetch_image("UI/2024-11-20_142337_UTC/cxqa_data/export-resources/art.png"))
+        except:
+            logo_img = None
+            art_img  = None
+
+        # FRONT PAGE
+        if logo_img:
+            c.drawImage(
+                logo_img,
+                (page_width - 100)/2,  # center horizontally
+                page_height - 120,
+                width=100,
+                preserveAspectRatio=True,
+                mask='auto'
+            )
+        if art_img:
+            c.drawImage(
+                art_img,
+                (page_width - 80)/2,  # center horizontally
+                page_height - 220,
+                width=80,
+                preserveAspectRatio=True,
+                mask='auto'
+            )
+
+        # Title
+        c.setFont("Helvetica-Bold", 16)
+        c.setFillColor(colors.HexColor("#C17250"))
+        c.drawCentredString(page_width/2, page_height - 250, f"{sop_title} SOP")
+
+        c.setFont("Helvetica-Bold", 14)
+        c.setFillColor(colors.black)
+        c.drawCentredString(page_width/2, page_height - 270, "Standard Operating Procedure Document")
+
+        # Some doc metadata
+        c.setFont("Helvetica", 10)
+        meta_y = page_height - 310
+        meta_lines = [
+            f"Document Name: {sop_title}",
+            f"Approved Date: {datetime.today().strftime('%B %d, %Y')}",
+            "Version: 001",
+            "Document Prepared By: Standards & Delivery"
+        ]
+        for line in meta_lines:
+            c.drawString(50, meta_y, line)
+            meta_y -= 12
+
+        c.showPage()
+
+        # MAIN SECTIONS
+        # We'll do a function to add each chunk
+        style_heading = ParagraphStyle(
+            'heading',
+            fontName='Helvetica-Bold',
+            fontSize=12,
+            textColor=colors.HexColor("#C17250"),
+            spaceAfter=6
+        )
+        style_text = ParagraphStyle(
+            'text',
+            fontName='Helvetica',
+            fontSize=10,
+            leading=14,
+            spaceAfter=10
+        )
+
+        def add_section(title, content, story):
+            # If content is empty, skip
+            if not content:
+                return
+            story.append(Paragraph(title, style_heading))
+            if isinstance(content, list):
+                # if user put a bullet list for "provisions"
+                for item in content:
+                    story.append(Paragraph(f"- {item}", style_text))
+            elif isinstance(content, dict):
+                # we might have a dictionary for process_responsibilities
+                for k,v in content.items():
+                    # if v is a list/dict, we can convert to string or do further logic
+                    if isinstance(v, (list, dict)):
+                        v = json.dumps(v, indent=2)
+                    story.append(Paragraph(f"{k}: {v}", style_text))
+            else:
+                # Just treat content as string
+                lines = str(content).split("\n")
+                for line in lines:
+                    line = line.strip()
+                    if line:
+                        story.append(Paragraph(line, style_text))
+            story.append(Spacer(1,12))
+
+        # We'll store in a story for a second PDF:
+        buffer_content = io.BytesIO()
+        doc_story = []
+
+        # 0) Table of Contents
+        add_section("Table of Contents", toc_text, doc_story)
+        # 1) Overview
+        add_section("1 Overview", overview_text, doc_story)
+        # 1.1 Scope
+        add_section("1.1 Scope", scope_text, doc_story)
+        # 2) Policy and References
+        add_section("2 Policy and References", policy_text, doc_story)
+        # 3) General Provisions
+        add_section("3 General Provisions", provisions_data, doc_story)
+        # 4) Terms and Definitions
+        add_section("4 Terms and Definitions", definitions_data, doc_story)
+        # 5) Process and Responsibilities
+        add_section("5 Process and Responsibilities", proc_resp_data, doc_story)
+        # 5.1 <SOP Title> Process
+        add_section(f"5.1 {sop_title} Process", process_text, doc_story)
+        # 6) Procedures
+        add_section("6 Procedures", procedures_data, doc_story)
+        # 7) Related Documents and Records
+        add_section("7 Related Documents and Records", related_docs, doc_story)
+        # 7.1 <SOP Title> Form
+        add_section(f"7.1 {sop_title} Form", sop_form, doc_story)
+        # 7.2 <SOP Title> Log
+        add_section(f"7.2 {sop_title} Log", sop_log, doc_story)
+
+        doc = SimpleDocTemplate(buffer_content, pagesize=A4)
+        doc.build(doc_story)
+
+        c.save()
+
+        # Merge front page + main content
+        buffer_content.seek(0)
+        front_pdf = fitz.open(stream=buffer_front.getvalue(), filetype="pdf")
+        content_pdf = fitz.open(stream=buffer_content.getvalue(), filetype="pdf")
+        front_pdf.insert_pdf(content_pdf)
+
+        final_output = io.BytesIO()
+        front_pdf.save(final_output)
+        final_output.seek(0)
+
+        # Upload to Azure
+        blob_service = BlobServiceClient(
+            account_url=blob_config["account_url"],
+            credential=blob_config["sas_token"]
+        )
+        container_client = blob_service.get_container_client(blob_config["container"])
+        blob_name = f"sop_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
+        blob_client = container_client.get_blob_client(blob_name)
+        blob_client.upload_blob(final_output, overwrite=True)
+
+        final_url = (
+            f"{blob_config['account_url']}/"
+            f"{blob_config['container']}/"
+            f"{blob_name}?"
+            f"{blob_config['sas_token']}"
+        )
+
+        threading.Timer(300, blob_client.delete_blob).start()
+        return f"Here is your generated SOP:\n{final_url}"
+
+    except Exception as e:
+        return f"SOP Generation Error: {str(e)}"
+
+
 
 ##################################################
 # Calling the export function
@@ -639,6 +1194,10 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
         r")\b", instructions_lower, re.IGNORECASE
     ):
         return generate_doc()
+    elif re.search(r"\b(standard operating procedure document|standard operating procedure|sop\.?)\b", instructions_lower, re.IGNORECASE):
+        return Call_SOP(latest_question, latest_answer, chat_history, instructions)
+
+
 
     # Fallback
     return "Not enough Information to perform export."
