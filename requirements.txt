@@ -38,6 +38,10 @@ docx==0.2.4
 matplotlib==3.9.4
 pyvis==0.3.2
 
+# For PDF generation and manipulation
+PyMuPDF==1.25.5
+reportlab==4.3.1
+
 # Retrying logic:
 tenacity==9.0.0
 
@@ -46,3 +50,5 @@ asyncio==3.4.3
 
 # voice ui
 PyQt5==5.15.11
+
+
