@@ -353,7 +353,7 @@ def get_text_tier_data():
     text_tier_map = {}
     # Expect columns: "Doc_Name", "Tier_Level"
     for _, row in df.iterrows():
-        doc_name = str(row["Doc_Name"]).strip()
+        doc_name = str(row["File"]).strip()
         doc_tier = str(row["Tier_Level"]).strip().lower()  # e.g., "t3"
         text_tier_map[doc_name] = doc_tier
 
@@ -383,8 +383,8 @@ def get_table_tier_data():
 
     table_tier_map = {}
     for _, row in df.iterrows():
-        tname = str(row["Table_Name"]).strip()
-        ttier = str(row["Table_Tier"]).strip().lower()
+        tname = str(row["File"]).strip()
+        ttier = str(row["Tier_Level"]).strip().lower()
         table_tier_map[tname] = ttier
 
     return table_tier_map
