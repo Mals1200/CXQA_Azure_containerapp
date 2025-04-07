@@ -1,4 +1,4 @@
-# Version 18b:
+# Version 18b2:  (((fixed the rbac filing issue that was in version 18b)))
 
 # =========================================================================================
 #                  CHANGELOG (RBAC UPDATE + TEXT_TIER FOR INDEX SEARCH)
@@ -360,18 +360,46 @@ def get_text_tier_data():
     return text_tier_map
 
 #######################################################################################
-#        NEW: RBAC LOOKUP & HELPER FUNCTIONS TO DETERMINE USER + TABLE TIERS
+#  NEW: LOAD table_tier.xlsx (For Table Tiers instead of rbac.xlsx)
+#######################################################################################
+@lru_cache(maxsize=None)
+def get_table_tier_data():
+    """
+    Reads 'table_tier.xlsx' from the same container/folder.
+    Expects columns: [Table_Name, Table_Tier].
+    Returns a dict: { "Parking.xlsx": "t2", "Tickets.xlsx": "t3", ... }
+    """
+    account_url = CONFIG["ACCOUNT_URL"]
+    sas_token = CONFIG["SAS_TOKEN"]
+    container_name = CONFIG["CONTAINER_NAME"]
+    blob_path = "UI/2024-11-20_142337_UTC/cxqa_data/RBAC/table_tier.xlsx"  # Adjust path as needed
+
+    blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
+    container_client = blob_service_client.get_container_client(container_name)
+    blob_client = container_client.get_blob_client(blob_path)
+
+    data = blob_client.download_blob().readall()
+    df = pd.read_excel(BytesIO(data), sheet_name=0)
+
+    table_tier_map = {}
+    for _, row in df.iterrows():
+        tname = str(row["Table_Name"]).strip()
+        ttier = str(row["Table_Tier"]).strip().lower()
+        table_tier_map[tname] = ttier
+
+    return table_tier_map
+
+#######################################################################################
+#        NEW: RBAC LOOKUP & HELPER FUNCTIONS (User Tier from rbac.xlsx) 
 #######################################################################################
 @lru_cache(maxsize=None)
 def get_rbac_data():
     """
-    Reads the 'rbac.xlsx' from the same container/folder.  
-    We assume it has:
-      - A sheet or area with columns: [User_ID, Tier_Level]
-      - A sheet or area with columns: [Table_Name, Table_Tier]
-    Returns:
-      user_tier_map = {user_id -> 't1'/'t2'/...} 
-      table_tier_map = {table_name -> 't1'/'t2'/...}
+    Reads 'rbac.xlsx' from the same container/folder.
+    We assume it has columns: [User_ID, Tier_Level]
+    Returns a dict of user_tier_map: { user_id: "t1" }.
+    
+    (Note: we used to store table tiers in rbac.xlsx, but now we do NOT.)
     """
     account_url = CONFIG["ACCOUNT_URL"]
     sas_token = CONFIG["SAS_TOKEN"]
@@ -386,7 +414,6 @@ def get_rbac_data():
     df = pd.read_excel(BytesIO(data), sheet_name=0)
 
     user_tier_map = {}
-    table_tier_map = {}
 
     if "User_ID" in df.columns and "Tier_Level" in df.columns:
         user_rows = df[~df["User_ID"].isna()]
@@ -395,28 +422,22 @@ def get_rbac_data():
             tlv = str(row["Tier_Level"]).strip().lower()
             user_tier_map[uid] = tlv
 
-    if "Table_Name" in df.columns and "Table_Tier" in df.columns:
-        tbl_rows = df[~df["Table_Name"].isna()]
-        for _, row in tbl_rows.iterrows():
-            tname = str(row["Table_Name"]).strip()
-            ttier = str(row["Table_Tier"]).strip().lower()
-            table_tier_map[tname] = ttier
-
-    return user_tier_map, table_tier_map
+    return user_tier_map
 
 def get_user_tier(user_id: str) -> str:
     """
     Returns the user's tier. If not found => 't1'.
     If user is found to be t0 => blocked from everything => fallback.
     """
-    user_tier_map, _ = get_rbac_data()
+    user_tier_map = get_rbac_data()
     return user_tier_map.get(user_id, "t1").lower()
 
 def get_table_required_tier(table_name: str) -> str:
     """
-    Returns the tier needed for a given table. If not found, default = 't1' 
+    Fetch the tier for a given table from table_tier.xlsx
+    If not found, default = 't1'.
     """
-    _, table_tier_map = get_rbac_data()
+    table_tier_map = get_table_tier_data()
     return table_tier_map.get(table_name, "t1").lower()
 
 def tiers_user_can_access(user_tier: str):
@@ -594,6 +615,7 @@ Chat_history:
     allowed_tiers = tiers_user_can_access(user_tier)
     used_tables = re.findall(r'dataframes\.get\(\s*["\']([^"\']+)["\']', code_str)
 
+    # Check each table in 'used_tables' to see if the user can access it
     for tbl in used_tables:
         required_tier = get_table_required_tier(tbl)
         if required_tier not in allowed_tiers:
