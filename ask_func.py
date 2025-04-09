@@ -1,37 +1,48 @@
-# Version 18b2:  (((fixed the rbac filing issue that was in version 18b)))
+# ------------------------------------------------------------------------------------
 
-# =========================================================================================
-#                  CHANGELOG (RBAC UPDATE + TEXT_TIER FOR INDEX SEARCH)
-# =========================================================================================
-# 1. New RBAC Functions:
-#    - get_rbac_data(): Loads the rbac.xlsx file, caching user-tier and table-tier mappings.
-#    - get_user_tier(user_id): Returns the user’s tier (t0–t4), defaulting to t1 if not found.
-#    - get_table_required_tier(table_name): Returns the required tier for a table, defaulting to t1.
-#    - tiers_user_can_access(user_tier): Yields the list of tiers a user may access.
+# Final Takeaway
+# In summary, the assistant “sometimes not producing an answer” is almost certainly due to the LLM call returning an empty string after 
+# an error or an unexpected response format. By providing a clear fallback string, verifying your LLM endpoint configuration, and logging 
+# more robustly, you’ll ensure you no longer see blank answers in Teams.
+
+# Explanation of the Most Recent Optimizations:
 #
-# 2. New TEXT_TIER Lookup:
-#    - get_text_tier_data(): Reads text_tier.xlsx (Doc_Name, Tier_Level) to determine each doc’s tier.
-#      This replaces reliance on a 'tier' field in the index. Instead, we match the doc's title to
-#      doc-tier in text_tier.xlsx.
+# 1) Centralized LLM Calls:
+#    - We introduced the function `call_llm` to handle all requests to the Azure OpenAI
+#      endpoint. This avoids repetitive code for making requests.post calls, parsing
+#      JSON, handling exceptions, etc.
 #
-# 3. Updated Function Signatures (Same as v18):
-#    - tool_1_index_search(user_question, user_id, top_k=5):
-#      * Accepts user_id to perform RBAC checks; now looks up doc_tier via text_tier_map instead of doc["tier"].
-#    - tool_2_code_run(user_question, user_id):
-#      * Accepts user_id to perform RBAC checks; rejects unauthorized table usage in generated code.
-#    - agent_answer(user_question, user_id="anonymous"):
-#      * Passes user_id through to tool_1_index_search and tool_2_code_run for RBAC filtering.
-#    - Ask_Question(question, user_id="anonymous"):
-#      * Passes user_id to agent_answer, ensuring consistent RBAC checks throughout.
+# 2) Combined Text Cleaning Logic:
+#    - We consolidated repeated cleaning functions (like removing repeated patterns and
+#      words) into a single function `clean_text`, reducing code duplication and ensuring
+#      consistent cleanup for repeated words/punctuation.
 #
-# 4. RBAC Enforcement:
-#    - If user_tier == "t0", all data queries immediately fall back to tool_3_llm_fallback().
-#    - In tool_1_index_search, we fetch doc_tier from text_tier.xlsx and only return docs in the user’s allowed tiers.
-#    - In tool_2_code_run, if the user references a table outside their allowed tiers, code is replaced
-#      with a '404'-style response ("No information") and not executed.
+# 3) Streamlining “References” & “Relevance” Checks:
+#    - The logic to decide whether a user question references tabular data, plus verifying
+#      snippet relevance, now calls the centralized LLM function. We use one consistent
+#      approach for classification and relevance checks.
 #
-# No other functionality was removed or changed; the flow remains the same. These additions
-# simply ensure tier-based restrictions are applied for both tabular data and index content.
+# 4) Minimizing Repeated Imports & Consolidating Configuration:
+#    - All repeated constants and keys have been moved into a single `CONFIG` dictionary
+#      at the top, making it easier to update or rotate credentials in a single place.
+#
+# 5) Enforcing “No Invented Data” in Python Generation:
+#    - The prompt for `tool_2_code_run` includes instructions for the LLM to only use
+#      existing table columns and not invent columns. It must produce purely executable
+#      code including final print statements for the user answer.
+#
+# 6) Improved Handling of Typos & Spelling Variations:
+#    - Updated prompts (e.g., references_tabular_data) to remind the LLM to interpret
+#      synonyms and minor typos (e.g., “albujairy” vs. “Al-Bujairy Terrace Footfalls.xlsx”).
+#
+# 7) Global Cleanup:
+#    - We refactored code for clarity, ensuring the conversation history is truncated to
+#      avoid excessive memory usage. Also reorganized code to keep everything consistent
+#      and maintainable.
+#
+# Note: Actual functionality otherwise remains the same. The changes are primarily in
+#       structuring, clarity, prompt design, and reusability across the pipeline.
+# ------------------------------------------------------------------------------------
 
 import os
 import io
@@ -324,154 +335,13 @@ def is_text_relevant(question, snippet):
     return content.strip().upper().startswith("YES")
 
 #######################################################################################
-#             NEW: LOAD text_tier.xlsx FOR DOC TIER (REPLACES doc["tier"] FIELD)
-#######################################################################################
-@lru_cache(maxsize=None)
-def get_text_tier_data():
-    """
-    Loads "text_tier.xlsx" from the same RBAC folder, containing columns:
-       Doc_Name, Tier_Level
-    E.g.:
-        Doc_Name           Tier_Level
-        Fire_Safety        t3
-        Evacuation_Plan    t4
-    Returns a dictionary: { "Fire_Safety" : "t3", ... }
-    We'll match 'title' from the index to Doc_Name. If not found, default t1.
-    """
-    account_url = CONFIG["ACCOUNT_URL"]
-    sas_token = CONFIG["SAS_TOKEN"]
-    container_name = CONFIG["CONTAINER_NAME"]
-    blob_path = "UI/2024-11-20_142337_UTC/cxqa_data/RBAC/text_tier.xlsx"  # Replace if needed
-
-    blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
-    container_client = blob_service_client.get_container_client(container_name)
-    blob_client = container_client.get_blob_client(blob_path)
-
-    data = blob_client.download_blob().readall()
-    df = pd.read_excel(BytesIO(data), sheet_name=0)
-
-    text_tier_map = {}
-    # Expect columns: "Doc_Name", "Tier_Level"
-    for _, row in df.iterrows():
-        doc_name = str(row["File"]).strip()
-        doc_tier = str(row["Tier_Level"]).strip().lower()  # e.g., "t3"
-        text_tier_map[doc_name] = doc_tier
-
-    return text_tier_map
-
-#######################################################################################
-#  NEW: LOAD table_tier.xlsx (For Table Tiers instead of rbac.xlsx)
-#######################################################################################
-@lru_cache(maxsize=None)
-def get_table_tier_data():
-    """
-    Reads 'table_tier.xlsx' from the same container/folder.
-    Expects columns: [Table_Name, Table_Tier].
-    Returns a dict: { "Parking.xlsx": "t2", "Tickets.xlsx": "t3", ... }
-    """
-    account_url = CONFIG["ACCOUNT_URL"]
-    sas_token = CONFIG["SAS_TOKEN"]
-    container_name = CONFIG["CONTAINER_NAME"]
-    blob_path = "UI/2024-11-20_142337_UTC/cxqa_data/RBAC/table_tier.xlsx"  # Adjust path as needed
-
-    blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
-    container_client = blob_service_client.get_container_client(container_name)
-    blob_client = container_client.get_blob_client(blob_path)
-
-    data = blob_client.download_blob().readall()
-    df = pd.read_excel(BytesIO(data), sheet_name=0)
-
-    table_tier_map = {}
-    for _, row in df.iterrows():
-        tname = str(row["File"]).strip()
-        ttier = str(row["Tier_Level"]).strip().lower()
-        table_tier_map[tname] = ttier
-
-    return table_tier_map
-
-#######################################################################################
-#        NEW: RBAC LOOKUP & HELPER FUNCTIONS (User Tier from rbac.xlsx) 
-#######################################################################################
-@lru_cache(maxsize=None)
-def get_rbac_data():
-    """
-    Reads 'rbac.xlsx' from the same container/folder.
-    We assume it has columns: [User_ID, Tier_Level]
-    Returns a dict of user_tier_map: { user_id: "t1" }.
-    
-    (Note: we used to store table tiers in rbac.xlsx, but now we do NOT.)
-    """
-    account_url = CONFIG["ACCOUNT_URL"]
-    sas_token = CONFIG["SAS_TOKEN"]
-    container_name = CONFIG["CONTAINER_NAME"]
-    blob_path = "UI/2024-11-20_142337_UTC/cxqa_data/RBAC/rbac.xlsx"  # provided path
-
-    blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
-    container_client = blob_service_client.get_container_client(container_name)
-    blob_client = container_client.get_blob_client(blob_path)
-
-    data = blob_client.download_blob().readall()
-    df = pd.read_excel(BytesIO(data), sheet_name=0)
-
-    user_tier_map = {}
-
-    if "User_ID" in df.columns and "Tier_Level" in df.columns:
-        user_rows = df[~df["User_ID"].isna()]
-        for _, row in user_rows.iterrows():
-            uid = str(row["User_ID"]).strip()
-            tlv = str(row["Tier_Level"]).strip().lower()
-            user_tier_map[uid] = tlv
-
-    return user_tier_map
-
-def get_user_tier(user_id: str) -> str:
-    """
-    Returns the user's tier. If not found => 't1'.
-    If user is found to be t0 => blocked from everything => fallback.
-    """
-    user_tier_map = get_rbac_data()
-    return user_tier_map.get(user_id, "t1").lower()
-
-def get_table_required_tier(table_name: str) -> str:
-    """
-    Fetch the tier for a given table from table_tier.xlsx
-    If not found, default = 't1'.
-    """
-    table_tier_map = get_table_tier_data()
-    return table_tier_map.get(table_name, "t1").lower()
-
-def tiers_user_can_access(user_tier: str):
-    """
-    Returns the list of tiers that the user can actually see.
-    t0 => []
-    t1 => ['t1']
-    t2 => ['t1','t2']
-    t3 => ['t1','t2','t3']
-    t4 => ['t1','t2','t3','t4']
-    """
-    if user_tier == "t0":
-        return []
-    elif user_tier == "t1":
-        return ["t1"]
-    elif user_tier == "t2":
-        return ["t1", "t2"]
-    elif user_tier == "t3":
-        return ["t1", "t2", "t3"]
-    elif user_tier == "t4":
-        return ["t1", "t2", "t3", "t4"]
-    else:
-        return ["t1"]
-
-#######################################################################################
 #                              TOOL #1 - Index Search
 #######################################################################################
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def tool_1_index_search(user_question, user_id, top_k=5):
+def tool_1_index_search(user_question, top_k=5):
     """
     Modified version: uses split_question_into_subquestions to handle multi-part queries.
-    Searches each subquestion, merges results, then re-ranks.
-    Now includes RBAC-based chunk filtering by doc tier from text_tier.xlsx
-    (Matching the doc 'title' to text_tier_map).
+    Searches each subquestion individually, merges the results, then re-ranks.
     """
     SEARCH_SERVICE_NAME = CONFIG["SEARCH_SERVICE_NAME"]
     SEARCH_ENDPOINT = CONFIG["SEARCH_ENDPOINT"]
@@ -479,14 +349,6 @@ def tool_1_index_search(user_question, user_id, top_k=5):
     INDEX_NAME = CONFIG["INDEX_NAME"]
     SEMANTIC_CONFIG_NAME = CONFIG["SEMANTIC_CONFIG_NAME"]
     CONTENT_FIELD = CONFIG["CONTENT_FIELD"]
-
-    # Check user tier
-    user_tier = get_user_tier(user_id)
-    if user_tier == "t0":
-        return {"top_k": "No information"}  # immediate fallback
-
-    allowed_tiers = tiers_user_can_access(user_tier)
-    text_tier_map = get_text_tier_data()  # new map from text_tier.xlsx
 
     subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
     if not subquestions:
@@ -507,24 +369,15 @@ def tool_1_index_search(user_question, user_id, top_k=5):
                 query_type="semantic",
                 semantic_configuration_name=SEMANTIC_CONFIG_NAME,
                 top=top_k,
-                select=["title", CONTENT_FIELD],  # no 'tier' field needed
+                select=["title", CONTENT_FIELD],
                 include_total_count=False
             )
 
             for r in results:
                 snippet = r.get(CONTENT_FIELD, "").strip()
                 title = r.get("title", "").strip()
-
-                # Look up doc_tier in text_tier_map
-                # default to 't1' if not found
-                doc_tier = text_tier_map.get(title, "t1")
-
                 if snippet:
-                    merged_docs.append({
-                        "title": title,
-                        "snippet": snippet,
-                        "doc_tier": doc_tier
-                    })
+                    merged_docs.append({"title": title, "snippet": snippet})
 
         if not merged_docs:
             return {"top_k": "No information"}
@@ -532,14 +385,12 @@ def tool_1_index_search(user_question, user_id, top_k=5):
         relevant_docs = []
         for doc in merged_docs:
             snippet = doc["snippet"]
-            doc_tier = doc["doc_tier"].lower()
-            if doc_tier in allowed_tiers and is_text_relevant(user_question, snippet):
+            if is_text_relevant(user_question, snippet):
                 relevant_docs.append(doc)
 
         if not relevant_docs:
             return {"top_k": "No information"}
 
-        # rudimentary weighting
         for doc in relevant_docs:
             ttl = doc["title"].lower()
             score = 0
@@ -566,18 +417,8 @@ def tool_1_index_search(user_question, user_id, top_k=5):
 #                              TOOL #2 - Code Run
 #######################################################################################
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def tool_2_code_run(user_question, user_id):
-    """
-    If references_tabular_data is True, generate Python code using LLM.
-    Then check user tier & table-tier. If user is T0 => immediate fallback.
-    If code references tables user doesn't have => return "No information".
-    Else execute the code and return result.
-    """
+def tool_2_code_run(user_question):
     if not references_tabular_data(user_question, TABLES):
-        return {"result": "No information", "code": ""}
-
-    user_tier = get_user_tier(user_id)
-    if user_tier == "t0":
         return {"result": "No information", "code": ""}
 
     system_prompt = f"""
@@ -607,19 +448,11 @@ Dataframes samples:
 Chat_history:
 {recent_history}
 """
+
     code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.7)
 
     if not code_str or code_str == "404":
         return {"result": "No information", "code": ""}
-
-    allowed_tiers = tiers_user_can_access(user_tier)
-    used_tables = re.findall(r'dataframes\.get\(\s*["\']([^"\']+)["\']', code_str)
-
-    # Check each table in 'used_tables' to see if the user can access it
-    for tbl in used_tables:
-        required_tier = get_table_required_tier(tbl)
-        if required_tier not in allowed_tiers:
-            return {"result": "No information", "code": ""}
 
     execution_result = execute_generated_code(code_str)
     return {"result": execution_result, "code": code_str}
@@ -730,6 +563,7 @@ Chat_history:
 
     final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
 
+    # Ensure we never yield an empty or error-laden string without a fallback
     if (not final_text.strip() 
         or final_text.startswith("LLM Error") 
         or final_text.startswith("No content from LLM") 
@@ -781,14 +615,8 @@ def classify_topic(question, answer, recent_history):
     system_prompt = """
     You are a classification model. Based on the question, the last 4 records of history, and the final answer,
     classify the conversation into exactly one of the following categories:
-    [Policy, SOP, Report, Analysis, Other].
+    [Policy, SOP, Report, Analysis, Exporting_file, Other].
     Respond ONLY with that single category name and nothing else.
-    
-    - **Policy**: When the title has the word Policy or Question/Answer is related to rules and procedures for specific situations.
-    - **SOP**: When the title has the word SOP or Question/Answer is related to Pertains to standard operating procedures for groups.
-    - **Report**: When the title has the word Report or Question/Answer is related to Involves logs or records of incidents.
-    - **Analysis**: When the title has the word Analysis or Question/Answer is related to Concerns aggregation or forecasting based on data.
-    - **Other**: Any topics that do not fit the above categories.
     """
 
     user_prompt = f"""
@@ -800,7 +628,7 @@ def classify_topic(question, answer, recent_history):
     """
 
     choice_text = call_llm(system_prompt, user_prompt, max_tokens=20, temperature=0)
-    allowed_topics = ["Policy", "SOP", "Report", "Analysis", "Other"]
+    allowed_topics = ["Policy", "SOP", "Report", "Analysis", "Exporting_file", "Other"]
     return choice_text if choice_text in allowed_topics else "Other"
 
 #######################################################################################
@@ -819,6 +647,7 @@ def Log_Interaction(
     if python_dict is None:
         python_dict = {}
 
+    # 1) Parse out answer_text and source
     match = re.search(r"(.*?)(?:\s*Source:\s*)(.*)$", full_answer, flags=re.IGNORECASE | re.DOTALL)
     if match:
         answer_text = match.group(1).strip()
@@ -835,6 +664,7 @@ def Log_Interaction(
         answer_text = full_answer
         source = "AI Generated"
 
+    # 2) source_material
     if source == "Index & Python":
         source_material = f"INDEX CHUNKS:\n{index_dict.get('top_k', '')}\n\nPYTHON CODE:\n{python_dict.get('code', '')}"
     elif source == "Index":
@@ -844,12 +674,17 @@ def Log_Interaction(
     else:
         source_material = "N/A"
 
+    # 3) conversation_length
     conversation_length = len(chat_history)
+
+    # 4) topic classification
     recent_hist = chat_history[-4:]
     topic = classify_topic(question, full_answer, recent_hist)
 
+    # 5) time
     current_time = datetime.now().strftime("%H:%M:%S")
 
+    # 6) Write to Azure Blob CSV
     account_url = CONFIG["ACCOUNT_URL"]
     sas_token = CONFIG["SAS_TOKEN"]
     container_name = CONFIG["CONTAINER_NAME"]
@@ -894,17 +729,16 @@ def Log_Interaction(
 #######################################################################################
 #                         GREETING HANDLING + AGENT ANSWER
 #######################################################################################
-def agent_answer(user_question, user_id="anonymous"):
+def agent_answer(user_question):
     if not user_question.strip():
         return
 
     def is_entirely_greeting_or_punc(phrase):
         greet_words = {
-            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "Good morning",
-            "goodevening", "good evening", "assalam", "hayo", "hola", "salam", "alsalam", "alsalamualaikum",
-            "al salam", "assalamualaikum", "greetings", "howdy", "what's up", "yo", "sup", "namaste",
-            "shalom", "bonjour", "ciao", "konichiwa", "ni hao", "marhaba", "ahlan", "sawubona", "hallo",
-            "salut", "hola amigo", "hey there", "good day"
+            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "Good morning", "goodevening", "good evening",
+            "assalam", "hayo", "hola", "salam", "alsalam", "alsalamualaikum", "alsalam", "salam", "al salam", "assalamualaikum",
+            "greetings", "howdy", "what's up", "yo", "sup", "namaste", "shalom", "bonjour", "ciao", "konichiwa",
+            "ni hao", "marhaba", "ahlan", "sawubona", "hallo", "salut", "hola amigo", "hey there", "good day"
         }
         tokens = re.findall(r"[A-Za-z]+", phrase.lower())
         if not tokens:
@@ -917,13 +751,9 @@ def agent_answer(user_question, user_id="anonymous"):
     user_question_stripped = user_question.strip()
     if is_entirely_greeting_or_punc(user_question_stripped):
         if len(chat_history) < 4:
-            yield ("Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n"
-                   "- To reset the conversation type 'restart chat'.\n"
-                   "- To generate Slides, Charts or Document, type 'export followed by your requirements.")
+            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         else:
-            yield ("Hello! How may I assist you?\n"
-                   "- To reset the conversation type 'restart chat'.\n"
-                   "- To generate Slides, Charts or Document, type 'export followed by your requirements.")
+            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         return
 
     # Check cache
@@ -934,22 +764,22 @@ def agent_answer(user_question, user_id="anonymous"):
         return
 
     needs_tabular_data = references_tabular_data(user_question, TABLES)
-
-    # For Index-based result
-    index_dict = tool_1_index_search(user_question, user_id, top_k=5)
-
-    # For Python-based result (only if we detect reference to tabular data)
+    index_dict = {"top_k": "No information"}
     python_dict = {"result": "No information", "code": ""}
+
     if needs_tabular_data:
-        python_dict = tool_2_code_run(user_question, user_id)
+        python_dict = tool_2_code_run(user_question)
+
+    index_dict = tool_1_index_search(user_question)
 
     raw_answer = ""
     for token in final_answer_llm(user_question, index_dict, python_dict):
         raw_answer += token
 
+    # Now unify repeated text cleaning
     raw_answer = clean_text(raw_answer)
-    final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict)
 
+    final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict)
     tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
     yield final_answer_with_source
 
@@ -957,11 +787,6 @@ def agent_answer(user_question, user_id="anonymous"):
 #                            ASK_QUESTION (Main Entry)
 #######################################################################################
 def Ask_Question(question, user_id="anonymous"):
-    """
-    Primary entry point for user queries. 
-    :param question: The user's prompt
-    :param user_id: The ID of the current user, used for RBAC tier checks. Defaults to 'anonymous'
-    """
     global chat_history
     global tool_cache
 
@@ -969,10 +794,11 @@ def Ask_Question(question, user_id="anonymous"):
 
     # Handle "export" command
     if question_lower.startswith("export"):
+
         from Export_Agent import Call_Export
         for message in Call_Export(
             latest_question=question,
-            latest_answer=chat_history[-1] if chat_history else "",
+            latest_answer=chat_history[-1],
             chat_history=chat_history,
             instructions=question[6:].strip()
         ):
@@ -991,7 +817,7 @@ def Ask_Question(question, user_id="anonymous"):
 
     answer_collected = ""
     try:
-        for token in agent_answer(question, user_id):
+        for token in agent_answer(question):
             yield token
             answer_collected += token
     except Exception as e:
@@ -1006,6 +832,7 @@ def Ask_Question(question, user_id="anonymous"):
     max_entries = max_pairs * 2
     chat_history = chat_history[-max_entries:]
 
+    # Log Interaction
     cache_key = question_lower
     if cache_key in tool_cache:
         index_dict, python_dict, _ = tool_cache[cache_key]
