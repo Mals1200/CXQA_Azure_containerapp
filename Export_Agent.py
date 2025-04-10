@@ -1,5 +1,5 @@
-# Version 4
-# now can call SOP to produce Standard Operation Proceadures.
+# Version 4b
+# now call SOP has a better layout (not perfect).
 
 
 import re
@@ -598,6 +598,11 @@ Data:
     except Exception as e:
         return f"Document Generation Error: {str(e)}"
 
+
+
+##################################################
+# Generate SOP function
+##################################################
 def Call_SOP(latest_question, latest_answer, chat_history, instructions):
     """
     Generates a Standard Operating Procedure (SOP) PDF by:
@@ -983,32 +988,41 @@ Now produce the JSON with the required fields.
 
         # FRONT PAGE
         if logo_img:
+            logo_width = 70
             c.drawImage(
                 logo_img,
-                (page_width - 100)/2,  # center horizontally
-                page_height - 120,
-                width=100,
+                (page_width - logo_width) / 2,
+                page_height - 150,
+                width=logo_width,
                 preserveAspectRatio=True,
                 mask='auto'
             )
+            
         if art_img:
+            art_width = 220
+            art_height = 120  # adjust based on actual image ratio
             c.drawImage(
                 art_img,
-                (page_width - 80)/2,  # center horizontally
-                page_height - 220,
-                width=80,
+                x=page_width - art_width,     # right-aligned
+                y=0,                           # bottom of the page
+                width=art_width,
+                height=art_height,
                 preserveAspectRatio=True,
                 mask='auto'
             )
 
-        # Title
-        c.setFont("Helvetica-Bold", 16)
-        c.setFillColor(colors.HexColor("#C17250"))
-        c.drawCentredString(page_width/2, page_height - 250, f"{sop_title} SOP")
 
-        c.setFont("Helvetica-Bold", 14)
+        # Title
+        # Main Title (bold black)
+        c.setFont("Helvetica-Bold", 16)
         c.setFillColor(colors.black)
-        c.drawCentredString(page_width/2, page_height - 270, "Standard Operating Procedure Document")
+        c.drawCentredString(page_width/2, page_height - 230, sop_title)
+
+        # Subtitle (gray)
+        c.setFont("Helvetica", 12)
+        c.setFillColor(colors.HexColor("#777777"))
+        c.drawCentredString(page_width/2, page_height - 250, "Standard Operating Procedure Document")
+
 
         # Some doc metadata
         c.setFont("Helvetica", 10)
@@ -1022,6 +1036,10 @@ Now produce the JSON with the required fields.
         for line in meta_lines:
             c.drawString(50, meta_y, line)
             meta_y -= 12
+
+        c.setFont("Helvetica", 8)
+        c.setFillColor(colors.black)
+        c.drawString(40, 20, "ClassificationRedacted")
 
         c.showPage()
 
@@ -1133,7 +1151,6 @@ Now produce the JSON with the required fields.
 
     except Exception as e:
         return f"SOP Generation Error: {str(e)}"
-
 
 
 ##################################################
