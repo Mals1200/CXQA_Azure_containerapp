@@ -1,5 +1,8 @@
 # Version 4b
-# now call SOP has a better layout (not perfect).
+# call SOP has more efficient prompt & has a better layout:
+    # The logo and art images are centered
+    # Can manipulate the art image using ratios and scalinf
+    # The prompt is more effiecient and uses less tokens.
 
 
 import re
@@ -599,10 +602,6 @@ Data:
         return f"Document Generation Error: {str(e)}"
 
 
-
-##################################################
-# Generate SOP function
-##################################################
 def Call_SOP(latest_question, latest_answer, chat_history, instructions):
     """
     Generates a Standard Operating Procedure (SOP) PDF by:
@@ -657,224 +656,50 @@ def Call_SOP(latest_question, latest_answer, chat_history, instructions):
         chat_history_str = str(chat_history)
 
         sop_prompt = f"""
-You are an SOP writer. Using the conversation below, produce a JSON object with fields:
-title, table_of_contents, overview, scope, policy, provisions, definitions,
-process_responsibilities, process, procedures, related_docs, sop_form, sop_log.
+You are an SOP writer. Based on the Provided Information, produce only JSON object with fields and nothing else:
 
-Return only valid JSON. Do not include code fences or any additional commentary.
+The structure:
+- title
+- table_of_contents
+- overview
+- scope
+- policy
+- provisions
+- definitions
+- process_responsibilities
+- process
+- procedures
+- related_docs
+- sop_form
+- sop_log
 
-- Section "title" is the official SOP name.
-- "table_of_contents" is short. For example, "1 Overview, 1.1 Scope, 2 Policy ... etc."
-- "overview" is the text for the main overview.
-- "scope" is the text for the scope.
-- "policy" is policy & references.
-- "provisions" are the general provisions.
-- "definitions" is terms & definitions.
-- "process_responsibilities" is a summary of process + responsibilities table, if any.
-- "process" describes the main <SOP Title> Process details.
-- "procedures" is the detailed procedure steps.
-- "related_docs" is a short summary or bullet list of related docs.
-- "sop_form" is the name and details of the primary form used.
-- "sop_log" is the name and details of the main log used.
+Return **only** valid JSON (no extra text).
 
+IMPORTANT RULES:
+1. No triple backticks or code fences.
+2. No explanations
+3. No extra characters 
+4. Return ONLY the JSON object.
+
+Example of the json file to produce:
+{{
+  "Table of Contents",
+  "title": "Example Title",
+  "overview": "Example text"
+}}
+
+The Information to use:
 Conversation:
 {chat_history}
 
-User's request:
+User_request:
 {latest_question}
 
-The final answer to the user was:
+Final_answer_to_the_user:
 {latest_answer}
 
-This is an example content of an SOP Document about Lost and found, the file:Lost and found
-Standard Operating Procedure Document
-ClassificationRedacted
-Document Name: Lost & Found Standard Operating Procedure
-Document Owner: Department1
-Approved Date: August 1, 2024
-Version: 000
-Document Prepared By: Standards & delivery
-ii
-ClassificationRedacted
-Document Control
-DOCUMENTCODEREDACTED August 1, 2024 000 Approved
-Procedure Owner/Document Owner Approvals
-Asset
-Name1Location
-Senior Officer
-Location fffffff ffffff 01/09/2024
-Management Abdullah AlAti Assistant
-Manager
-Name3Location
-Director
-fwffwf ddd 02/09/2024
-DEPARTMENT3 Approvals
-Name4Performance Excellence
-Manager
-DEPARTMENT3 Name5Documentation & Delivery
-Manager
-Name6Directortitle
-11/08/2024
-Asset Yunusa Aminu Management
-Executive Approvals
-Technical 
-Excellence 
-Senior Director
-DEPARTMENT3 Name8DEPARTMENT3 Advisor
-Function Name Position Signature Date
-Function Name Position Signature Date
-Release No. Date Version Change Control
-8/21/2024
-Function Name Position Signature Date
-11/08/2024
-09/02/2024
-02/09/2024
-Noble Coker 0 3 /0 9 /2 4
-Document Name: Lost & Found Standard Operating Procedure
-Document Owner: Department1
-Approved Date: August 1, 2024
-Version: 000
-Document Prepared By: Standards & delivery
-ClassificationRedacted
-Table of Contents
-1 Overview ......................................................................................................................................................................1
-1.1 Scope..............................................................................................................................................................................................1
-2 Policy and References..............................................................................................................................................1
-3 General Provisions....................................................................................................................................................1
-4 Terms and Definitions .............................................................................................................................................1
-5 Process and Responsibilities.................................................................................................................................2
-5.1 Lost and Found Process .........................................................................................................................................................2
-5.2 Disposal of Unclaimed Items................................................................................................................................................2
-6 Procedures...................................................................................................................................................................2
-6.1 Lost and Found..........................................................................................................................................................................2
-7 Related Documents and Records .........................................................................................................................3
-7.1 Lost and Found Items Form.................................................................................................................................................3
-7.2 Lost and Found Log..................................................................................................................................................................3
-iii
-Document Name: Lost & Found Standard Operating Procedure
-Document Owner: Department1
-Approved Date: August 1, 2024
-Version: 000
-Document Prepared By: Standards & delivery
-ClassificationRedacted
-1 Overview
-This SOP outlines the procedure for guest’s items which have been lost and found.
-Department4 is responsible for storing and keeping any lost and found items that are found
-in any ORGANIZATION assets through Lost and Found offices which can be found throughout
-the ORGANIZATION assets. All lost and found items should be maintained in the original
-condition and must be kept in secured area. The Lost and Found offices (which will be run by 
-the Security Team) should keep updated record for all these items and provide the 
-Department4 a copy on regular basis. Lost and Found office should report to the
-Department4 any lost and found items which have not been claim for more than three 
-months.
-1.1 Scope
- This SOP applies to all ORGANIZATION colleagues.
-2 Policy and References
-1) Lost and Found policy.
-2) Department1s policy
-3 General Provisions
-1) The SOP will come into effect from the date of securing the relevant approvals.
-2) The SOP will supersede all previous practices.
-3) In an event an interpretation is required, the interpretation rights are given to Chief 
-of Department1 Officer.
-4 Terms and Definitions
-1
-SOP Standard Operating Procedure
-Term Definition
-Document Name: Lost & Found Standard Operating Procedure
-Document Owner: Department1
-Approved Date: August 1, 2024
-Version: 000
-Document Prepared By: Standards & delivery
-2
-ClassificationRedacted
-5 Process and Responsibilities
-5.1 Lost and Found Process
-Responsible Accountable Consult Inform
-Responsibility 
-Assignment
-Department1/Sec
-urity Operations
-Specialist
-Duty 
-Manager/Operations 
-Manager
-Director
-title
-Department4
-Process
-description
-Reporting the lost and found items to the Department4
-5.2 Disposal of Unclaimed Items
-Responsible Accountable Consult Inform
-Responsibility
-Assignment
-Security
-Department
-Operations
-Manager
-Directortitle Security
-Department
-Process
-description
-Disposal of any item that has not been claimed within three months
-6 Procedures
-6.1 Lost and Found
- If someone loses an item, they should report it to the Guest Services Desk as soon as 
-possible. The Department1s Officer should complete the Lost & Found Items Form 
-which includes a description of the item, the location where it was lost, and the date 
-and time of the loss.
- Location staff or guests who find lost items should immediately report them to the 
-Department1s Officer (GRO).
- In case the guest who found the item refuses to provide the contact number, 
-security supervisor should summon the Department1s Officer and register the item 
-under their names both.
- Security Team member ensures Secure Storage Area is in place for valuable items 
-and Identification Tags or Labels are available. Valuable items secured on safes only 
-accessible by security supervisor.
- The logs of the valuable items should be shared on a weekly basis. Valuable items 
-have six(6) months storing period, if not collected within a year; should be handed 
-over to the police.
- National IDs or relevant officials’ documents shall be withheld for fourteen (14) days 
-and handed over to police after fourteen days.
-Document Name: Lost & Found Standard Operating Procedure
-Document Owner: Department1
-Approved Date: August 1, 2024
-Version: 000
-Document Prepared By: Standards & delivery
-3
-ClassificationRedacted
- Department1 Team member gathers detailed information about the lost item, 
-including description, location found, and any pertinent details provided by the 
-finder.
- Security Team member logs the lost item in the designated Lost and Found logbook 
-Including date, description, location found, and finder's details.
- Security Team member attaches a unique identification tag or label to each item for 
-easy tracking.
- Department1 Team member assists guests who report a lost item by collecting all 
-relevant information, including the date and location of the loss.
- Refer to the Lost and Found log to check for any matching descriptions.
- When a potential match is found, request the owner to describe the lost item for 
-verification.
- Once ownership is confirmed, document the reunification in the Lost and Found log, 
-including details of the owner.
- Return the lost item to the owner, documenting the return in the log. 
-Unclaimed Items
- Security Team member records details of items disposed of, including date and 
-method of disposal. The invaluable lost and found item will be disposed of after 30 
-days and valuable items will be disposed off after 60 days. The national IDs and 
-official cards will be handed over to Police after 14 days. The team member will 
-coordinate with security for disposal.
- The Department4 should form a committee before disposing of any lost and found 
-items, the members of the committee will be selected through an official letter by 
-the Chief of Assets management.
- All communication with regard the lost and found items should be maintained 
-through Location email InternalEmail@example.com.
-7 Related Documents and Records
-7.1 Lost and Found Items Form
-7.2 Lost and Found Log
-
-Now produce the JSON with the required fields.
+User_description:
+{instructions}
 """
 
         endpoint = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview"
@@ -999,17 +824,30 @@ Now produce the JSON with the required fields.
             )
             
         if art_img:
-            art_width = 220
-            art_height = 120  # adjust based on actual image ratio
+            original_width, original_height = art_img.getSize()  
+            ratio = 0.8
+            # double the original size
+            # ratio = 1.0  # original size
+            # ratio = 0.5  # half size, etc.
+    
+            # 3) Compute scaled dimensions.
+            scaled_width = original_width * ratio
+            scaled_height = original_height * ratio
+            
+            # 4) Compute X/Y so it's centered horizontally, for example at Y=0.
+            x_pos = (page_width - scaled_width) / 2
+            y_pos = 0
+            
             c.drawImage(
                 art_img,
-                x=page_width - art_width,     # right-aligned
-                y=0,                           # bottom of the page
-                width=art_width,
-                height=art_height,
-                preserveAspectRatio=True,
+                x=x_pos,
+                y=y_pos,
+                width=scaled_width,
+                height=scaled_height,
+                preserveAspectRatio=False,  # you can set False now because we did the math
                 mask='auto'
             )
+
 
 
         # Title
@@ -1151,6 +989,11 @@ Now produce the JSON with the required fields.
 
     except Exception as e:
         return f"SOP Generation Error: {str(e)}"
+
+
+
+
+
 
 
 ##################################################
