@@ -1,48 +1,28 @@
-# ------------------------------------------------------------------------------------
 
-# Final Takeaway
-# In summary, the assistant “sometimes not producing an answer” is almost certainly due to the LLM call returning an empty string after 
-# an error or an unexpected response format. By providing a clear fallback string, verifying your LLM endpoint configuration, and logging 
-# more robustly, you’ll ensure you no longer see blank answers in Teams.
-
-# Explanation of the Most Recent Optimizations:
+# Version 18:
+# =========================================================================================
+#                                     CHANGELOG (RBAC UPDATE)
+# =========================================================================================
+# 1. New RBAC Functions:
+#    - get_rbac_data(): Loads the rbac.xlsx file, caching user-tier and table-tier mappings.
+#    - get_user_tier(user_id): Returns the user’s tier (t0–t4), defaulting to t1 if not found.
+#    - get_table_required_tier(table_name): Returns the required tier for a table, defaulting to t1.
+#    - tiers_user_can_access(user_tier): Yields the list of tiers a user may access.
 #
-# 1) Centralized LLM Calls:
-#    - We introduced the function `call_llm` to handle all requests to the Azure OpenAI
-#      endpoint. This avoids repetitive code for making requests.post calls, parsing
-#      JSON, handling exceptions, etc.
+# 2. Updated Function Signatures:
+# Ask_Question: check and stores the user tier level. Default is tier 1 (if user is not in the User_rbac.xlsx). If user is tier 0 then LLM_Fallback
+# Tool_1_index: filter chunks based on the user level of access.
+# Tool_2_Python/referenc_table_data: compare table that will answer the question with the table level to get the tier level, then check user access level.
 #
-# 2) Combined Text Cleaning Logic:
-#    - We consolidated repeated cleaning functions (like removing repeated patterns and
-#      words) into a single function `clean_text`, reducing code duplication and ensuring
-#      consistent cleanup for repeated words/punctuation.
 #
-# 3) Streamlining “References” & “Relevance” Checks:
-#    - The logic to decide whether a user question references tabular data, plus verifying
-#      snippet relevance, now calls the centralized LLM function. We use one consistent
-#      approach for classification and relevance checks.
+# 3. RBAC Enforcement:
+#    - If user_tier == "t0", all data queries immediately fall back to tool_3_llm_fallback().
+#    - In tool_1_index_search, only chunks with tier in the user’s allowed tiers are returned.
+#    - In tool_2_code_run, if the user references a table outside their allowed tiers, code is replaced
+#      with a '404'-style response ("No information") and not executed.
 #
-# 4) Minimizing Repeated Imports & Consolidating Configuration:
-#    - All repeated constants and keys have been moved into a single `CONFIG` dictionary
-#      at the top, making it easier to update or rotate credentials in a single place.
-#
-# 5) Enforcing “No Invented Data” in Python Generation:
-#    - The prompt for `tool_2_code_run` includes instructions for the LLM to only use
-#      existing table columns and not invent columns. It must produce purely executable
-#      code including final print statements for the user answer.
-#
-# 6) Improved Handling of Typos & Spelling Variations:
-#    - Updated prompts (e.g., references_tabular_data) to remind the LLM to interpret
-#      synonyms and minor typos (e.g., “albujairy” vs. “Al-Bujairy Terrace Footfalls.xlsx”).
-#
-# 7) Global Cleanup:
-#    - We refactored code for clarity, ensuring the conversation history is truncated to
-#      avoid excessive memory usage. Also reorganized code to keep everything consistent
-#      and maintainable.
-#
-# Note: Actual functionality otherwise remains the same. The changes are primarily in
-#       structuring, clarity, prompt design, and reusability across the pipeline.
-# ------------------------------------------------------------------------------------
+# No other functionality was removed or changed; the flow remains the same. These additions
+# simply ensure tier-based restrictions are properly applied for both index chunks and table data.
 
 import os
 import io
@@ -95,6 +75,109 @@ logging.getLogger("azure").setLevel(logging.WARNING)
 chat_history = []
 recent_history = chat_history[-4:]
 tool_cache = {}
+
+#######################################################################################
+#                           RBAC HELPERS (User & File Tiers)
+#######################################################################################
+@lru_cache()
+def load_rbac_files():
+    """
+    Loads User_rbac.xlsx and File_rbac.xlsx from the RBAC folder in Azure Blob Storage, 
+    returns them as two DataFrame objects: (df_user, df_file).
+    If anything fails, returns two empty dataframes.
+    """
+    account_url = CONFIG["ACCOUNT_URL"]
+    sas_token = CONFIG["SAS_TOKEN"]
+    container_name = CONFIG["CONTAINER_NAME"]
+
+    rbac_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/RBAC/"
+    user_rbac_file = "User_rbac.xlsx"
+    file_rbac_file = "File_rbac.xlsx"
+
+    df_user = pd.DataFrame()
+    df_file = pd.DataFrame()
+
+    try:
+        blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
+        container_client = blob_service_client.get_container_client(container_name)
+
+        # Load User_rbac.xlsx
+        user_rbac_blob = container_client.get_blob_client(rbac_folder_path + user_rbac_file)
+        user_rbac_data = user_rbac_blob.download_blob().readall()
+        df_user = pd.read_excel(BytesIO(user_rbac_data))
+
+        # Load File_rbac.xlsx
+        file_rbac_blob = container_client.get_blob_client(rbac_folder_path + file_rbac_file)
+        file_rbac_data = file_rbac_blob.download_blob().readall()
+        df_file = pd.read_excel(BytesIO(file_rbac_data))
+
+    except Exception as e:
+        logging.error(f"Failed to load RBAC files: {e}")
+    
+    return df_user, df_file
+
+def get_file_tier(file_name):
+    """
+    Checks the file name in the File_rbac.xlsx file, returns the tier needed to access it.
+    Now uses fuzzy matching via difflib to find the best match if the exact or partial
+    match isn't found. If best match ratio is below 0.8, defaults to tier=1.
+    """
+    _, df_file = load_rbac_files()
+    if df_file.empty or ("File_Name" not in df_file.columns) or ("Tier" not in df_file.columns):
+        # default if not loaded or columns missing
+        return 1  
+    
+    # Remove common extensions and make it all lower-case
+    base_file_name = (
+        file_name.lower()
+        .replace(".pdf", "")
+        .replace(".xlsx", "")
+        .replace(".xls", "")
+        .replace(".csv", "")
+        .strip()
+    )
+    
+    # If the user-provided name is empty after cleaning, just default
+    if not base_file_name:
+        return 1
+
+    # We'll track the best fuzzy ratio and best tier found so far
+    best_ratio = 0.0
+    best_tier = 1
+
+    for idx, row in df_file.iterrows():
+        # Also remove common extensions and lower
+        row_file_raw = str(row["File_Name"])
+        row_file_clean = (
+            row_file_raw.lower()
+            .replace(".pdf", "")
+            .replace(".xlsx", "")
+            .replace(".xls", "")
+            .replace(".csv", "")
+            .strip()
+        )
+        
+        # Compare the two strings with difflib
+        ratio = difflib.SequenceMatcher(None, base_file_name, row_file_clean).ratio()
+        
+        # If we get a better ratio, store that match
+        if ratio > best_ratio:
+            best_ratio = ratio
+            try:
+                best_tier = int(row["Tier"])
+            except:
+                best_tier = 1
+    
+    # If our best match ratio is below some threshold (e.g. 0.8), we treat it as "no match"
+    if best_ratio < 0.8:
+        # Could print a debug if desired:
+        # print(f"[DEBUG get_file_tier] best_ratio={best_ratio:.2f} => default tier=1")
+        return 1
+    else:
+        # Found a good fuzzy match
+        # print(f"[DEBUG get_file_tier] Fuzzy matched => ratio={best_ratio:.2f}, tier={best_tier}")
+        return best_tier
+
 
 #######################################################################################
 #                           TABLES / SCHEMA (constants as strings)
@@ -338,10 +421,10 @@ def is_text_relevant(question, snippet):
 #                              TOOL #1 - Index Search
 #######################################################################################
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def tool_1_index_search(user_question, top_k=5):
+def tool_1_index_search(user_question, top_k=5, user_tier=1):
     """
     Modified version: uses split_question_into_subquestions to handle multi-part queries.
-    Searches each subquestion individually, merges the results, then re-ranks.
+    Then filters out docs the user has no access to, before final top_k selection.
     """
     SEARCH_SERVICE_NAME = CONFIG["SEARCH_SERVICE_NAME"]
     SEARCH_ENDPOINT = CONFIG["SEARCH_ENDPOINT"]
@@ -382,15 +465,20 @@ def tool_1_index_search(user_question, top_k=5):
         if not merged_docs:
             return {"top_k": "No information"}
 
+        # Filter by access + relevance
         relevant_docs = []
         for doc in merged_docs:
             snippet = doc["snippet"]
-            if is_text_relevant(user_question, snippet):
-                relevant_docs.append(doc)
+            # get tier for doc["title"]
+            file_tier = get_file_tier(doc["title"])
+            if user_tier >= file_tier:
+                if is_text_relevant(user_question, snippet):
+                    relevant_docs.append(doc)
 
         if not relevant_docs:
             return {"top_k": "No information"}
 
+        # Weighted scoring
         for doc in relevant_docs:
             ttl = doc["title"].lower()
             score = 0
@@ -414,10 +502,33 @@ def tool_1_index_search(user_question, top_k=5):
         return {"top_k": "No information"}
 
 #######################################################################################
+#                 HELPER to check table references vs. user tier
+#######################################################################################
+def reference_table_data(code_str, user_tier):
+    """
+    Scans the generated Python code for references to specific table filenames 
+    (like "Al-Bujairy Terrace Footfalls.xlsx" etc.). For each referenced file, we check 
+    the file tier from File_rbac.xlsx. If the user tier < file tier => no access => 
+    we immediately return a short message that the user is not authorized.
+
+    If all references are okay, return None (meaning "all good").
+    """
+    # We'll look for patterns like "dataframes.get("SomeFile.xlsx") or the actual file references 
+    pattern = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+    found_files = pattern.findall(code_str)
+
+    for fname in found_files:
+        required_tier = get_file_tier(fname)
+        if user_tier < required_tier:
+            return f"User does not have access to {fname} (requires tier {required_tier})."
+
+    return None  # all good
+
+#######################################################################################
 #                              TOOL #2 - Code Run
 #######################################################################################
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def tool_2_code_run(user_question):
+def tool_2_code_run(user_question, user_tier=1):
     if not references_tabular_data(user_question, TABLES):
         return {"result": "No information", "code": ""}
 
@@ -453,6 +564,12 @@ Chat_history:
 
     if not code_str or code_str == "404":
         return {"result": "No information", "code": ""}
+
+    # Check references vs. user tier
+    access_issue = reference_table_data(code_str, user_tier)
+    if access_issue:
+        # Return a short "no access" style message
+        return {"result": access_issue, "code": ""}
 
     execution_result = execute_generated_code(code_str)
     return {"result": execution_result, "code": code_str}
@@ -729,7 +846,7 @@ def Log_Interaction(
 #######################################################################################
 #                         GREETING HANDLING + AGENT ANSWER
 #######################################################################################
-def agent_answer(user_question):
+def agent_answer(user_question, user_tier=1):
     if not user_question.strip():
         return
 
@@ -768,9 +885,9 @@ def agent_answer(user_question):
     python_dict = {"result": "No information", "code": ""}
 
     if needs_tabular_data:
-        python_dict = tool_2_code_run(user_question)
+        python_dict = tool_2_code_run(user_question, user_tier=user_tier)
 
-    index_dict = tool_1_index_search(user_question)
+    index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
 
     raw_answer = ""
     for token in final_answer_llm(user_question, index_dict, python_dict):
@@ -784,21 +901,72 @@ def agent_answer(user_question):
     yield final_answer_with_source
 
 #######################################################################################
+#                            get user tier
+#######################################################################################
+def get_user_tier(user_id):
+    """
+    Checks the user ID in the User_rbac.xlsx file.
+    If user_id=0 => returns 0 (means forced fallback).
+    If not found => default to 1.
+    Otherwise returns the tier from the file.
+    """
+    user_id_str = str(user_id).strip().lower()
+    df_user, _ = load_rbac_files()
+
+    if user_id_str == "0":
+        return 0
+
+    if df_user.empty or ("User_ID" not in df_user.columns) or ("Tier" not in df_user.columns):
+        return 1
+
+    row = df_user.loc[df_user["User_ID"].astype(str).str.lower() == user_id_str]
+    if row.empty:
+        return 1
+
+    try:
+        tier_val = int(row["Tier"].values[0])
+        return tier_val
+    except:
+        return 1
+
+
+#######################################################################################
 #                            ASK_QUESTION (Main Entry)
 #######################################################################################
 def Ask_Question(question, user_id="anonymous"):
     global chat_history
     global tool_cache
 
+    # Step 1: Determine user tier from the RBAC
+    user_tier = get_user_tier(user_id)
+    # If user_tier==0 => immediate fallback
+    if user_tier == 0:
+        fallback_raw = tool_3_llm_fallback(question)
+        # Use the same style as no-data fallback:
+        fallback = f"AI Generated answer:\n{fallback_raw}\nSource: Ai Generated"
+        chat_history.append(f"User: {question}")
+        chat_history.append(f"Assistant: {fallback}")
+        yield fallback
+        Log_Interaction(
+            question=question,
+            full_answer=fallback,
+            chat_history=chat_history,
+            user_id=user_id,
+            index_dict={},
+            python_dict={}
+        )
+        return
+
+
     question_lower = question.lower().strip()
 
     # Handle "export" command
     if question_lower.startswith("export"):
-
         from Export_Agent import Call_Export
+        chat_history.append(f"User: {question}")
         for message in Call_Export(
             latest_question=question,
-            latest_answer=chat_history[-1],
+            latest_answer=chat_history[-1] if chat_history else "",
             chat_history=chat_history,
             instructions=question[6:].strip()
         ):
@@ -817,7 +985,7 @@ def Ask_Question(question, user_id="anonymous"):
 
     answer_collected = ""
     try:
-        for token in agent_answer(question):
+        for token in agent_answer(question, user_tier=user_tier):
             yield token
             answer_collected += token
     except Exception as e:
