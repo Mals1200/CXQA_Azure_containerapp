@@ -148,42 +148,35 @@ async def _bot_logic(turn_context: TurnContext):
                     ],
                     "height": "stretch",
                     "style": "default"
-                },
-                {
-                    "type": "Container",
-                    "items": [
-                        {
-                            "type": "TextBlock",
-                            "text": source_line,
-                            "wrap": True,
-                            "id": "sourceLineBlock",
-                            "isVisible": False
-                        }
-                    ],
-                    "style": "emphasis",
-                    "bleed": True,
-                    "isVisible": False,
-                    "id": "sourceLineContainer"
                 }
             ]
 
+            # Add source information in a separate container
+            source_container = {
+                "type": "Container",
+                "items": [
+                    {
+                        "type": "TextBlock",
+                        "text": source_line,
+                        "wrap": True,
+                        "id": "sourceLineBlock",
+                        "isVisible": False
+                    }
+                ],
+                "style": "emphasis",
+                "bleed": True
+            }
+
             if appended_details:
-                body_blocks.append({
-                    "type": "Container",
-                    "items": [
-                        {
-                            "type": "TextBlock",
-                            "text": appended_details.strip(),
-                            "wrap": True,
-                            "id": "sourceBlock",
-                            "isVisible": False
-                        }
-                    ],
-                    "style": "emphasis",
-                    "bleed": True,
-                    "isVisible": False,
-                    "id": "sourceDetailsContainer"
+                source_container["items"].append({
+                    "type": "TextBlock",
+                    "text": appended_details.strip(),
+                    "wrap": True,
+                    "id": "sourceBlock",
+                    "isVisible": False
                 })
+
+            body_blocks.append(source_container)
 
             actions = []
             if appended_details or source_line:
@@ -191,7 +184,7 @@ async def _bot_logic(turn_context: TurnContext):
                     {
                         "type": "Action.ToggleVisibility",
                         "title": "Show Source",
-                        "targetElements": ["sourceLineContainer", "sourceDetailsContainer"]
+                        "targetElements": ["sourceLineBlock", "sourceBlock"]
                     }
                 ]
 
