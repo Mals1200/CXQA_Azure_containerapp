@@ -119,8 +119,8 @@ async def _bot_logic(turn_context: TurnContext):
         return
 
     # look for a "Source:" line plus optional details block
-    source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
-    match = re.search(source_pattern, answer_text, flags=re.DOTALL)
+    source_pattern = r"(.*?)\s*(Source:.*?)(?:\s*---SOURCE_DETAILS---.*)?$"
+    match = re.search(source_pattern, answer_text, flags=re.DOTALL | re.IGNORECASE)
 
     if match:
         main_answer = match.group(1).strip()
@@ -138,24 +138,15 @@ async def _bot_logic(turn_context: TurnContext):
                 "text": source_line,
                 "wrap": True,
                 "id": "sourceLineBlock",
-                "isVisible": True  # Source line visible by default
+                "isVisible": True
             }
         ]
 
-        # Always add a source details block, even if empty
+        # Add source details block if available
         if appended_details:
             body_blocks.append({
                 "type": "TextBlock",
                 "text": appended_details.strip(),
-                "wrap": True,
-                "id": "sourceBlock",
-                "isVisible": False
-            })
-        else:
-            # Add an empty source details block
-            body_blocks.append({
-                "type": "TextBlock",
-                "text": "No additional details available.",
                 "wrap": True,
                 "id": "sourceBlock",
                 "isVisible": False
@@ -165,8 +156,8 @@ async def _bot_logic(turn_context: TurnContext):
         actions = [
             {
                 "type": "Action.ToggleVisibility",
-                "title": "Show Source",  # Original button text
-                "targetElements": ["sourceBlock"]  # Only toggle details since source is visible
+                "title": "Show Source",
+                "targetElements": ["sourceBlock"]
             }
         ]
 
