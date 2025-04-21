@@ -1,6 +1,3 @@
-# version 6
-# Scrollable "Show Source" Button content
-
 import os
 import asyncio
 from threading import Lock
@@ -141,37 +138,53 @@ async def _bot_logic(turn_context: TurnContext):
         if source_line:
             body_blocks = [
                 {
-                    "type": "Container",
-                    "items": [
+                    "type": "ColumnSet",
+                    "columns": [
                         {
-                            "type": "TextBlock",
-                            "text": main_answer,
-                            "wrap": True
+                            "type": "Column",
+                            "width": "stretch",
+                            "items": [
+                                {
+                                    "type": "Container",
+                                    "items": [
+                                        {
+                                            "type": "TextBlock",
+                                            "text": main_answer,
+                                            "wrap": True
+                                        }
+                                    ],
+                                    "style": "default"
+                                }
+                            ]
                         }
-                    ],
-                    "height": "stretch",
-                    "style": "default"
+                    ]
                 }
             ]
 
             # Add source information in a separate container
             source_container = {
-                "type": "Container",
-                "items": [
+                "type": "ColumnSet",
+                "columns": [
                     {
-                        "type": "TextBlock",
-                        "text": source_line,
-                        "wrap": True,
-                        "id": "sourceLineBlock",
-                        "isVisible": False
+                        "type": "Column",
+                        "width": "stretch",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": source_line,
+                                "wrap": True,
+                                "id": "sourceLineBlock",
+                                "isVisible": False
+                            }
+                        ],
+                        "style": "emphasis",
+                        "bleed": True
                     }
-                ],
-                "style": "emphasis",
-                "bleed": True
+                ]
             }
 
             if appended_details:
-                source_container["items"].append({
+                source_container["columns"][0]["items"].append({
                     "type": "TextBlock",
                     "text": appended_details.strip(),
                     "wrap": True,
@@ -199,7 +212,8 @@ async def _bot_logic(turn_context: TurnContext):
                 "version": "1.2",
                 "height": "stretch",
                 "minHeight": "100px",
-                "maxHeight": "600px"
+                "maxHeight": "600px",
+                "verticalContentAlignment": "top"
             }
             message = Activity(
                 type="message",
