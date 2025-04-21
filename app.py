@@ -141,11 +141,16 @@ async def _bot_logic(turn_context: TurnContext):
         if source_line:
             body_blocks = [
                 {
-                    "type": "TextBlock",
-                    "text": main_answer,
-                    "wrap": True,
+                    "type": "Container",
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": main_answer,
+                            "wrap": True
+                        }
+                    ],
                     "height": "stretch",
-                    "maxLines": 10
+                    "style": "default"
                 },
                 {
                     "type": "Container",
@@ -155,12 +160,13 @@ async def _bot_logic(turn_context: TurnContext):
                             "text": source_line,
                             "wrap": True,
                             "id": "sourceLineBlock",
-                            "isVisible": False,
-                            "maxLines": 3
+                            "isVisible": False
                         }
                     ],
                     "style": "emphasis",
-                    "bleed": True
+                    "bleed": True,
+                    "isVisible": False,
+                    "id": "sourceLineContainer"
                 }
             ]
 
@@ -173,12 +179,13 @@ async def _bot_logic(turn_context: TurnContext):
                             "text": appended_details.strip(),
                             "wrap": True,
                             "id": "sourceBlock",
-                            "isVisible": False,
-                            "maxLines": 5
+                            "isVisible": False
                         }
                     ],
                     "style": "emphasis",
-                    "bleed": True
+                    "bleed": True,
+                    "isVisible": False,
+                    "id": "sourceDetailsContainer"
                 })
 
             actions = []
@@ -187,7 +194,7 @@ async def _bot_logic(turn_context: TurnContext):
                     {
                         "type": "Action.ToggleVisibility",
                         "title": "Show Source",
-                        "targetElements": ["sourceLineBlock", "sourceBlock"]
+                        "targetElements": ["sourceLineContainer", "sourceDetailsContainer"]
                     }
                 ]
 
@@ -199,7 +206,7 @@ async def _bot_logic(turn_context: TurnContext):
                 "version": "1.2",
                 "height": "stretch",
                 "minHeight": "100px",
-                "maxHeight": "400px"
+                "maxHeight": "600px"
             }
             message = Activity(
                 type="message",
