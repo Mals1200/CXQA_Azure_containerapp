@@ -142,7 +142,7 @@ async def _bot_logic(turn_context: TurnContext):
             }
         ]
 
-        actions = []
+        # Always add a source details block, even if empty
         if appended_details:
             body_blocks.append({
                 "type": "TextBlock",
@@ -151,14 +151,24 @@ async def _bot_logic(turn_context: TurnContext):
                 "id": "sourceBlock",
                 "isVisible": False
             })
+        else:
+            # Add an empty source details block
+            body_blocks.append({
+                "type": "TextBlock",
+                "text": "No additional details available.",
+                "wrap": True,
+                "id": "sourceBlock",
+                "isVisible": False
+            })
             
-            actions = [
-                {
-                    "type": "Action.ToggleVisibility",
-                    "title": "Show Source",  # Original button text
-                    "targetElements": ["sourceBlock"]  # Only toggle details since source is visible
-                }
-            ]
+        # Always include the toggle button
+        actions = [
+            {
+                "type": "Action.ToggleVisibility",
+                "title": "Show Source",  # Original button text
+                "targetElements": ["sourceBlock"]  # Only toggle details since source is visible
+            }
+        ]
 
         adaptive_card = {
             "type": "AdaptiveCard",
