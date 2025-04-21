@@ -511,12 +511,12 @@ Don't give examples, only provide the actual code. If you can't provide the code
 
 **Rules**:
 1. Only use columns that actually exist. Do NOT invent columns or table names.
-2. Don’t rely on sample rows; the real dataset can have more data. Just reference the correct columns as shown in the schemas.
+2. Don't rely on sample rows; the real dataset can have more data. Just reference the correct columns as shown in the schemas.
 3. Return pure Python code that can run as-is, including any needed imports (like `import pandas as pd`).
 4. The code must produce a final print statement with the answer.
-5. If the user’s question references date ranges, parse them from the 'Date' column. If monthly data is requested, group by month or similar.
+5. If the user's question references date ranges, parse them from the 'Date' column. If monthly data is requested, group by month or similar.
 6. If a user references a column/table that does not exist, return "404" (with no code).
-7. Use semantic reasoning to handle synonyms or minor typos (e.g., “Al Bujairy,” “albujairi,” etc.), as long as they reasonably map to the real table names.
+7. Use semantic reasoning to handle synonyms or minor typos (e.g., "Al Bujairy," "albujairi," etc.), as long as they reasonably map to the real table names.
 
 User question:
 {user_question}
@@ -819,6 +819,7 @@ def Log_Interaction(
 #######################################################################################
 def agent_answer(user_question, user_tier=1, recent_history=None, tool_cache=None):
     if not user_question.strip():
+        yield "Please provide a question."
         return
 
     if tool_cache is None:
@@ -850,32 +851,31 @@ def agent_answer(user_question, user_tier=1, recent_history=None, tool_cache=Non
             yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         return
 
-    # Check cache with conversation-specific key
-    cache_key = f"{user_tier}:{user_question_stripped.lower()}"
-    if cache_key in tool_cache:
-        _, _, cached_answer = tool_cache[cache_key]
-        yield cached_answer
-        return
+    try:
+        # Try to get answer from index search first
+        index_dict = tool_1_index_search(user_question, user_tier=user_tier)
+        if index_dict:
+            answer = final_answer_llm(user_question, index_dict, {}, recent_history)
+            if answer:
+                yield answer
+                return
 
-    needs_tabular_data = references_tabular_data(user_question, TABLES)
-    index_dict = {"top_k": "No information"}
-    python_dict = {"result": "No information", "code": ""}
-
-    if needs_tabular_data:
+        # Try to get answer from code execution
         python_dict = tool_2_code_run(user_question, user_tier=user_tier)
+        if python_dict:
+            answer = final_answer_llm(user_question, {}, python_dict, recent_history)
+            if answer:
+                yield answer
+                return
 
-    index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
+        # Fallback to LLM if no other methods worked
+        fallback = tool_3_llm_fallback(user_question)
+        yield fallback
 
-    raw_answer = ""
-    for token in final_answer_llm(user_question, index_dict, python_dict, recent_history):
-        raw_answer += token
-
-    # Now unify repeated text cleaning
-    raw_answer = clean_text(raw_answer)
-
-    final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict)
-    tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
-    yield final_answer_with_source
+    except Exception as e:
+        error_msg = f"❌ Error occurred while generating the answer: {e}"
+        print(error_msg)
+        yield error_msg
 
 #######################################################################################
 #                            get user tier
@@ -968,13 +968,18 @@ def Ask_Question(question, user_id="anonymous", chat_history=None, tool_cache=No
         # Pass recent history to agent_answer
         recent_history = chat_history[-4:] if len(chat_history) >= 4 else chat_history
         for token in agent_answer(question, user_tier=user_tier, recent_history=recent_history, tool_cache=tool_cache):
-            yield token
-            answer_collected += token
+            if token:  # Only yield non-empty tokens
+                yield token
+                answer_collected += str(token)
     except Exception as e:
         err_msg = f"❌ Error occurred while generating the answer: {e}"
         print(err_msg)
         yield f"\n\n{err_msg}"
-        return
+        answer_collected = err_msg
+
+    if not answer_collected.strip():
+        answer_collected = "I couldn't generate a response. Please try again."
+        yield answer_collected
 
     chat_history.append(f"Assistant: {answer_collected}")
 
