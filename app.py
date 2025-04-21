@@ -170,7 +170,7 @@ async def _bot_logic(turn_context: TurnContext):
                     ]
                 }
                 
-                # Add source details in a scrollable container if it exists
+                # Add source details in a properly scrollable container if it exists
                 if appended_details:
                     source_details_container = {
                         "type": "Container",
@@ -183,33 +183,30 @@ async def _bot_logic(turn_context: TurnContext):
                                 "size": "Small"
                             }
                         ],
-                        "height": "stretch",
-                        "maxHeight": "250px"
+                        "bleed": True
                     }
-                    source_container["items"].append(source_details_container)
+                    
+                    # Wrap in a scrollable container
+                    scrollable_container = {
+                        "type": "Container",
+                        "isScrollable": True,
+                        "height": "auto",
+                        "maxHeight": "250px",
+                        "items": [source_details_container]
+                    }
+                    
+                    source_container["items"].append(scrollable_container)
                 
                 body_blocks.append(source_container)
                 
-                # Add a separator before the button
+                # Simple button with no extra styling
                 body_blocks.append({
-                    "type": "ColumnSet",
-                    "columns": [
+                    "type": "ActionSet",
+                    "actions": [
                         {
-                            "type": "Column",
-                            "width": "stretch",
-                            "items": [
-                                {
-                                    "type": "ActionSet",
-                                    "actions": [
-                                        {
-                                            "type": "Action.ToggleVisibility",
-                                            "title": "📚 Show Source",
-                                            "targetElements": ["sourceContainer"],
-                                            "style": "positive"
-                                        }
-                                    ]
-                                }
-                            ]
+                            "type": "Action.ToggleVisibility",
+                            "title": "Show Source",
+                            "targetElements": ["sourceContainer"]
                         }
                     ]
                 })
