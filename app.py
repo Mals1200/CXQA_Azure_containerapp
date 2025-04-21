@@ -85,6 +85,7 @@ async def _bot_logic(turn_context: TurnContext):
     # ——— Call Ask_Question, passing in both history & cache —————————
     answer_text = ""
     try:
+        logger.info(f"Processing question: {user_message}")
         for chunk in Ask_Question(
             question     = user_message,
             user_id      = user_id,
@@ -92,26 +93,32 @@ async def _bot_logic(turn_context: TurnContext):
             tool_cache   = conversation_store[conv_id]["cache"],
         ):
             answer_text += str(chunk)
+            logger.debug(f"Received chunk: {chunk}")
     except Exception as e:
         logger.error(f"Error in Ask_Question: {e}", exc_info=True)
         answer_text = f"I'm sorry—something went wrong. ({e})"
+        await turn_context.send_activity(Activity(type="message", text=answer_text))
+        return
 
     # Persist the updated history back into our store
     conversation_store[conv_id]["history"] = ask_func.chat_history
 
     # ——— Ensure we have a Source line —————————————————————————————————
-    if "Source:" not in answer_text:
-        answer_text += "\n\nSource: Ai Generated"
-
-    # ——— Send the reply (handles adaptive‑card toggle on "Source:" lines) —————
     if not answer_text.strip():
+        logger.error("Empty answer received from Ask_Question")
         await turn_context.send_activity(
-            Activity(type="message", text="I couldn't generate a response.")
+            Activity(type="message", text="I couldn't generate a response. Please try again.")
         )
         return
 
+    if "Source:" not in answer_text:
+        answer_text += "\n\nSource: Ai Generated"
+        logger.debug("Added default source line")
+
+    # ——— Send the reply (handles adaptive‑card toggle on "Source:" lines) —————
     # chunk very long replies
     if len(answer_text) > 25000:
+        logger.info("Answer too long, chunking response")
         parts = [answer_text[i : i + 15000] for i in range(0, len(answer_text), 15000)]
         for idx, part in enumerate(parts):
             prefix = f"(Part {idx+1}/{len(parts)}) " if len(parts) > 1 else ""
@@ -123,6 +130,7 @@ async def _bot_logic(turn_context: TurnContext):
     match = re.search(source_pattern, answer_text, flags=re.DOTALL | re.IGNORECASE)
 
     if match:
+        logger.debug("Source pattern matched, creating adaptive card")
         main_answer = match.group(1).strip()
         source_line = match.group(2).strip()
         appended_details = match.group(3) if match.group(3) else ""
@@ -178,6 +186,7 @@ async def _bot_logic(turn_context: TurnContext):
         )
         await turn_context.send_activity(message)
     else:
+        logger.warning("Source pattern not matched, sending plain text")
         await turn_context.send_activity(Activity(type="message", text=answer_text))
 
 
