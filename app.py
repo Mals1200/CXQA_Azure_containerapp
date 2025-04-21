@@ -148,6 +148,9 @@ async def _bot_logic(turn_context: TurnContext):
             
             # Create the collapsible source container
             if source_line or appended_details:
+                # We'll create a single, unified scrollable container for all source content
+                combined_source = source_line + "\n\n" + (appended_details.strip() if appended_details else "")
+                
                 # Create a container that will be toggled
                 source_container = {
                     "type": "Container",
@@ -157,45 +160,21 @@ async def _bot_logic(turn_context: TurnContext):
                         {
                             "type": "Container",
                             "style": "emphasis",
+                            "minHeight": "200px", 
+                            "maxHeight": "200px",
+                            "height": "200px",
+                            "isScrollable": True,
                             "items": [
                                 {
                                     "type": "TextBlock",
-                                    "text": source_line,
+                                    "text": combined_source,
                                     "wrap": True,
-                                    "weight": "Bolder",
-                                    "color": "Accent"
+                                    "size": "Small"
                                 }
                             ]
                         }
                     ]
                 }
-                
-                # Add source details in a properly scrollable container if it exists
-                if appended_details:
-                    source_details_container = {
-                        "type": "Container",
-                        "style": "default",
-                        "items": [
-                            {
-                                "type": "TextBlock",
-                                "text": appended_details.strip(),
-                                "wrap": True,
-                                "size": "Small"
-                            }
-                        ],
-                        "bleed": True
-                    }
-                    
-                    # Wrap in a scrollable container
-                    scrollable_container = {
-                        "type": "Container",
-                        "isScrollable": True,
-                        "height": "auto",
-                        "maxHeight": "250px",
-                        "items": [source_details_container]
-                    }
-                    
-                    source_container["items"].append(scrollable_container)
                 
                 body_blocks.append(source_container)
                 
