@@ -82,7 +82,7 @@ async def _bot_logic(turn_context: TurnContext):
     # ——— Show typing indicator —————————————————————————————————————
     await turn_context.send_activity(Activity(type="typing"))
 
-    # ——— Call your new Ask_Question, passing in both history & cache —————————
+    # ——— Call Ask_Question, passing in both history & cache —————————
     answer_text = ""
     try:
         for chunk in Ask_Question(
@@ -96,8 +96,12 @@ async def _bot_logic(turn_context: TurnContext):
         logger.error(f"Error in Ask_Question: {e}", exc_info=True)
         answer_text = f"I'm sorry—something went wrong. ({e})"
 
-    # ——— Persist the updated history back into our store ————————————————
+    # Persist the updated history back into our store
     conversation_store[conv_id]["history"] = ask_func.chat_history
+
+    # ——— Ensure we have a Source line —————————————————————————————————
+    if "Source:" not in answer_text:
+        answer_text += "\n\nSource: Ai Generated"
 
     # ——— Send the reply (handles adaptive‑card toggle on “Source:” lines) —————
     if not answer_text.strip():
@@ -171,6 +175,7 @@ async def _bot_logic(turn_context: TurnContext):
             )
         )
     else:
+        # (this shouldn't happen now that we force a Source: line, but just in case)
         await turn_context.send_activity(Activity(type="message", text=answer_text))
 
 
