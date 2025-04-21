@@ -160,10 +160,6 @@ async def _bot_logic(turn_context: TurnContext):
                         {
                             "type": "Container",
                             "style": "emphasis",
-                            "minHeight": "200px", 
-                            "maxHeight": "200px",
-                            "height": "200px",
-                            "isScrollable": True,
                             "items": [
                                 {
                                     "type": "TextBlock",
@@ -173,7 +169,8 @@ async def _bot_logic(turn_context: TurnContext):
                                 }
                             ]
                         }
-                    ]
+                    ],
+                    "height": "200px"
                 }
                 
                 body_blocks.append(source_container)
@@ -194,7 +191,7 @@ async def _bot_logic(turn_context: TurnContext):
                 "type": "AdaptiveCard",
                 "body": body_blocks,
                 "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "version": "1.5"
+                "version": "1.2"
             }
             
             message = Activity(
