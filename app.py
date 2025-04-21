@@ -103,7 +103,7 @@ async def _bot_logic(turn_context: TurnContext):
     if "Source:" not in answer_text:
         answer_text += "\n\nSource: Ai Generated"
 
-    # ——— Send the reply (handles adaptive‑card toggle on “Source:” lines) —————
+    # ——— Send the reply (handles adaptive‑card toggle on "Source:" lines) —————
     if not answer_text.strip():
         await turn_context.send_activity(
             Activity(type="message", text="I couldn't generate a response.")
@@ -118,64 +118,65 @@ async def _bot_logic(turn_context: TurnContext):
             await turn_context.send_activity(Activity(type="message", text=prefix + part))
         return
 
-    # look for a “Source:” line plus optional details block
+    # look for a "Source:" line plus optional details block
     source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
     match = re.search(source_pattern, answer_text, flags=re.DOTALL)
 
     if match:
-        main = match.group(1).strip()
-        src  = match.group(2).strip()
-        det  = match.group(3).strip() if match.group(3) else ""
+        main_answer = match.group(1).strip()
+        source_line = match.group(2).strip()
+        appended_details = match.group(3) if match.group(3) else ""
 
-        body = [
-            {"type": "TextBlock", "text": main, "wrap": True},
+        body_blocks = [
             {
                 "type": "TextBlock",
-                "text": src,
+                "text": main_answer,
+                "wrap": True
+            },
+            {
+                "type": "TextBlock",
+                "text": source_line,
                 "wrap": True,
                 "id": "sourceLineBlock",
-                "isVisible": False,
-            },
+                "isVisible": True  # Source line visible by default
+            }
         ]
+
         actions = []
-        if det:
-            body.append(
-                {
-                    "type": "TextBlock",
-                    "text": det,
-                    "wrap": True,
-                    "id": "sourceBlock",
-                    "isVisible": False,
-                }
-            )
-            actions.append(
+        if appended_details:
+            body_blocks.append({
+                "type": "TextBlock",
+                "text": appended_details.strip(),
+                "wrap": True,
+                "id": "sourceBlock",
+                "isVisible": False
+            })
+            
+            actions = [
                 {
                     "type": "Action.ToggleVisibility",
-                    "title": "Show Source Details",
-                    "targetElements": ["sourceLineBlock", "sourceBlock"],
+                    "title": "Show Source",  # Original button text
+                    "targetElements": ["sourceBlock"]  # Only toggle details since source is visible
                 }
-            )
+            ]
 
-        card = {
+        adaptive_card = {
             "type": "AdaptiveCard",
-            "body": body,
+            "body": body_blocks,
             "actions": actions,
             "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-            "version": "1.2",
+            "version": "1.2"
         }
-        await turn_context.send_activity(
-            Activity(
-                type="message",
-                attachments=[
-                    {
-                        "contentType": "application/vnd.microsoft.card.adaptive",
-                        "content": card,
-                    }
-                ],
-            )
+        
+        message = Activity(
+            type="message",
+            attachments=[{
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": adaptive_card
+            }]
         )
+        await turn_context.send_activity(message)
     else:
-        # (this shouldn't happen now that we force a Source: line, but just in case)
         await turn_context.send_activity(Activity(type="message", text=answer_text))
 
 
