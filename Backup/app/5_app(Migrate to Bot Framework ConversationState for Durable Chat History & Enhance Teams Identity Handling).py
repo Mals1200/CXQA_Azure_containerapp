@@ -1,222 +1,234 @@
-# Version 5
-# Here’s what’s changed in the new app.py compared to your original version:
-# Durable, per‑conversation state
-# Original: Used a plain Python conversation_histories = {} dict in memory. If the container restarts or scales out to multiple instances, all history is lost or gets out of sync.
-# New: Leverages Bot Framework’s ConversationState backed by a MemoryStorage (you can swap in Cosmos DB, Blob Storage, Redis, etc.). This ensures each conversation’s history is saved in a backing store that survives restarts and scales across instances.
-# Eliminated manual history management
-# Original: You manually looked up conversation_histories[conversation_id], mutated it, then wrote it back.
-# New: You call await CONV_HISTORY_PROPERTY.get(turn_context, []) to load, and await CONV_HISTORY_PROPERTY.set(turn_context, history) + save_changes(...) to persist. Bot Framework handles serialization, concurrency, and retries under the hood.
-# Robust Teams identity extraction
-# Original: You inlined a try/except around TeamsInfo.get_member directly in _bot_logic, but any error quietly fell back to "anonymous" or the raw Teams ID.
-# New: Factored out get_user_identity(...) as its own async helper. It:
-# Attempts TeamsInfo.get_member and prefers user_principal_name → email → raw ID
-# Catches and logs permission or Graph‑API errors at a WARNING level
-# Always returns a non‑null string, so Ask_Question gets a stable user_id.
-# Centralized typing indicator + error handling
-# Original: You sent the typing activity once, but error handling around Ask_Question was mixed in with your Flask loop.
-# New: The typing indicator is still sent immediately, but any exception thrown by Ask_Question is caught, logged via logger.error(..., exc_info=True), and surfaced to the user with a friendly apology.
-# Message‑sizing and adaptive‑card helper
-# Original: You built the adaptive card inline in _bot_logic, but had no logic for extremely large answers.
-# New: Extracted all the Teams‑specific formatting into send_formatted_response(...), which:
-# Splits messages over ~15 000 characters to avoid Teams’ ~28 KB limit
-# Detects a Source: line plus optional ---SOURCE_DETAILS--- payload and builds an Adaptive Card with a “Show Source Details” toggle
-# Falls back to a plain text message if no source metadata is found
-# Consistent logging configuration
-# Original: You had occasional print(...) calls and basic logging but no consistent format.
-# New: At the top of app.py, logging.basicConfig(...) is set so every log entry includes timestamp, logger name, level, and message—making it far easier to trace incoming requests, identity lookups, and any errors in production.
+# version 5 
+# Handle history better
+    # The changes made address several key issues in both app.py and ask_func.py:
+    # Thread-Safe State Management:
+    # Added a thread-safe state management system in app.py using a Lock
+    # Each conversation now has its own isolated state
+    # Added cleanup of old conversation states to prevent memory leaks
+    # Better Error Handling:
+    # Added comprehensive error handling throughout both files
+    # Improved error messages and logging
+    # Added retry mechanism for Azure API calls with exponential backoff
+    # State Isolation:
+    # Each conversation now has its own isolated chat history and cache
+    # Added proper initialization of global variables
+    # Better management of the recent_history variable
+    # Resource Management:
+    # Added retry decorator for Azure API calls
+    # Better handling of API timeouts and failures
+    # Cleanup of old conversation states
+    # Logging Improvements:
+    # Added more detailed error logging
+    # Better error messages for users
+    # Proper exception handling in critical sections
+    # These changes should make your bot more stable and reliable in the Teams environment. The main improvements are:
+    # Each conversation is now properly isolated
+    # Better handling of concurrent requests
+    # More robust error handling and recovery
+    # Better resource management
+    # Improved logging for debugging
+    # To deploy these changes:
+    # Update your code with these changes
+    # Test locally first
+    # Deploy to your Azure Container App
+    # Monitor the logs for any issues
+    # If you still experience issues after deploying these changes, please let me know and I can help you investigate further. Also, make sure to check your Azure Container App's logs for any specific error messages that might help identify remaining issues.
 
 
 import os
 import asyncio
-import logging
-import re
+from threading import Lock
 
 from flask import Flask, request, jsonify, Response
 from botbuilder.core import (
-    BotFrameworkAdapterSettings,
     BotFrameworkAdapter,
-    ConversationState,
-    MemoryStorage,
-    TurnContext,
+    BotFrameworkAdapterSettings,
+    TurnContext
 )
-from botbuilder.core.teams import TeamsInfo
 from botbuilder.schema import Activity
+# *** Important: import TeamsInfo ***
+from botbuilder.core.teams import TeamsInfo
 
-from ask_func import Ask_Question
+from ask_func import Ask_Question, chat_history
 
-# ——— Configure logging ——————————————————————————————————————————————
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(name)s %(levelname)s %(message)s"
-)
-logger = logging.getLogger(__name__)
-
-# ——— Flask + Bot adapter setup —————————————————————————————————————————
 app = Flask(__name__)
 
-MICROSOFT_APP_ID       = os.environ.get("MICROSOFT_APP_ID", "")
+MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
 MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 
 adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
 
-# ——— ConversationState (swap MemoryStorage for Cosmos/Blob in production) ———————
-memory             = MemoryStorage()
-conversation_state = ConversationState(memory)
-adapter.use(conversation_state)
+# Thread-safe conversation state management
+conversation_states = {}
+state_lock = Lock()
 
-# property for per‑conversation history
-CONV_HISTORY_PROPERTY = conversation_state.create_property("ConversationHistory")
+def get_conversation_state(conversation_id):
+    with state_lock:
+        if conversation_id not in conversation_states:
+            conversation_states[conversation_id] = {
+                'history': [],
+                'cache': {},
+                'last_activity': None
+            }
+        return conversation_states[conversation_id]
 
+def cleanup_old_states():
+    """Clean up conversation states older than 24 hours"""
+    with state_lock:
+        current_time = asyncio.get_event_loop().time()
+        for conv_id, state in list(conversation_states.items()):
+            if state['last_activity'] and (current_time - state['last_activity']) > 86400:  # 24 hours
+                del conversation_states[conv_id]
 
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({"message": "API is running!"}), 200
-
 
 @app.route("/api/messages", methods=["POST"])
 def messages():
     if "application/json" not in request.headers.get("Content-Type", ""):
         return Response(status=415)
 
-    body        = request.json
-    activity    = Activity().deserialize(body)
+    body = request.json
+    activity = Activity().deserialize(body)
     auth_header = request.headers.get("Authorization", "")
 
     loop = asyncio.new_event_loop()
     try:
-        loop.run_until_complete(
-            adapter.process_activity(activity, auth_header, _bot_logic)
-        )
+        loop.run_until_complete(adapter.process_activity(activity, auth_header, _bot_logic))
     finally:
         loop.close()
 
     return Response(status=200)
 
-
 async def _bot_logic(turn_context: TurnContext):
-    # 1) Load or init conversation history list
-    history = await CONV_HISTORY_PROPERTY.get(turn_context, [])
+    conversation_id = turn_context.activity.conversation.id
+    state = get_conversation_state(conversation_id)
+    state['last_activity'] = asyncio.get_event_loop().time()
+    
+    # Clean up old states periodically
+    if len(conversation_states) > 100:  # Only clean up if we have many states
+        cleanup_old_states()
+
+    # Set the conversation state for this request
+    import ask_func
+    ask_func.chat_history = state['history']
+    ask_func.tool_cache = state['cache']
 
     user_message = turn_context.activity.text or ""
-    if not user_message.strip():
-        return
 
-    # 2) Resolve user identity robustly
-    user_id = await get_user_identity(turn_context)
-
-    # 3) Show typing indicator
-    await turn_context.send_activity(Activity(type="typing"))
-
-    # 4) Call your Ask_Question, passing in history and a fresh cache
-    answer_text = ""
+    # --------------------------------------------------------------------
+    # Use 'TeamsInfo.get_member' to get userPrincipalName or email
+    # --------------------------------------------------------------------
+    user_id = "anonymous"  # fallback
     try:
-        for chunk in Ask_Question(
-            question=user_message,
-            user_id=user_id,
-            chat_history=history,
-            tool_cache={}
-        ):
-            answer_text += str(chunk)
-    except Exception as e:
-        logger.error(f"Error in Ask_Question: {e}", exc_info=True)
-        answer_text = f"I'm sorry—something went wrong. ({e})"
-
-    # 5) Persist updated history
-    await CONV_HISTORY_PROPERTY.set(turn_context, history)
-    await conversation_state.save_changes(turn_context)
-
-    # 6) Send the reply (handles long messages + adaptive‑card toggle)
-    await send_formatted_response(turn_context, answer_text)
-
-
-async def get_user_identity(turn_context: TurnContext) -> str:
-    """Extract the most reliable user ID in Teams."""
-    user_id = "anonymous"
-    try:
+        # 'from_property.id' usually holds the "29:..." Teams user ID
         teams_user_id = turn_context.activity.from_property.id
-        try:
-            member = await TeamsInfo.get_member(turn_context, teams_user_id)
-            # prefer UPN, then email, then Teams ID
-            if getattr(member, "user_principal_name", None):
-                user_id = member.user_principal_name
-            elif getattr(member, "email", None):
-                user_id = member.email
-            else:
-                user_id = teams_user_id
-        except Exception as member_err:
-            logger.warning(f"TeamsInfo.get_member failed: {member_err}")
-            user_id = teams_user_id or "anonymous"
+
+        # This call will attempt to fetch the user's profile from Teams
+        teams_member = await TeamsInfo.get_member(turn_context, teams_user_id)
+        # If successful, you can read these fields:
+        #   teams_member.user_principal_name (often the email/UPN)
+        #   teams_member.email
+        #   teams_member.name
+        #   teams_member.id
+        if teams_member and teams_member.user_principal_name:
+            user_id = teams_member.user_principal_name
+        elif teams_member and teams_member.email:
+            user_id = teams_member.email
+        else:
+            user_id = teams_user_id  # fallback if we can't get an email
+
     except Exception as e:
-        logger.warning(f"get_user_identity error: {e}")
-    return user_id
+        # If get_member call fails (e.g., in a group chat scenario or permission issues),
+        # just fallback to the "29:..." ID or 'anonymous'
+        user_id = turn_context.activity.from_property.id or "anonymous"
 
+    # Show "thinking" indicator
+    typing_activity = Activity(type="typing")
+    await turn_context.send_activity(typing_activity)
 
-async def send_formatted_response(turn_context: TurnContext, answer_text: str):
-    """Split long replies, detect Source toggles, and send as Adaptive Card if needed."""
-    if not answer_text.strip():
-        await turn_context.send_activity(
-            Activity(type="message", text="I couldn't generate a response.")
-        )
-        return
+    try:
+        # Process the message
+        ans_gen = Ask_Question(user_message, user_id=user_id)
+        answer_text = "".join(ans_gen)
 
-    # Teams message size limit ~28 KB, so chunk at 15 000 chars
-    if len(answer_text) > 25000:
-        chunks = [answer_text[i : i + 15000] for i in range(0, len(answer_text), 15000)]
-        for idx, chunk in enumerate(chunks):
-            prefix = f"(Part {idx+1}/{len(chunks)}) " if len(chunks) > 1 else ""
-            await turn_context.send_activity(
-                Activity(type="message", text=prefix + chunk)
-            )
-        return
+        # Update state
+        state['history'] = ask_func.chat_history
+        state['cache'] = ask_func.tool_cache
 
-    # Look for a “Source:” line plus optional details marker
-    source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
-    match = re.search(source_pattern, answer_text, flags=re.DOTALL)
+        # Parse and format the response
+        import re
+        source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
+        match = re.search(source_pattern, answer_text, flags=re.DOTALL)
 
-    if match:
-        main = match.group(1).strip()
-        src  = match.group(2).strip()
-        det  = match.group(3).strip() if match.group(3) else ""
+        if match:
+            main_answer = match.group(1).strip()
+            source_line = match.group(2).strip()
+            appended_details = match.group(3) if match.group(3) else ""
+        else:
+            main_answer = answer_text
+            source_line = ""
+            appended_details = ""
 
-        body = [{"type": "TextBlock", "text": main, "wrap": True}]
-        # source line always visible
-        body.append({
-            "type": "TextBlock", "text": src, "wrap": True,
-            "id": "sourceLineBlock", "isVisible": True
-        })
-        if det:
-            body.append({
-                "type": "TextBlock", "text": det, "wrap": True,
-                "id": "sourceBlock", "isVisible": False
-            })
+        if source_line:
+            body_blocks = [
+                {
+                    "type": "TextBlock",
+                    "text": main_answer,
+                    "wrap": True
+                },
+                {
+                    "type": "TextBlock",
+                    "text": source_line,
+                    "wrap": True,
+                    "id": "sourceLineBlock",
+                    "isVisible": False
+                }
+            ]
 
-        actions = []
-        if det:
-            actions.append({
-                "type": "Action.ToggleVisibility",
-                "title": "Show Source Details",
-                "targetElements": ["sourceBlock"]
-            })
+            if appended_details:
+                body_blocks.append({
+                    "type": "TextBlock",
+                    "text": appended_details.strip(),
+                    "wrap": True,
+                    "id": "sourceBlock",
+                    "isVisible": False
+                })
 
-        card = {
-            "type": "AdaptiveCard",
-            "body": body,
-            "actions": actions,
-            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-            "version": "1.2"
-        }
-        await turn_context.send_activity(
-            Activity(
+            actions = []
+            if appended_details or source_line:
+                actions = [
+                    {
+                        "type": "Action.ToggleVisibility",
+                        "title": "Show Source",
+                        "targetElements": ["sourceLineBlock", "sourceBlock"]
+                    }
+                ]
+
+            adaptive_card = {
+                "type": "AdaptiveCard",
+                "body": body_blocks,
+                "actions": actions,
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "version": "1.2"
+            }
+            message = Activity(
                 type="message",
-                attachments=[{"contentType": "application/vnd.microsoft.card.adaptive", "content": card}],
+                attachments=[{
+                    "contentType": "application/vnd.microsoft.card.adaptive",
+                    "content": adaptive_card
+                }]
             )
-        )
-    else:
-        await turn_context.send_activity(
-            Activity(type="message", text=answer_text)
-        )
+            await turn_context.send_activity(message)
+        else:
+            await turn_context.send_activity(Activity(type="message", text=main_answer))
 
+    except Exception as e:
+        error_message = f"An error occurred while processing your request: {str(e)}"
+        print(f"Error in bot logic: {e}")
+        await turn_context.send_activity(Activity(type="message", text=error_message))
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=80)
