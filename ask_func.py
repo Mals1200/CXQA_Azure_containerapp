@@ -1,5 +1,5 @@
-# Version 18b:
-# Dynamic Table, Schema, and Sample
+# Version 18c:
+# return error
 
 import os
 import io
@@ -245,8 +245,13 @@ def call_llm(system_prompt, user_prompt, max_tokens=500, temperature=0.0):
             logging.warning(f"LLM returned no choices: {data}")
             return "No choices from LLM."
     except Exception as e:
-        logging.error(f"Error in call_llm: {e}")
-        return f"LLM Error: {e}"
+        # make the real cause obvious (rate‑limit, token overflow, etc.)
+        err_msg = f"LLM Error: {e}"
+        if hasattr(e, "response") and e.response is not None:           # Azure/OpenAI gives details here
+            err_msg += f" | Azure response: {e.response.text}"
+        print(err_msg)                                                  # <‑‑ NEW: show in console/stdout
+        logging.error(err_msg)
+        return err_msg
 
 #######################################################################################
 #                   COMBINED TEXT CLEANING (Point #2 Optimization)
@@ -581,7 +586,9 @@ def execute_generated_code(code_str):
         return output if output else "Execution completed with no output."
 
     except Exception as e:
-        return f"An error occurred during code execution: {e}"
+        err_msg = f"An error occurred during code execution: {e}"
+        print(err_msg)            
+        return err_msg
 
 #######################################################################################
 #                              TOOL #3 - LLM Fallback
@@ -953,7 +960,9 @@ def Ask_Question(question, user_id="anonymous"):
             yield token
             answer_collected += token
     except Exception as e:
-        yield f"\n\n❌ Error occurred while generating the answer: {str(e)}"
+        err_msg = f"❌ Error occurred while generating the answer: {e}"
+        print(err_msg)            # <‑‑ NEW
+        yield f"\n\n{err_msg}"
         return
 
     chat_history.append(f"Assistant: {answer_collected}")
