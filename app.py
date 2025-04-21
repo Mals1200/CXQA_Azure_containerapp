@@ -1,5 +1,5 @@
-# version 5 (new)
-# Handle history better
+# version 6
+# Scrollable "Show Source" Button content
 
 import os
 import asyncio
@@ -143,24 +143,42 @@ async def _bot_logic(turn_context: TurnContext):
                 {
                     "type": "TextBlock",
                     "text": main_answer,
-                    "wrap": True
+                    "wrap": True,
+                    "height": "stretch",
+                    "maxLines": 10
                 },
                 {
-                    "type": "TextBlock",
-                    "text": source_line,
-                    "wrap": True,
-                    "id": "sourceLineBlock",
-                    "isVisible": False
+                    "type": "Container",
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": source_line,
+                            "wrap": True,
+                            "id": "sourceLineBlock",
+                            "isVisible": False,
+                            "maxLines": 3
+                        }
+                    ],
+                    "style": "emphasis",
+                    "bleed": True
                 }
             ]
 
             if appended_details:
                 body_blocks.append({
-                    "type": "TextBlock",
-                    "text": appended_details.strip(),
-                    "wrap": True,
-                    "id": "sourceBlock",
-                    "isVisible": False
+                    "type": "Container",
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": appended_details.strip(),
+                            "wrap": True,
+                            "id": "sourceBlock",
+                            "isVisible": False,
+                            "maxLines": 5
+                        }
+                    ],
+                    "style": "emphasis",
+                    "bleed": True
                 })
 
             actions = []
@@ -178,7 +196,10 @@ async def _bot_logic(turn_context: TurnContext):
                 "body": body_blocks,
                 "actions": actions,
                 "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "version": "1.2"
+                "version": "1.2",
+                "height": "stretch",
+                "minHeight": "100px",
+                "maxHeight": "400px"
             }
             message = Activity(
                 type="message",
