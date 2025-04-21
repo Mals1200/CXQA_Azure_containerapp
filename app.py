@@ -136,68 +136,91 @@ async def _bot_logic(turn_context: TurnContext):
             appended_details = ""
 
         if source_line:
+            # Create a more beautified adaptive card with scrollable source section
             body_blocks = [
                 {
-                    "type": "Container",
-                    "items": [
-                        {
-                            "type": "TextBlock",
-                            "text": main_answer,
-                            "wrap": True
-                        }
-                    ],
-                    "height": "stretch",
-                    "style": "default"
+                    "type": "TextBlock",
+                    "text": main_answer,
+                    "wrap": True,
+                    "size": "Medium"
                 }
             ]
-
-            # Add source information in a separate container
-            source_container = {
-                "type": "Container",
-                "items": [
-                    {
-                        "type": "TextBlock",
-                        "text": source_line,
-                        "wrap": True,
-                        "id": "sourceLineBlock",
-                        "isVisible": False
+            
+            # Create the collapsible source container
+            if source_line or appended_details:
+                # Create a container that will be toggled
+                source_container = {
+                    "type": "Container",
+                    "id": "sourceContainer",
+                    "isVisible": False,
+                    "items": [
+                        {
+                            "type": "Container",
+                            "style": "emphasis",
+                            "items": [
+                                {
+                                    "type": "TextBlock",
+                                    "text": source_line,
+                                    "wrap": True,
+                                    "weight": "Bolder",
+                                    "color": "Accent"
+                                }
+                            ]
+                        }
+                    ]
+                }
+                
+                # Add source details in a scrollable container if it exists
+                if appended_details:
+                    source_details_container = {
+                        "type": "Container",
+                        "style": "default",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": appended_details.strip(),
+                                "wrap": True,
+                                "size": "Small"
+                            }
+                        ],
+                        "height": "stretch",
+                        "maxHeight": "250px"
                     }
-                ],
-                "style": "emphasis",
-                "bleed": True
-            }
-
-            if appended_details:
-                source_container["items"].append({
-                    "type": "TextBlock",
-                    "text": appended_details.strip(),
-                    "wrap": True,
-                    "id": "sourceBlock",
-                    "isVisible": False
+                    source_container["items"].append(source_details_container)
+                
+                body_blocks.append(source_container)
+                
+                # Add a separator before the button
+                body_blocks.append({
+                    "type": "ColumnSet",
+                    "columns": [
+                        {
+                            "type": "Column",
+                            "width": "stretch",
+                            "items": [
+                                {
+                                    "type": "ActionSet",
+                                    "actions": [
+                                        {
+                                            "type": "Action.ToggleVisibility",
+                                            "title": "📚 Show Source",
+                                            "targetElements": ["sourceContainer"],
+                                            "style": "positive"
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
                 })
-
-            body_blocks.append(source_container)
-
-            actions = []
-            if appended_details or source_line:
-                actions = [
-                    {
-                        "type": "Action.ToggleVisibility",
-                        "title": "Show Source",
-                        "targetElements": ["sourceLineBlock", "sourceBlock"]
-                    }
-                ]
 
             adaptive_card = {
                 "type": "AdaptiveCard",
                 "body": body_blocks,
-                "actions": actions,
                 "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "version": "1.2",
-                "height": "stretch",
-                "minHeight": "100px",
-                "maxHeight": "600px"
+                "version": "1.5"
             }
+            
             message = Activity(
                 type="message",
                 attachments=[{
