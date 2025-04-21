@@ -1,6 +1,5 @@
-# Version 18c:
-# return error
-
+# Version 18d:
+# History fix with app.py version(5)
 import os
 import io
 import re
@@ -343,7 +342,7 @@ def split_question_into_subquestions(user_question, use_semantic_parsing=True):
 #######################################################################################
 #                 REFERENCES CHECK & RELEVANCE CHECK  (Points #3 + #1 synergy)
 #######################################################################################
-def references_tabular_data(question, tables_text):
+def references_tabular_data(question, tables_text, recent_history=None):
     llm_system_message = (
         "You are a strict YES/NO classifier. Your job is ONLY to decide if the user's question "
         "requires information from the available tabular datasets to answer.\n"
@@ -355,12 +354,13 @@ def references_tabular_data(question, tables_text):
     {question}
 
     chat_history
-    {recent_history}
+    {recent_history if recent_history else []}
     
     Available Tables:
     {tables_text}
 
     Decision Rules:
+    # Rest of function remains the same
     1. Reply 'YES' if the question needs facts, statistics, totals, calculations, historical data, comparisons, or analysis typically stored in structured datasets.
     2. Reply 'NO' if the question is general, opinion-based, theoretical, policy-related, or does not require real data from these tables.
     3. Completely ignore the sample rows of the tables. Assume full datasets exist beyond the samples.
@@ -610,7 +610,7 @@ def tool_3_llm_fallback(user_question):
 #######################################################################################
 #                            FINAL ANSWER FROM LLM
 #######################################################################################
-def final_answer_llm(user_question, index_dict, python_dict):
+def final_answer_llm(user_question, index_dict, python_dict, recent_history=None):
     index_top_k = index_dict.get("top_k", "No information").strip()
     python_result = python_dict.get("result", "No information").strip()
 
@@ -646,7 +646,7 @@ PYTHON_DATA:
 {python_result}
 
 Chat_history:
-{chat_history}
+{recent_history if recent_history else []}
 """
 
     final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
@@ -656,7 +656,7 @@ Chat_history:
         or final_text.startswith("LLM Error") 
         or final_text.startswith("No content from LLM") 
         or final_text.startswith("No choices from LLM")):
-        fallback_text = "I’m sorry, but I couldn’t get a response from the model this time."
+        fallback_text = "I'm sorry, but I couldn't get a response from the model this time."
         yield fallback_text
         return
 
@@ -817,9 +817,15 @@ def Log_Interaction(
 #######################################################################################
 #                         GREETING HANDLING + AGENT ANSWER
 #######################################################################################
-def agent_answer(user_question, user_tier=1):
+def agent_answer(user_question, user_tier=1, recent_history=None, tool_cache=None):
     if not user_question.strip():
         return
+
+    if tool_cache is None:
+        tool_cache = {}
+        
+    if recent_history is None:
+        recent_history = []
 
     def is_entirely_greeting_or_punc(phrase):
         greet_words = {
@@ -838,14 +844,14 @@ def agent_answer(user_question, user_tier=1):
 
     user_question_stripped = user_question.strip()
     if is_entirely_greeting_or_punc(user_question_stripped):
-        if len(chat_history) < 4:
+        if len(recent_history) < 2:  # Less than 2 messages in history (1 user + 1 assistant)
             yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         else:
             yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         return
 
-    # Check cache
-    cache_key = user_question_stripped.lower()
+    # Check cache with conversation-specific key
+    cache_key = f"{user_tier}:{user_question_stripped.lower()}"
     if cache_key in tool_cache:
         _, _, cached_answer = tool_cache[cache_key]
         yield cached_answer
@@ -861,7 +867,7 @@ def agent_answer(user_question, user_tier=1):
     index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
 
     raw_answer = ""
-    for token in final_answer_llm(user_question, index_dict, python_dict):
+    for token in final_answer_llm(user_question, index_dict, python_dict, recent_history):
         raw_answer += token
 
     # Now unify repeated text cleaning
@@ -904,12 +910,16 @@ def get_user_tier(user_id):
 #######################################################################################
 #                            ASK_QUESTION (Main Entry)
 #######################################################################################
-def Ask_Question(question, user_id="anonymous"):
-    global chat_history
-    global tool_cache
+def Ask_Question(question, user_id="anonymous", chat_history=None, tool_cache=None):
+    # Initialize defaults if not provided
+    if chat_history is None:
+        chat_history = []
+    if tool_cache is None:
+        tool_cache = {}
 
     # Step 1: Determine user tier from the RBAC
     user_tier = get_user_tier(user_id)
+    
     # If user_tier==0 => immediate fallback
     if user_tier == 0:
         fallback_raw = tool_3_llm_fallback(question)
@@ -928,7 +938,6 @@ def Ask_Question(question, user_id="anonymous"):
         )
         return
 
-
     question_lower = question.lower().strip()
 
     # Handle "export" command
@@ -946,8 +955,8 @@ def Ask_Question(question, user_id="anonymous"):
 
     # Handle "restart chat" command
     if question_lower == "restart chat":
-        chat_history = []
-        tool_cache.clear()
+        chat_history.clear()  # Clear the passed-in list instead of global
+        tool_cache.clear()    # Clear the passed-in dict instead of global
         yield "The chat has been restarted."
         return
 
@@ -956,12 +965,14 @@ def Ask_Question(question, user_id="anonymous"):
 
     answer_collected = ""
     try:
-        for token in agent_answer(question, user_tier=user_tier):
+        # Pass recent history to agent_answer
+        recent_history = chat_history[-4:] if len(chat_history) >= 4 else chat_history
+        for token in agent_answer(question, user_tier=user_tier, recent_history=recent_history, tool_cache=tool_cache):
             yield token
             answer_collected += token
     except Exception as e:
         err_msg = f"❌ Error occurred while generating the answer: {e}"
-        print(err_msg)            # <‑‑ NEW
+        print(err_msg)
         yield f"\n\n{err_msg}"
         return
 
@@ -971,10 +982,11 @@ def Ask_Question(question, user_id="anonymous"):
     number_of_messages = 10
     max_pairs = number_of_messages // 2
     max_entries = max_pairs * 2
-    chat_history = chat_history[-max_entries:]
+    if len(chat_history) > max_entries:
+        chat_history[:] = chat_history[-max_entries:]  # Update in-place
 
     # Log Interaction
-    cache_key = question_lower
+    cache_key = f"{user_id}:{question_lower}"
     if cache_key in tool_cache:
         index_dict, python_dict, _ = tool_cache[cache_key]
     else:
