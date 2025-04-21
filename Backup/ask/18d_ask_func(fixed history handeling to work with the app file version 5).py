@@ -1,5 +1,6 @@
 # Version 18d:
 # History fix with app.py version(5)
+
 import os
 import io
 import re
@@ -16,9 +17,10 @@ from azure.storage.blob import BlobServiceClient
 from azure.search.documents import SearchClient
 from azure.core.credentials import AzureKeyCredential
 from tenacity import retry, stop_after_attempt, wait_fixed  # retrying
-from functools import lru_cache  # caching
+from functools import lru_cache, wraps
 from collections import OrderedDict
 import difflib
+import time
 
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
@@ -45,18 +47,37 @@ CONFIG = {
     "TARGET_FOLDER_PATH": "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
 }
 
-# Global objects
+# Global objects with better initialization
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
 logging.getLogger("azure").setLevel(logging.WARNING)
 
+# Initialize with empty values that will be set per conversation
 chat_history = []
-recent_history = chat_history[-4:]
+recent_history = []
 tool_cache = {}
+
+# Add retry decorator for Azure API calls
+def azure_retry(max_attempts=3, delay=2):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_attempts):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    if attempt < max_attempts - 1:
+                        time.sleep(delay * (attempt + 1))  # Exponential backoff
+                    logging.warning(f"Attempt {attempt + 1} failed: {str(e)}")
+            raise last_exception
+        return wrapper
+    return decorator
 
 #######################################################################################
 #                           RBAC HELPERS (User & File Tiers)
 #######################################################################################
-@lru_cache()
+@azure_retry()
 def load_rbac_files():
     """
     Loads User_rbac.xlsx and File_rbac.xlsx from the RBAC folder in Azure Blob Storage, 
@@ -342,7 +363,7 @@ def split_question_into_subquestions(user_question, use_semantic_parsing=True):
 #######################################################################################
 #                 REFERENCES CHECK & RELEVANCE CHECK  (Points #3 + #1 synergy)
 #######################################################################################
-def references_tabular_data(question, tables_text, recent_history=None):
+def references_tabular_data(question, tables_text):
     llm_system_message = (
         "You are a strict YES/NO classifier. Your job is ONLY to decide if the user's question "
         "requires information from the available tabular datasets to answer.\n"
@@ -354,13 +375,12 @@ def references_tabular_data(question, tables_text, recent_history=None):
     {question}
 
     chat_history
-    {recent_history if recent_history else []}
+    {recent_history}
     
     Available Tables:
     {tables_text}
 
     Decision Rules:
-    # Rest of function remains the same
     1. Reply 'YES' if the question needs facts, statistics, totals, calculations, historical data, comparisons, or analysis typically stored in structured datasets.
     2. Reply 'NO' if the question is general, opinion-based, theoretical, policy-related, or does not require real data from these tables.
     3. Completely ignore the sample rows of the tables. Assume full datasets exist beyond the samples.
@@ -391,7 +411,7 @@ def is_text_relevant(question, snippet):
 #######################################################################################
 #                              TOOL #1 - Index Search
 #######################################################################################
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+@azure_retry()
 def tool_1_index_search(user_question, top_k=5, user_tier=1):
     """
     Modified version: uses split_question_into_subquestions to handle multi-part queries.
@@ -498,7 +518,7 @@ def reference_table_data(code_str, user_tier):
 #######################################################################################
 #                              TOOL #2 - Code Run
 #######################################################################################
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+@azure_retry()
 def tool_2_code_run(user_question, user_tier=1):
     if not references_tabular_data(user_question, TABLES):
         return {"result": "No information", "code": ""}
@@ -511,12 +531,12 @@ Don't give examples, only provide the actual code. If you can't provide the code
 
 **Rules**:
 1. Only use columns that actually exist. Do NOT invent columns or table names.
-2. Don’t rely on sample rows; the real dataset can have more data. Just reference the correct columns as shown in the schemas.
+2. Don't rely on sample rows; the real dataset can have more data. Just reference the correct columns as shown in the schemas.
 3. Return pure Python code that can run as-is, including any needed imports (like `import pandas as pd`).
 4. The code must produce a final print statement with the answer.
-5. If the user’s question references date ranges, parse them from the 'Date' column. If monthly data is requested, group by month or similar.
+5. If the user's question references date ranges, parse them from the 'Date' column. If monthly data is requested, group by month or similar.
 6. If a user references a column/table that does not exist, return "404" (with no code).
-7. Use semantic reasoning to handle synonyms or minor typos (e.g., “Al Bujairy,” “albujairi,” etc.), as long as they reasonably map to the real table names.
+7. Use semantic reasoning to handle synonyms or minor typos (e.g., "Al Bujairy," "albujairi," etc.), as long as they reasonably map to the real table names.
 
 User question:
 {user_question}
@@ -610,7 +630,7 @@ def tool_3_llm_fallback(user_question):
 #######################################################################################
 #                            FINAL ANSWER FROM LLM
 #######################################################################################
-def final_answer_llm(user_question, index_dict, python_dict, recent_history=None):
+def final_answer_llm(user_question, index_dict, python_dict):
     index_top_k = index_dict.get("top_k", "No information").strip()
     python_result = python_dict.get("result", "No information").strip()
 
@@ -646,7 +666,7 @@ PYTHON_DATA:
 {python_result}
 
 Chat_history:
-{recent_history if recent_history else []}
+{chat_history}
 """
 
     final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
@@ -817,15 +837,9 @@ def Log_Interaction(
 #######################################################################################
 #                         GREETING HANDLING + AGENT ANSWER
 #######################################################################################
-def agent_answer(user_question, user_tier=1, recent_history=None, tool_cache=None):
+def agent_answer(user_question, user_tier=1):
     if not user_question.strip():
         return
-
-    if tool_cache is None:
-        tool_cache = {}
-        
-    if recent_history is None:
-        recent_history = []
 
     def is_entirely_greeting_or_punc(phrase):
         greet_words = {
@@ -844,14 +858,14 @@ def agent_answer(user_question, user_tier=1, recent_history=None, tool_cache=Non
 
     user_question_stripped = user_question.strip()
     if is_entirely_greeting_or_punc(user_question_stripped):
-        if len(recent_history) < 2:  # Less than 2 messages in history (1 user + 1 assistant)
+        if len(chat_history) < 4:
             yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         else:
             yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         return
 
-    # Check cache with conversation-specific key
-    cache_key = f"{user_tier}:{user_question_stripped.lower()}"
+    # Check cache
+    cache_key = user_question_stripped.lower()
     if cache_key in tool_cache:
         _, _, cached_answer = tool_cache[cache_key]
         yield cached_answer
@@ -867,7 +881,7 @@ def agent_answer(user_question, user_tier=1, recent_history=None, tool_cache=Non
     index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
 
     raw_answer = ""
-    for token in final_answer_llm(user_question, index_dict, python_dict, recent_history):
+    for token in final_answer_llm(user_question, index_dict, python_dict):
         raw_answer += token
 
     # Now unify repeated text cleaning
@@ -910,93 +924,105 @@ def get_user_tier(user_id):
 #######################################################################################
 #                            ASK_QUESTION (Main Entry)
 #######################################################################################
-def Ask_Question(question, user_id="anonymous", chat_history=None, tool_cache=None):
-    # Initialize defaults if not provided
-    if chat_history is None:
-        chat_history = []
-    if tool_cache is None:
-        tool_cache = {}
+def Ask_Question(question, user_id="anonymous"):
+    global chat_history
+    global tool_cache
+    global recent_history
 
-    # Step 1: Determine user tier from the RBAC
-    user_tier = get_user_tier(user_id)
-    
-    # If user_tier==0 => immediate fallback
-    if user_tier == 0:
-        fallback_raw = tool_3_llm_fallback(question)
-        # Use the same style as no-data fallback:
-        fallback = f"AI Generated answer:\n{fallback_raw}\nSource: Ai Generated"
-        chat_history.append(f"User: {question}")
-        chat_history.append(f"Assistant: {fallback}")
-        yield fallback
-        Log_Interaction(
-            question=question,
-            full_answer=fallback,
-            chat_history=chat_history,
-            user_id=user_id,
-            index_dict={},
-            python_dict={}
-        )
-        return
-
-    question_lower = question.lower().strip()
-
-    # Handle "export" command
-    if question_lower.startswith("export"):
-        from Export_Agent import Call_Export
-        chat_history.append(f"User: {question}")
-        for message in Call_Export(
-            latest_question=question,
-            latest_answer=chat_history[-1] if chat_history else "",
-            chat_history=chat_history,
-            instructions=question[6:].strip()
-        ):
-            yield message
-        return
-
-    # Handle "restart chat" command
-    if question_lower == "restart chat":
-        chat_history.clear()  # Clear the passed-in list instead of global
-        tool_cache.clear()    # Clear the passed-in dict instead of global
-        yield "The chat has been restarted."
-        return
-
-    # Add user question to chat history
-    chat_history.append(f"User: {question}")
-
-    answer_collected = ""
     try:
-        # Pass recent history to agent_answer
-        recent_history = chat_history[-4:] if len(chat_history) >= 4 else chat_history
-        for token in agent_answer(question, user_tier=user_tier, recent_history=recent_history, tool_cache=tool_cache):
-            yield token
-            answer_collected += token
+        # Step 1: Determine user tier from the RBAC
+        user_tier = get_user_tier(user_id)
+        
+        # If user_tier==0 => immediate fallback
+        if user_tier == 0:
+            fallback_raw = tool_3_llm_fallback(question)
+            fallback = f"AI Generated answer:\n{fallback_raw}\nSource: Ai Generated"
+            chat_history.append(f"User: {question}")
+            chat_history.append(f"Assistant: {fallback}")
+            yield fallback
+            Log_Interaction(
+                question=question,
+                full_answer=fallback,
+                chat_history=chat_history,
+                user_id=user_id,
+                index_dict={},
+                python_dict={}
+            )
+            return
+
+        question_lower = question.lower().strip()
+
+        # Handle "export" command
+        if question_lower.startswith("export"):
+            try:
+                from Export_Agent import Call_Export
+                chat_history.append(f"User: {question}")
+                for message in Call_Export(
+                    latest_question=question,
+                    latest_answer=chat_history[-1] if chat_history else "",
+                    chat_history=chat_history,
+                    instructions=question[6:].strip()
+                ):
+                    yield message
+                return
+            except Exception as e:
+                error_msg = f"Error in export processing: {str(e)}"
+                logging.error(error_msg)
+                yield error_msg
+                return
+
+        # Handle "restart chat" command
+        if question_lower == "restart chat":
+            chat_history = []
+            tool_cache.clear()
+            recent_history = []
+            yield "The chat has been restarted."
+            return
+
+        # Add user question to chat history
+        chat_history.append(f"User: {question}")
+        recent_history = chat_history[-4:] if len(chat_history) >= 4 else chat_history.copy()
+
+        answer_collected = ""
+        try:
+            for token in agent_answer(question, user_tier=user_tier):
+                yield token
+                answer_collected += token
+        except Exception as e:
+            err_msg = f"❌ Error occurred while generating the answer: {str(e)}"
+            logging.error(err_msg)
+            yield f"\n\n{err_msg}"
+            return
+
+        chat_history.append(f"Assistant: {answer_collected}")
+        recent_history = chat_history[-4:] if len(chat_history) >= 4 else chat_history.copy()
+
+        # Truncate history
+        number_of_messages = 10
+        max_pairs = number_of_messages // 2
+        max_entries = max_pairs * 2
+        chat_history = chat_history[-max_entries:]
+
+        # Log Interaction
+        cache_key = question_lower
+        if cache_key in tool_cache:
+            index_dict, python_dict, _ = tool_cache[cache_key]
+        else:
+            index_dict, python_dict = {}, {}
+
+        try:
+            Log_Interaction(
+                question=question,
+                full_answer=answer_collected,
+                chat_history=chat_history,
+                user_id=user_id,
+                index_dict=index_dict,
+                python_dict=python_dict
+            )
+        except Exception as e:
+            logging.error(f"Error logging interaction: {str(e)}")
+
     except Exception as e:
-        err_msg = f"❌ Error occurred while generating the answer: {e}"
-        print(err_msg)
-        yield f"\n\n{err_msg}"
-        return
-
-    chat_history.append(f"Assistant: {answer_collected}")
-
-    # Truncate history
-    number_of_messages = 10
-    max_pairs = number_of_messages // 2
-    max_entries = max_pairs * 2
-    if len(chat_history) > max_entries:
-        chat_history[:] = chat_history[-max_entries:]  # Update in-place
-
-    # Log Interaction
-    cache_key = f"{user_id}:{question_lower}"
-    if cache_key in tool_cache:
-        index_dict, python_dict, _ = tool_cache[cache_key]
-    else:
-        index_dict, python_dict = {}, {}
-
-    Log_Interaction(
-        question=question,
-        full_answer=answer_collected,
-        chat_history=chat_history,
-        user_id=user_id,
-        index_dict=index_dict,
-        python_dict=python_dict
-    )
+        error_msg = f"Critical error in Ask_Question: {str(e)}"
+        logging.error(error_msg)
+        yield error_msg
