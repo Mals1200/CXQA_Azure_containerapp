@@ -1,5 +1,3 @@
-# Version 19
-
 import os
 import io
 import re
@@ -712,11 +710,14 @@ def post_process_source(final_text, index_dict, python_dict):
         # Format the source information
         source_info = ""
         if index_files:
-            source_info += "\nSource files: " + ", ".join(index_files)
+            source_info += f"referenced from {', '.join(f'"{file}"' for file in index_files)}\n"
         if python_files:
-            source_info += "\nCalculated using: " + ", ".join(python_files)
+            source_info += f"Calculated using {', '.join(f'"{file}"' for file in python_files)}\n"
             
-        return f"""{final_text}{source_info}
+        # Replace "Source: Index & Python" with our source_info + "Source: Index & Python"
+        final_text = final_text.replace("Source: Index & Python", f"{source_info}Source: Index & Python")
+            
+        return f"""{final_text}
 
 ---SOURCE_DETAILS---
 Index Data:
@@ -735,11 +736,15 @@ Python Code:
             file_pattern = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
             python_files = list(set(file_pattern.findall(code_text)))
         
+        # Create the "Calculated using" line
         source_info = ""
         if python_files:
-            source_info = "\nCalculated using: " + ", ".join(python_files)
+            source_info = f"Calculated using {', '.join(f'"{file}"' for file in python_files)}\n"
+        
+        # Replace "Source: Python" with our source_info + "Source: Python"
+        final_text = final_text.replace("Source: Python", f"{source_info}Source: Python")
             
-        return f"""{final_text}{source_info}
+        return f"""{final_text}
 
 ---SOURCE_DETAILS---
 Python Code:
@@ -757,11 +762,15 @@ Python Code:
                     if filename and filename not in index_files:
                         index_files.append(filename)
         
+        # Create the "referenced from" line
         source_info = ""
         if index_files:
-            source_info = "\nSource files: " + ", ".join(index_files)
+            source_info = f"referenced from {', '.join(f'"{file}"' for file in index_files)}\n"
+        
+        # Replace "Source: Index" with our source_info + "Source: Index"
+        final_text = final_text.replace("Source: Index", f"{source_info}Source: Index")
             
-        return f"""{final_text}{source_info}
+        return f"""{final_text}
 
 ---SOURCE_DETAILS---
 Index Data:
