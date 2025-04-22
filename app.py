@@ -145,8 +145,7 @@ async def _bot_logic(turn_context: TurnContext):
                     "type": "TextBlock",
                     "text": main_answer,
                     "wrap": True,
-                    "size": "Medium",
-                    "spacing": "Medium"
+                    "size": "Medium"
                 }
             ]
             
@@ -157,20 +156,17 @@ async def _bot_logic(turn_context: TurnContext):
                     "type": "Container",
                     "id": "sourceContainer",
                     "isVisible": False,
-                    "spacing": "Medium",
                     "items": [
                         {
                             "type": "Container",
                             "style": "emphasis",
-                            "spacing": "Small",
                             "items": [
                                 {
                                     "type": "TextBlock",
                                     "text": source_line,
                                     "wrap": True,
                                     "weight": "Bolder",
-                                    "color": "Accent",
-                                    "spacing": "Small"
+                                    "color": "Accent"
                                 }
                             ]
                         }
@@ -182,14 +178,12 @@ async def _bot_logic(turn_context: TurnContext):
                     source_details_container = {
                         "type": "Container",
                         "style": "default",
-                        "spacing": "Small",
                         "items": [
                             {
                                 "type": "TextBlock",
                                 "text": appended_details.strip(),
                                 "wrap": True,
-                                "size": "Small",
-                                "spacing": "Small"
+                                "size": "Small"
                             }
                         ],
                         "bleed": True
@@ -201,7 +195,6 @@ async def _bot_logic(turn_context: TurnContext):
                         "isScrollable": True,
                         "height": "auto",
                         "maxHeight": "250px",
-                        "spacing": "Small",
                         "items": [source_details_container]
                     }
                     
@@ -209,21 +202,14 @@ async def _bot_logic(turn_context: TurnContext):
                 
                 body_blocks.append(source_container)
                 
-                # Enhanced button with dynamic text
+                # Simple button with no extra styling
                 body_blocks.append({
                     "type": "ActionSet",
-                    "spacing": "Small",
                     "actions": [
                         {
                             "type": "Action.ToggleVisibility",
                             "title": "Show Source",
-                            "targetElements": ["sourceContainer"],
-                            "style": "positive",
-                            "id": "sourceButton",
-                            "data": {
-                                "initialTitle": "Show Source",
-                                "toggledTitle": "Hide Source"
-                            }
+                            "targetElements": ["sourceContainer"]
                         }
                     ]
                 })
@@ -232,8 +218,7 @@ async def _bot_logic(turn_context: TurnContext):
                 "type": "AdaptiveCard",
                 "body": body_blocks,
                 "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "version": "1.5",
-                "style": "default"
+                "version": "1.5"
             }
             
             message = Activity(
