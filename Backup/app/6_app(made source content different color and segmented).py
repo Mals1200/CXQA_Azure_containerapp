@@ -1,3 +1,6 @@
+# Version 6
+# made source content different color(Blue) and segmented
+
 import os
 import asyncio
 from threading import Lock
