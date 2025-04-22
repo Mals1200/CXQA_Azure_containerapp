@@ -1,5 +1,4 @@
-# Version 18d (new):
-# Works with app version 5 to have a better consistant output.
+# Version 19
 
 import os
 import io
@@ -687,30 +686,85 @@ Chat_history:
 #######################################################################################
 def post_process_source(final_text, index_dict, python_dict):
     text_lower = final_text.lower()
-
+    
+    # Extract the source files or code information
     if "source: index & python" in text_lower:
+        # Get source filenames from top_k content
         top_k_text = index_dict.get("top_k", "No information")
         code_text = python_dict.get("code", "")
-        return f"""{final_text}
+        
+        # Extract filenames from index data
+        index_files = []
+        if top_k_text and top_k_text != "No information":
+            for line in top_k_text.split('\n'):
+                if line.startswith("title:") or 'title":' in line:
+                    filename = line.split(":", 1)[1].strip().strip('"')
+                    if filename and filename not in index_files:
+                        index_files.append(filename)
+        
+        # Extract filenames from Python code
+        python_files = []
+        if code_text:
+            import re
+            file_pattern = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+            python_files = list(set(file_pattern.findall(code_text)))
+        
+        # Format the source information
+        source_info = ""
+        if index_files:
+            source_info += "\nSource files: " + ", ".join(index_files)
+        if python_files:
+            source_info += "\nCalculated using: " + ", ".join(python_files)
+            
+        return f"""{final_text}{source_info}
 
-The Files:
+---SOURCE_DETAILS---
+Index Data:
 {top_k_text}
 
-The code:
+Python Code:
 {code_text}
 """
     elif "source: python" in text_lower:
         code_text = python_dict.get("code", "")
-        return f"""{final_text}
+        
+        # Extract filenames from code
+        python_files = []
+        if code_text:
+            import re
+            file_pattern = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+            python_files = list(set(file_pattern.findall(code_text)))
+        
+        source_info = ""
+        if python_files:
+            source_info = "\nCalculated using: " + ", ".join(python_files)
+            
+        return f"""{final_text}{source_info}
 
-The code:
+---SOURCE_DETAILS---
+Python Code:
 {code_text}
 """
     elif "source: index" in text_lower:
         top_k_text = index_dict.get("top_k", "No information")
-        return f"""{final_text}
+        
+        # Extract filenames from index data
+        index_files = []
+        if top_k_text and top_k_text != "No information":
+            for line in top_k_text.split('\n'):
+                if line.startswith("title:") or 'title":' in line:
+                    filename = line.split(":", 1)[1].strip().strip('"')
+                    if filename and filename not in index_files:
+                        index_files.append(filename)
+        
+        source_info = ""
+        if index_files:
+            source_info = "\nSource files: " + ", ".join(index_files)
+            
+        return f"""{final_text}{source_info}
 
-The Files:
+---SOURCE_DETAILS---
+Index Data:
 {top_k_text}
 """
     else:
