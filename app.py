@@ -1,3 +1,6 @@
+# Version 6
+# made source content different color(Blue) and segmented
+
 import os
 import asyncio
 from threading import Lock
@@ -136,36 +139,86 @@ async def _bot_logic(turn_context: TurnContext):
             appended_details = ""
 
         if source_line:
-            # Create a simple adaptive card with basic elements
-            adaptive_card = {
-                "type": "AdaptiveCard",
-                "version": "1.0",
-                "body": [
-                    {
-                        "type": "TextBlock",
-                        "text": main_answer,
-                        "wrap": True
-                    },
-                    {
+            # Create a more beautified adaptive card with scrollable source section
+            body_blocks = [
+                {
+                    "type": "TextBlock",
+                    "text": main_answer,
+                    "wrap": True,
+                    "size": "Medium"
+                }
+            ]
+            
+            # Create the collapsible source container
+            if source_line or appended_details:
+                # Create a container that will be toggled
+                source_container = {
+                    "type": "Container",
+                    "id": "sourceContainer",
+                    "isVisible": False,
+                    "items": [
+                        {
+                            "type": "Container",
+                            "style": "emphasis",
+                            "items": [
+                                {
+                                    "type": "TextBlock",
+                                    "text": source_line,
+                                    "wrap": True,
+                                    "weight": "Bolder",
+                                    "color": "Accent"
+                                }
+                            ]
+                        }
+                    ]
+                }
+                
+                # Add source details in a properly scrollable container if it exists
+                if appended_details:
+                    source_details_container = {
                         "type": "Container",
-                        "id": "sourceContainer",
-                        "isVisible": False,
+                        "style": "default",
                         "items": [
                             {
                                 "type": "TextBlock",
-                                "text": source_line + "\n\n" + (appended_details.strip() if appended_details else ""),
-                                "wrap": True
+                                "text": appended_details.strip(),
+                                "wrap": True,
+                                "size": "Small"
                             }
-                        ]
+                        ],
+                        "bleed": True
                     }
-                ],
-                "actions": [
-                    {
-                        "type": "Action.ToggleVisibility",
-                        "title": "Show Source",
-                        "targetElements": ["sourceContainer"]
+                    
+                    # Wrap in a scrollable container
+                    scrollable_container = {
+                        "type": "Container",
+                        "isScrollable": True,
+                        "height": "auto",
+                        "maxHeight": "250px",
+                        "items": [source_details_container]
                     }
-                ]
+                    
+                    source_container["items"].append(scrollable_container)
+                
+                body_blocks.append(source_container)
+                
+                # Simple button with no extra styling
+                body_blocks.append({
+                    "type": "ActionSet",
+                    "actions": [
+                        {
+                            "type": "Action.ToggleVisibility",
+                            "title": "Show Source",
+                            "targetElements": ["sourceContainer"]
+                        }
+                    ]
+                })
+
+            adaptive_card = {
+                "type": "AdaptiveCard",
+                "body": body_blocks,
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "version": "1.5"
             }
             
             message = Activity(
