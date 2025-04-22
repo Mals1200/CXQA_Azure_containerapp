@@ -208,7 +208,7 @@ async def _bot_logic(turn_context: TurnContext):
                     "actions": [
                         {
                             "type": "Action.ToggleVisibility",
-                            "title": "Show Source",
+                            "title": "Source",
                             "targetElements": ["sourceContainer"]
                         }
                     ]
