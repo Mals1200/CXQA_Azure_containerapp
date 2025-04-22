@@ -136,62 +136,36 @@ async def _bot_logic(turn_context: TurnContext):
             appended_details = ""
 
         if source_line:
-            # Create a more beautified adaptive card with scrollable source section
-            body_blocks = [
-                {
-                    "type": "TextBlock",
-                    "text": main_answer,
-                    "wrap": True,
-                    "size": "Medium"
-                }
-            ]
-            
-            # Create the collapsible source container
-            if source_line or appended_details:
-                # We'll create a single, unified scrollable container for all source content
-                combined_source = source_line + "\n\n" + (appended_details.strip() if appended_details else "")
-                
-                # Create a container that will be toggled
-                source_container = {
-                    "type": "Container",
-                    "id": "sourceContainer",
-                    "isVisible": False,
-                    "items": [
-                        {
-                            "type": "Container",
-                            "style": "emphasis",
-                            "items": [
-                                {
-                                    "type": "TextBlock",
-                                    "text": combined_source,
-                                    "wrap": True,
-                                    "size": "Small"
-                                }
-                            ]
-                        }
-                    ],
-                    "height": "200px"
-                }
-                
-                body_blocks.append(source_container)
-                
-                # Simple button with no extra styling
-                body_blocks.append({
-                    "type": "ActionSet",
-                    "actions": [
-                        {
-                            "type": "Action.ToggleVisibility",
-                            "title": "Show Source",
-                            "targetElements": ["sourceContainer"]
-                        }
-                    ]
-                })
-
+            # Create a simple adaptive card with basic elements
             adaptive_card = {
                 "type": "AdaptiveCard",
-                "body": body_blocks,
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "version": "1.2"
+                "version": "1.0",
+                "body": [
+                    {
+                        "type": "TextBlock",
+                        "text": main_answer,
+                        "wrap": True
+                    },
+                    {
+                        "type": "Container",
+                        "id": "sourceContainer",
+                        "isVisible": False,
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": source_line + "\n\n" + (appended_details.strip() if appended_details else ""),
+                                "wrap": True
+                            }
+                        ]
+                    }
+                ],
+                "actions": [
+                    {
+                        "type": "Action.ToggleVisibility",
+                        "title": "Show Source",
+                        "targetElements": ["sourceContainer"]
+                    }
+                ]
             }
             
             message = Activity(
