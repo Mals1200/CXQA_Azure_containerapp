@@ -1,5 +1,6 @@
 # Version 6
 # made source content different color(Blue) and segmented
+#Button from "Show Source" to "Source"
 
 import os
 import asyncio
@@ -208,7 +209,7 @@ async def _bot_logic(turn_context: TurnContext):
                     "actions": [
                         {
                             "type": "Action.ToggleVisibility",
-                            "title": "Show Source",
+                            "title": "Source",
                             "targetElements": ["sourceContainer"]
                         }
                     ]
