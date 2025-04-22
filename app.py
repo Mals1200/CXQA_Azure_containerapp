@@ -1,6 +1,4 @@
-# Version 6
-# made source content different color(Blue) and segmented
-
+# Version 7
 import os
 import asyncio
 from threading import Lock
@@ -139,6 +137,21 @@ async def _bot_logic(turn_context: TurnContext):
             appended_details = ""
 
         if source_line:
+            # Extract file information lines if they exist
+            source_files_line = ""
+            calculated_using_line = ""
+            
+            # Check for source files and calculated using information
+            for line in main_answer.split('\n'):
+                if line.strip().startswith("Source files:"):
+                    source_files_line = line.strip()
+                    main_answer = main_answer.replace(line, '')
+                elif line.strip().startswith("Calculated using:"):
+                    calculated_using_line = line.strip()
+                    main_answer = main_answer.replace(line, '')
+            
+            main_answer = main_answer.strip()
+            
             # Create a more beautified adaptive card with scrollable source section
             body_blocks = [
                 {
@@ -148,6 +161,38 @@ async def _bot_logic(turn_context: TurnContext):
                     "size": "Medium"
                 }
             ]
+            
+            # Add source files or calculated using information if they exist
+            if source_files_line or calculated_using_line:
+                source_info_blocks = []
+                
+                if source_files_line:
+                    source_info_blocks.append({
+                        "type": "TextBlock",
+                        "text": source_files_line,
+                        "wrap": True,
+                        "size": "Small",
+                        "color": "Accent",
+                        "weight": "Bolder"
+                    })
+                
+                if calculated_using_line:
+                    source_info_blocks.append({
+                        "type": "TextBlock",
+                        "text": calculated_using_line,
+                        "wrap": True,
+                        "size": "Small",
+                        "color": "Accent",
+                        "weight": "Bolder"
+                    })
+                
+                body_blocks.append({
+                    "type": "Container",
+                    "style": "emphasis",
+                    "items": source_info_blocks,
+                    "bleed": True,
+                    "spacing": "Small"
+                })
             
             # Create the collapsible source container
             if source_line or appended_details:
@@ -170,18 +215,22 @@ async def _bot_logic(turn_context: TurnContext):
                                 }
                             ]
                         }
-                    ]
+                    ],
+                    "spacing": "Medium"
                 }
                 
                 # Add source details in a properly scrollable container if it exists
                 if appended_details:
+                    # Clean up the appended details to look nicer
+                    clean_details = appended_details.replace("---SOURCE_DETAILS---", "").strip()
+                    
                     source_details_container = {
                         "type": "Container",
                         "style": "default",
                         "items": [
                             {
                                 "type": "TextBlock",
-                                "text": appended_details.strip(),
+                                "text": clean_details,
                                 "wrap": True,
                                 "size": "Small"
                             }
@@ -202,14 +251,15 @@ async def _bot_logic(turn_context: TurnContext):
                 
                 body_blocks.append(source_container)
                 
-                # Simple button with no extra styling
+                # Simple button with improved styling
                 body_blocks.append({
                     "type": "ActionSet",
                     "actions": [
                         {
                             "type": "Action.ToggleVisibility",
-                            "title": "Source",
-                            "targetElements": ["sourceContainer"]
+                            "title": "View Source Details",
+                            "targetElements": ["sourceContainer"],
+                            "style": "positive"
                         }
                     ]
                 })
