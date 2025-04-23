@@ -176,6 +176,7 @@ async def _bot_logic(turn_context: TurnContext):
                 
                 # Add source details in a properly scrollable container if it exists
                 if appended_details:
+                    # Prepare the content for the scrollable container
                     source_details_container = {
                         "type": "Container",
                         "style": "default",
@@ -190,12 +191,15 @@ async def _bot_logic(turn_context: TurnContext):
                         "bleed": True
                     }
                     
-                    # Wrap in a scrollable container
+                    # Create an explicitly scrollable container with fixed height
                     scrollable_container = {
                         "type": "Container",
                         "isScrollable": True,
-                        "height": "auto",
-                        "maxHeight": "250px",
+                        "height": "200px",  # Fixed height to force scrolling
+                        "verticalContentAlignment": "top",
+                        "style": "emphasis",
+                        "separator": true,
+                        "spacing": "medium",
                         "items": [source_details_container]
                     }
                     
