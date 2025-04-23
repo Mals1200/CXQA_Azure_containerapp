@@ -150,69 +150,65 @@ async def _bot_logic(turn_context: TurnContext):
                 }
             ]
             
-            # Create the collapsible source container
+            # Create the collapsible source section with improved styling
             if source_line or appended_details:
-                # Create a container that will be toggled
-                source_container = {
+                # Create the source header
+                source_header = {
                     "type": "Container",
-                    "id": "sourceContainer",
-                    "isVisible": False,
+                    "style": "emphasis",
                     "items": [
                         {
-                            "type": "Container",
-                            "style": "emphasis",
-                            "items": [
-                                {
-                                    "type": "TextBlock",
-                                    "text": source_line,
-                                    "wrap": True,
-                                    "weight": "Bolder",
-                                    "color": "Accent"
-                                }
-                            ]
+                            "type": "TextBlock",
+                            "text": source_line,
+                            "wrap": True,
+                            "weight": "Bolder",
+                            "color": "Accent"
                         }
                     ]
                 }
+                
+                # Create scrollable content container for source details
+                source_content = []
                 
                 # Add source details in a properly scrollable container if it exists
                 if appended_details:
                     # Clean up the appended details to look nicer
                     clean_details = appended_details.replace("---SOURCE_DETAILS---", "").strip()
                     
-                    source_details_container = {
-                        "type": "Container",
-                        "style": "default",
-                        "items": [
-                            {
-                                "type": "TextBlock",
-                                "text": clean_details,
-                                "wrap": True,
-                                "size": "Small"
-                            }
-                        ],
-                        "bleed": True
-                    }
-                    
-                    # Wrap in a scrollable container
-                    scrollable_container = {
-                        "type": "Container",
-                        "isScrollable": True,
-                        "height": "auto",
-                        "maxHeight": "250px",
-                        "items": [source_details_container]
-                    }
-                    
-                    source_container["items"].append(scrollable_container)
+                    source_content.append({
+                        "type": "TextBlock",
+                        "text": clean_details,
+                        "wrap": True,
+                        "size": "Small"
+                    })
+                
+                # Combine the header and content into a collapsible container
+                source_container = {
+                    "type": "Container",
+                    "id": "sourceContainer",
+                    "isVisible": False,
+                    "items": [
+                        source_header,
+                        {
+                            "type": "Container",
+                            "isScrollable": True,
+                            "height": "200px",  # Fixed height
+                            "items": source_content,
+                            "style": "default",
+                            "separator": True
+                        }
+                    ]
+                }
                 
                 body_blocks.append(source_container)
                 
-                # Simple button with no extra styling
+                # Toggle button with improved labeling
                 body_blocks.append({
                     "type": "ActionSet",
                     "actions": [
                         {
                             "type": "Action.ToggleVisibility",
-                            "title": "View Source Details",
+                            "title": "Source",
                             "targetElements": ["sourceContainer"],
                             "style": "positive"
                         }
