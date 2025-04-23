@@ -1,10 +1,10 @@
-# Version 6
+# Version 7
 # made source content different color(Blue) and segmented
 #Button from "Show Source" to "Source"
+#Fixed text formatting in Teams adaptive cards
 
 import os
 import asyncio
-import re
 from threading import Lock
 
 from flask import Flask, request, jsonify, Response
@@ -71,27 +71,46 @@ def messages():
     return Response(status=200)
 
 def format_text_for_adaptive_card(text):
-    """Format text for better readability in Adaptive Cards"""
-    # Replace numbered list patterns with proper formatting
-    text = re.sub(r'(\d+)\.\s+([A-Z][^:]+):', r'\n**\1. \2:**', text)
-    text = re.sub(r'(\d+)\.\s+([A-Z][^:]+)([^:])', r'\n**\1. \2**\3', text)
+    """
+    Format text to preserve line breaks and markdown-style formatting
+    for display in Teams adaptive cards.
+    """
+    # Replace markdown bold with actual bold formatting
+    text = text.replace("**", "")
     
-    # Handle unlisted steps
-    text = re.sub(r'(Steps?:)', r'\n**\1**', text, flags=re.IGNORECASE)
+    # Ensure proper paragraphs by splitting on double newlines and 
+    # creating separate TextBlock items for each paragraph
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
     
-    # Format "If you..." sections as headers
-    text = re.sub(r'(If you [^:]+:)', r'\n\n**\1**', text)
+    text_blocks = []
+    for paragraph in paragraphs:
+        # Split the paragraph into lines to handle lists and bullets properly
+        lines = paragraph.split("\n")
+        if len(lines) == 1:
+            # Simple paragraph
+            text_blocks.append({
+                "type": "TextBlock",
+                "text": paragraph,
+                "wrap": True,
+                "spacing": "medium"
+            })
+        else:
+            # This might be a list or bullets, create a container for it
+            list_items = []
+            for line in lines:
+                list_items.append({
+                    "type": "TextBlock",
+                    "text": line,
+                    "wrap": True,
+                    "spacing": "small"
+                })
+            text_blocks.append({
+                "type": "Container",
+                "items": list_items,
+                "spacing": "medium"
+            })
     
-    # Add spacing between numbered points that don't have headers
-    text = re.sub(r'(\.\s+)(\d+\.)', r'\1\n\2', text)
-    
-    # Break up "For..." sections
-    text = re.sub(r'(For [^:]+:)', r'\n\n**\1**', text)
-    
-    # Ensure proper spacing between sections
-    text = re.sub(r'([.!?])(\s+)([A-Z])', r'\1\n\n\3', text)
-    
-    return text
+    return text_blocks
 
 async def _bot_logic(turn_context: TurnContext):
     conversation_id = turn_context.activity.conversation.id
@@ -150,6 +169,7 @@ async def _bot_logic(turn_context: TurnContext):
         state['cache'] = ask_func.tool_cache
 
         # Parse and format the response
+        import re
         source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
         match = re.search(source_pattern, answer_text, flags=re.DOTALL)
 
@@ -162,31 +182,9 @@ async def _bot_logic(turn_context: TurnContext):
             source_line = ""
             appended_details = ""
 
-        # Apply text formatting for better readability
-        formatted_answer = format_text_for_adaptive_card(main_answer)
-
         if source_line:
-            # Create a more beautified adaptive card with scrollable source section
-            text_blocks = []
-            
-            # Split the formatted answer into paragraphs
-            paragraphs = formatted_answer.split("\n\n")
-            for i, paragraph in enumerate(paragraphs):
-                if paragraph.strip():
-                    text_blocks.append({
-                        "type": "TextBlock",
-                        "text": paragraph,
-                        "wrap": True,
-                        "size": "Medium",
-                        "spacing": "Medium" if i > 0 else "Default"
-                    })
-            
-            body_blocks = text_blocks if text_blocks else [{
-                "type": "TextBlock",
-                "text": formatted_answer,
-                "wrap": True,
-                "size": "Medium"
-            }]
+            # Format the main answer as multiple text blocks to preserve formatting
+            body_blocks = format_text_for_adaptive_card(main_answer)
             
             # Create the collapsible source container
             if source_line or appended_details:
@@ -214,17 +212,11 @@ async def _bot_logic(turn_context: TurnContext):
                 
                 # Add source details in a properly scrollable container if it exists
                 if appended_details:
+                    source_details_text_blocks = format_text_for_adaptive_card(appended_details.strip())
                     source_details_container = {
                         "type": "Container",
                         "style": "default",
-                        "items": [
-                            {
-                                "type": "TextBlock",
-                                "text": appended_details.strip(),
-                                "wrap": True,
-                                "size": "Small"
-                            }
-                        ],
+                        "items": source_details_text_blocks,
                         "bleed": True
                     }
                     
@@ -269,7 +261,9 @@ async def _bot_logic(turn_context: TurnContext):
             )
             await turn_context.send_activity(message)
         else:
-            await turn_context.send_activity(Activity(type="message", text=formatted_answer))
+            # For simple responses without source, send formatted markdown directly
+            # Teams supports some markdown in regular messages
+            await turn_context.send_activity(Activity(type="message", text=main_answer))
 
     except Exception as e:
         error_message = f"An error occurred while processing your request: {str(e)}"
