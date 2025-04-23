@@ -76,100 +76,215 @@ def format_text_for_adaptive_card(text):
     Format text to preserve line breaks and markdown-style formatting
     for display in Teams adaptive cards.
     """
-    # Replace markdown bold with actual bold formatting
-    text = text.replace("**", "")
-    
-    # Split the text into paragraphs
-    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-    
-    text_blocks = []
-    for paragraph in paragraphs:
-        # Check if this paragraph contains a list
-        lines = paragraph.split("\n")
+    if not text or not isinstance(text, str):
+        # Return a safe default if text is invalid
+        return [{
+            "type": "TextBlock",
+            "text": str(text) if text is not None else "",
+            "wrap": True
+        }]
         
-        # Look for patterns like "Follow these steps: 1. First item"
-        # This detects if we have a sentence followed by a number list in the same line
-        first_line = lines[0]
-        if re.search(r'(.*?)(\d+\.\s+.*?)$', first_line):
-            # Split the introduction from the first list item
-            match = re.match(r'(.*?)(\d+\.\s+.*?)$', first_line)
-            if match:
-                intro = match.group(1).strip()
-                first_item = match.group(2).strip()
+    try:
+        # Replace markdown bold with actual bold formatting
+        text = text.replace("**", "").replace("__", "")
+        
+        # Split the text into paragraphs
+        paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+        if not paragraphs:
+            paragraphs = [text.strip()]
+        
+        text_blocks = []
+        for paragraph in paragraphs:
+            try:
+                # Check if this paragraph contains a list
+                lines = paragraph.split("\n")
                 
-                # Add the introduction as a separate text block
-                if intro:
+                # Pattern for introductory text followed by numbered/bullet item
+                # Handles patterns like: "Text: 1. Item" or "Text - First bullet"
+                first_line = lines[0]
+                intro_patterns = [
+                    # Numbered lists with intro (e.g., "Follow these steps: 1. First item")
+                    r'(.*?)(\d+\.\s+.*?)$',
+                    # Bulleted lists with intro (e.g., "Key points: • First point")
+                    r'(.*?)([\•\-\*]\s+.*?)$',
+                    # Lettered lists with intro (e.g., "Consider these: a. First item")
+                    r'(.*?)([a-zA-Z]\.\s+.*?)$'
+                ]
+                
+                # Check for intro text with first list item
+                intro_match = None
+                for pattern in intro_patterns:
+                    match = re.search(pattern, first_line)
+                    if match:
+                        intro_match = match
+                        break
+                
+                if intro_match:
+                    # Split the introduction from the first list item
+                    intro = intro_match.group(1).strip()
+                    first_item = intro_match.group(2).strip()
+                    
+                    # Add the introduction as a separate text block
+                    if intro:
+                        text_blocks.append({
+                            "type": "TextBlock",
+                            "text": intro,
+                            "wrap": True,
+                            "spacing": "medium"
+                        })
+                    
+                    # Start a new list with the first item
+                    list_items = [{
+                        "type": "TextBlock",
+                        "text": first_item,
+                        "wrap": True,
+                        "spacing": "small"
+                    }]
+                    
+                    # Add remaining items to the list
+                    for line in lines[1:]:
+                        if line.strip():
+                            list_items.append({
+                                "type": "TextBlock",
+                                "text": line,
+                                "wrap": True,
+                                "spacing": "small"
+                            })
+                    
+                    text_blocks.append({
+                        "type": "Container",
+                        "items": list_items,
+                        "spacing": "medium"
+                    })
+                    continue
+                
+                # Handle regular lists where most lines start with a number, bullet, or letter
+                if len(lines) > 1:
+                    # Check if it's a list by looking at the majority of lines
+                    list_patterns = [
+                        r'^\d+\.', # Numbered list: "1. Item"
+                        r'^[\•\-\*]', # Bullet list: "• Item" or "- Item"
+                        r'^[a-zA-Z]\.', # Letter list: "a. Item"
+                        r'^\s*[\-\•\*]' # Indented bullets
+                    ]
+                    
+                    # Count how many lines match list patterns
+                    list_line_count = 0
+                    for line in lines:
+                        for pattern in list_patterns:
+                            if re.match(pattern, line.strip()):
+                                list_line_count += 1
+                                break
+                    
+                    # If at least 30% of lines look like list items, format as list
+                    if list_line_count > 0 and list_line_count / len(lines) >= 0.3:
+                        list_items = []
+                        current_item = ""
+                        
+                        for line in lines:
+                            is_list_item = False
+                            for pattern in list_patterns:
+                                if re.match(pattern, line.strip()):
+                                    is_list_item = True
+                                    break
+                            
+                            if is_list_item and current_item:
+                                # Add previous item before starting new one
+                                list_items.append({
+                                    "type": "TextBlock",
+                                    "text": current_item,
+                                    "wrap": True,
+                                    "spacing": "small"
+                                })
+                                current_item = line
+                            elif is_list_item:
+                                current_item = line
+                            else:
+                                # Continue previous list item (for wrapped text)
+                                if current_item:
+                                    current_item += " " + line.strip()
+                                else:
+                                    current_item = line
+                        
+                        # Add the last item
+                        if current_item:
+                            list_items.append({
+                                "type": "TextBlock",
+                                "text": current_item,
+                                "wrap": True,
+                                "spacing": "small"
+                            })
+                        
+                        text_blocks.append({
+                            "type": "Container",
+                            "items": list_items,
+                            "spacing": "medium"
+                        })
+                        continue
+                
+                # Handle one-liners as simple paragraphs
+                if len(lines) == 1:
                     text_blocks.append({
                         "type": "TextBlock",
-                        "text": intro,
+                        "text": paragraph,
                         "wrap": True,
                         "spacing": "medium"
                     })
+                    continue
                 
-                # Start a new list with the first item
-                list_items = [{
-                    "type": "TextBlock",
-                    "text": first_item,
-                    "wrap": True,
-                    "spacing": "small"
-                }]
-                
-                # Add remaining items to the list
-                for line in lines[1:]:
-                    list_items.append({
-                        "type": "TextBlock",
-                        "text": line,
-                        "wrap": True,
-                        "spacing": "small"
+                # Default case: Multi-line paragraph that's not a list
+                # First, check if it contains important terms that should be highlighted
+                if any(re.search(r'(important|note|warning|caution|attention|remember):', line.lower()) for line in lines):
+                    # Use emphasis style for important information
+                    list_items = []
+                    for line in lines:
+                        list_items.append({
+                            "type": "TextBlock",
+                            "text": line,
+                            "wrap": True,
+                            "spacing": "small"
+                        })
+                    text_blocks.append({
+                        "type": "Container",
+                        "style": "emphasis",
+                        "items": list_items,
+                        "spacing": "medium"
                     })
-                
+                else:
+                    # Regular multi-line content
+                    list_items = []
+                    for line in lines:
+                        if line.strip():
+                            list_items.append({
+                                "type": "TextBlock",
+                                "text": line,
+                                "wrap": True,
+                                "spacing": "small"
+                            })
+                    text_blocks.append({
+                        "type": "Container",
+                        "items": list_items,
+                        "spacing": "medium"
+                    })
+            except Exception as e:
+                # Fallback for any paragraph that causes errors
+                print(f"Error formatting paragraph: {str(e)}")
                 text_blocks.append({
-                    "type": "Container",
-                    "items": list_items,
+                    "type": "TextBlock",
+                    "text": paragraph,
+                    "wrap": True,
                     "spacing": "medium"
                 })
-                continue
         
-        # Handle regular numbered lists (where each line starts with a number)
-        if len(lines) > 1 and any(re.match(r'^\d+\.', line.strip()) for line in lines):
-            list_items = []
-            for line in lines:
-                list_items.append({
-                    "type": "TextBlock",
-                    "text": line,
-                    "wrap": True,
-                    "spacing": "small"
-                })
-            text_blocks.append({
-                "type": "Container",
-                "items": list_items,
-                "spacing": "medium"
-            })
-        elif len(lines) == 1:
-            # Simple paragraph
-            text_blocks.append({
-                "type": "TextBlock",
-                "text": paragraph,
-                "wrap": True,
-                "spacing": "medium"
-            })
-        else:
-            # This might be a list or bullets, create a container for it
-            list_items = []
-            for line in lines:
-                list_items.append({
-                    "type": "TextBlock",
-                    "text": line,
-                    "wrap": True,
-                    "spacing": "small"
-                })
-            text_blocks.append({
-                "type": "Container",
-                "items": list_items,
-                "spacing": "medium"
-            })
-    
-    return text_blocks
+        return text_blocks
+    except Exception as e:
+        # Global error handler - if anything goes wrong, return the text as a single block
+        print(f"Error in format_text_for_adaptive_card: {str(e)}")
+        return [{
+            "type": "TextBlock",
+            "text": text,
+            "wrap": True
+        }]
 
 async def _bot_logic(turn_context: TurnContext):
     conversation_id = turn_context.activity.conversation.id
