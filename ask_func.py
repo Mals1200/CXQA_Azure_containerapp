@@ -642,6 +642,7 @@ def final_answer_llm(user_question, index_dict, python_dict):
 You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
 1) Index data: (INDEX_DATA)
 2) Python data: (PYTHON_DATA)
+*) Always Prioritise The python result if the 2 are different.
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
@@ -663,7 +664,7 @@ PYTHON_DATA:
 {python_result}
 
 Chat_history:
-{chat_history}
+{recent_history if recent_history else []}
 """
 
     final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
