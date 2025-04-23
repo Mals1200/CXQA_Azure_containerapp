@@ -1,9 +1,10 @@
 # Version 7
-#Fixed text formatting in Teams adaptive cards (not quite there yet)
+#Fixed text formatting in Teams adaptive cards
 
 import os
 import asyncio
 from threading import Lock
+import re
 
 from flask import Flask, request, jsonify, Response
 from botbuilder.core import (
@@ -76,15 +77,73 @@ def format_text_for_adaptive_card(text):
     # Replace markdown bold with actual bold formatting
     text = text.replace("**", "")
     
-    # Ensure proper paragraphs by splitting on double newlines and 
-    # creating separate TextBlock items for each paragraph
+    # Split the text into paragraphs
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
     
     text_blocks = []
     for paragraph in paragraphs:
-        # Split the paragraph into lines to handle lists and bullets properly
+        # Check if this paragraph contains a list
         lines = paragraph.split("\n")
-        if len(lines) == 1:
+        
+        # Look for patterns like "Follow these steps: 1. First item"
+        # This detects if we have a sentence followed by a number list in the same line
+        first_line = lines[0]
+        if re.search(r'(.*?)(\d+\.\s+.*?)$', first_line):
+            # Split the introduction from the first list item
+            match = re.match(r'(.*?)(\d+\.\s+.*?)$', first_line)
+            if match:
+                intro = match.group(1).strip()
+                first_item = match.group(2).strip()
+                
+                # Add the introduction as a separate text block
+                if intro:
+                    text_blocks.append({
+                        "type": "TextBlock",
+                        "text": intro,
+                        "wrap": True,
+                        "spacing": "medium"
+                    })
+                
+                # Start a new list with the first item
+                list_items = [{
+                    "type": "TextBlock",
+                    "text": first_item,
+                    "wrap": True,
+                    "spacing": "small"
+                }]
+                
+                # Add remaining items to the list
+                for line in lines[1:]:
+                    list_items.append({
+                        "type": "TextBlock",
+                        "text": line,
+                        "wrap": True,
+                        "spacing": "small"
+                    })
+                
+                text_blocks.append({
+                    "type": "Container",
+                    "items": list_items,
+                    "spacing": "medium"
+                })
+                continue
+        
+        # Handle regular numbered lists (where each line starts with a number)
+        if len(lines) > 1 and any(re.match(r'^\d+\.', line.strip()) for line in lines):
+            list_items = []
+            for line in lines:
+                list_items.append({
+                    "type": "TextBlock",
+                    "text": line,
+                    "wrap": True,
+                    "spacing": "small"
+                })
+            text_blocks.append({
+                "type": "Container",
+                "items": list_items,
+                "spacing": "medium"
+            })
+        elif len(lines) == 1:
             # Simple paragraph
             text_blocks.append({
                 "type": "TextBlock",
@@ -167,7 +226,6 @@ async def _bot_logic(turn_context: TurnContext):
         state['cache'] = ask_func.tool_cache
 
         # Parse and format the response
-        import re
         source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
         match = re.search(source_pattern, answer_text, flags=re.DOTALL)
 
