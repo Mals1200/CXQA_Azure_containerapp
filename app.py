@@ -159,44 +159,33 @@ async def _bot_logic(turn_context: TurnContext):
                     "isVisible": False,
                     "items": [
                         {
-                            "type": "Container",
-                            "style": "emphasis",
-                            "items": [
-                                {
-                                    "type": "TextBlock",
-                                    "text": source_line,
-                                    "wrap": True,
-                                    "weight": "Bolder",
-                                    "color": "Accent"
-                                }
-                            ]
+                            "type": "TextBlock",
+                            "text": source_line,
+                            "wrap": True,
+                            "weight": "Bolder",
+                            "color": "Accent",
+                            "separator": True
                         }
                     ]
                 }
                 
                 # Add source details in a properly scrollable container if it exists
                 if appended_details:
-                    source_details_container = {
-                        "type": "TextBlock",
-                        "text": appended_details.strip(),
-                        "wrap": True,
-                        "size": "Small"
-                    }
-                    
-                    # Wrap in a container with fixed height to ensure scrollable behavior
+                    # Wrap code content in a scrollable container
                     scrollable_container = {
                         "type": "Container",
                         "style": "emphasis",
                         "isScrollable": True,
-                        "height": "200px",
-                        "items": [{
-                            "type": "Container",
-                            "items": [source_details_container]
-                        }],
-                        "separator": True,
-                        "backgroundImage": {
-                            "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
-                        }
+                        "height": "250px",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": appended_details.strip(),
+                                "wrap": True,
+                                "size": "Small"
+                            }
+                        ],
+                        "separator": True
                     }
                     
                     source_container["items"].append(scrollable_container)
