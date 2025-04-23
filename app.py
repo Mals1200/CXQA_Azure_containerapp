@@ -1,7 +1,8 @@
-# Version 7
-# Fixed scrollable source
+# Version 6  (scrollable-source enabled)
+# made source content different color(Blue) and segmented
+# Button from "Show Source" to "Source"
 
-
+import os
 import asyncio
 from threading import Lock
 
@@ -9,12 +10,13 @@ from flask import Flask, request, jsonify, Response
 from botbuilder.core import (
     BotFrameworkAdapter,
     BotFrameworkAdapterSettings,
-    TurnContext,
+    TurnContext
 )
 from botbuilder.schema import Activity
-from botbuilder.core.teams import TeamsInfo  # ← IMPORTANT!
+# *** Important: import TeamsInfo ***
+from botbuilder.core.teams import TeamsInfo
 
-from ask_func import Ask_Question, chat_history  # noqa: F401  (used implicitly)
+from ask_func import Ask_Question, chat_history
 
 app = Flask(__name__)
 
@@ -25,11 +27,10 @@ adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_P
 adapter = BotFrameworkAdapter(adapter_settings)
 
 # Thread-safe conversation state management
-conversation_states: dict[str, dict] = {}
+conversation_states = {}
 state_lock = Lock()
 
-
-def get_conversation_state(conversation_id: str) -> dict:
+def get_conversation_state(conversation_id):
     with state_lock:
         if conversation_id not in conversation_states:
             conversation_states[conversation_id] = {
@@ -39,20 +40,17 @@ def get_conversation_state(conversation_id: str) -> dict:
             }
         return conversation_states[conversation_id]
 
-
-def cleanup_old_states() -> None:
-    """Remove conversation states that have been idle for 24 hours."""
+def cleanup_old_states():
+    """Clean up conversation states older than 24 h"""
     with state_lock:
-        now = asyncio.get_event_loop().time()
-        for cid, state in list(conversation_states.items()):
-            if state["last_activity"] and (now - state["last_activity"]) > 86_400:  # 24 h
-                del conversation_states[cid]
-
+        current_time = asyncio.get_event_loop().time()
+        for conv_id, state in list(conversation_states.items()):
+            if state["last_activity"] and (current_time - state["last_activity"]) > 86_400:
+                del conversation_states[conv_id]
 
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({"message": "API is running!"}), 200
-
 
 @app.route("/api/messages", methods=["POST"])
 def messages():
@@ -71,57 +69,63 @@ def messages():
 
     return Response(status=200)
 
-
-# ───────────────────────────────── BOT LOGIC ──────────────────────────────────────────
 async def _bot_logic(turn_context: TurnContext):
     conversation_id = turn_context.activity.conversation.id
     state = get_conversation_state(conversation_id)
     state["last_activity"] = asyncio.get_event_loop().time()
 
-    if len(conversation_states) > 100:  # tidy up occasionally
+    # Periodic purge
+    if len(conversation_states) > 100:
         cleanup_old_states()
 
-    # Sync ask_func’s globals with this conversation’s state
+    # Hand off state to Ask_Question helpers
     import ask_func
-
     ask_func.chat_history = state["history"]
     ask_func.tool_cache = state["cache"]
 
     user_message = turn_context.activity.text or ""
 
-    # ── identify user (tries UPN/email, otherwise falls back) ──
+    # ---------------------------------------------------------
+    # Resolve Teams user → email / UPN
+    # ---------------------------------------------------------
+    user_id = "anonymous"
     try:
-        teams_member = await TeamsInfo.get_member(
-            turn_context, turn_context.activity.from_property.id
-        )
-        user_id = (
-            teams_member.user_principal_name
-            or teams_member.email
-            or teams_member.id
-            or "anonymous"
-        )
+        teams_user_id = turn_context.activity.from_property.id
+        teams_member = await TeamsInfo.get_member(turn_context, teams_user_id)
+
+        if teams_member and teams_member.user_principal_name:
+            user_id = teams_member.user_principal_name
+        elif teams_member and teams_member.email:
+            user_id = teams_member.email
+        else:
+            user_id = teams_user_id
     except Exception:
         user_id = turn_context.activity.from_property.id or "anonymous"
 
-    await turn_context.send_activity(Activity(type="typing"))  # thinking indicator
+    # “Typing…” hint
+    await turn_context.send_activity(Activity(type="typing"))
 
     try:
-        # ------- generate the answer -------
-        answer_text = "".join(Ask_Question(user_message, user_id=user_id))
+        ans_gen = Ask_Question(user_message, user_id=user_id)
+        answer_text = "".join(ans_gen)
 
-        # Persist updated history/cache
+        # ------------------- persist state --------------------
         state["history"] = ask_func.chat_history
-        state["cache"] = ask_func.tool_cache
+        state["cache"]   = ask_func.tool_cache
 
-        # ------- split main answer from sources -------
+        # ------------------- parse answer --------------------
         import re
+        source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
+        match = re.search(source_pattern, answer_text, flags=re.DOTALL)
 
-        m = re.search(r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$", answer_text, re.S)
-        main_answer = (m.group(1) if m else answer_text).strip()
-        source_line = (m.group(2).strip() if m else "")
-        appended_details = (m.group(3).strip() if m and m.group(3) else "")
+        if match:
+            main_answer     = match.group(1).strip()
+            source_line     = match.group(2).strip()
+            appended_details = match.group(3) or ""
+        else:
+            main_answer, source_line, appended_details = answer_text, "", ""
 
-        # ────────────────── build adaptive card ──────────────────
+        # ---------------- build adaptive card ---------------
         if source_line:
             body_blocks = [
                 {
@@ -132,14 +136,12 @@ async def _bot_logic(turn_context: TurnContext):
                 }
             ]
 
-            # The scrollable payload: we embed the source(s) inside a
-            # Container that has **isScrollable=true** and **height="stretch"**
-            scrollable_container = {
+            # Collapsible container
+            source_container = {
                 "type": "Container",
-                "isScrollable": True,     # ← this enables scrolling
-                "height": "stretch",      # ← allows the scroll-area to live
-                "minHeight": "200px",     # ← visible before scrolling kicks in
-                "style": "default",
+                "id": "sourceContainer",
+                "isVisible": False,
+                "style": "emphasis",
                 "items": [
                     {
                         "type": "TextBlock",
@@ -151,47 +153,44 @@ async def _bot_logic(turn_context: TurnContext):
                 ],
             }
 
+            # Scrollable inner details (***THIS IS THE FIX***)
             if appended_details:
-                scrollable_container["items"].append(
-                    {
-                        "type": "TextBlock",
-                        "text": appended_details,
-                        "wrap": True,
-                        "spacing": "Small",
-                        "size": "Small",
-                    }
-                )
+                scrollable_details = {
+                    "type": "Container",
+                    "maxHeight": "250px",   # Teams adds a scrollbar beyond this point
+                    "style": "default",
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": appended_details.strip(),
+                            "wrap": True,
+                            "size": "Small",
+                        }
+                    ],
+                }
+                source_container["items"].append(scrollable_details)
 
-            # Collapsible wrapper so the user can show/hide it
-            source_container = {
-                "type": "Container",
-                "id": "sourceContainer",
-                "isVisible": False,
-                "height": "stretch",
-                "items": [scrollable_container],
-            }
+            body_blocks.append(source_container)
 
-            body_blocks.extend(
-                [
-                    source_container,
-                    {
-                        "type": "ActionSet",
-                        "actions": [
-                            {
-                                "type": "Action.ToggleVisibility",
-                                "title": "Source",
-                                "targetElements": ["sourceContainer"],
-                            }
-                        ],
-                    },
-                ]
+            # Toggle button
+            body_blocks.append(
+                {
+                    "type": "ActionSet",
+                    "actions": [
+                        {
+                            "type": "Action.ToggleVisibility",
+                            "title": "Source",
+                            "targetElements": ["sourceContainer"],
+                        }
+                    ],
+                }
             )
 
             adaptive_card = {
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                 "type": "AdaptiveCard",
-                "version": "1.5",
                 "body": body_blocks,
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "version": "1.5",
             }
 
             await turn_context.send_activity(
@@ -208,16 +207,14 @@ async def _bot_logic(turn_context: TurnContext):
         else:
             await turn_context.send_activity(Activity(type="message", text=main_answer))
 
-    except Exception as exc:
-        print("Error in bot logic:", exc)
+    except Exception as e:
         await turn_context.send_activity(
             Activity(
                 type="message",
-                text=f"An error occurred while processing your request: {exc}",
+                text=f"An error occurred while processing your request: {e}",
             )
         )
+        print(f"Error in bot logic: {e}")
 
-
-# ───────────────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=80)
