@@ -1,3 +1,7 @@
+# Version 6
+# made source content different color(Blue) and segmented
+#Button from "Show Source" to "Source"
+
 import os
 import asyncio
 from threading import Lock
@@ -136,7 +140,7 @@ async def _bot_logic(turn_context: TurnContext):
             appended_details = ""
 
         if source_line:
-            # Create adaptive card for the response
+            # Create a more beautified adaptive card with scrollable source section
             body_blocks = [
                 {
                     "type": "TextBlock",
@@ -146,77 +150,71 @@ async def _bot_logic(turn_context: TurnContext):
                 }
             ]
             
-            # Create source header
-            source_header = {
-                "type": "Container",
-                "style": "emphasis",
-                "items": [
-                    {
+            # Create the collapsible source container
+            if source_line or appended_details:
+                # Create a container that will be toggled
+                source_container = {
+                    "type": "Container",
+                    "id": "sourceContainer",
+                    "isVisible": False,
+                    "items": [
+                        {
+                            "type": "Container",
+                            "style": "emphasis",
+                            "items": [
+                                {
+                                    "type": "TextBlock",
+                                    "text": source_line,
+                                    "wrap": True,
+                                    "weight": "Bolder",
+                                    "color": "Accent"
+                                }
+                            ]
+                        }
+                    ]
+                }
+                
+                # Add source details in a properly scrollable container if it exists
+                if appended_details:
+                    source_details_container = {
                         "type": "TextBlock",
-                        "text": source_line,
+                        "text": appended_details.strip(),
                         "wrap": True,
-                        "weight": "Bolder",
-                        "color": "Accent"
+                        "size": "Small"
                     }
-                ]
-            }
-            
-            # Create scrollable container for source details
-            # Always ensure there is at least one item in the container
-            source_content_items = []
-            if appended_details:
-                clean_details = appended_details.replace("---SOURCE_DETAILS---", "").strip()
-                source_content_items.append({
-                    "type": "TextBlock",
-                    "text": clean_details,
-                    "wrap": True,
-                    "size": "Small"
-                })
-            else:
-                # Add a placeholder item if no details to avoid empty items array
-                source_content_items.append({
-                    "type": "TextBlock",
-                    "text": " ",  # Space character as minimal content
-                    "wrap": True,
-                    "size": "Small"
-                })
-            
-            # Create the scrollable container with fixed height
-            scrollable_container = {
-                "type": "Container",
-                "isScrollable": True,
-                "height": "200px",
-                "items": source_content_items,
-                "style": "default",
-                "separator": True
-            }
-            
-            # Combine into the collapsible source container
-            source_container = {
-                "type": "Container",
-                "id": "sourceContainer",
-                "isVisible": False,
-                "items": [
-                    source_header,
-                    scrollable_container
-                ]
-            }
-            
-            body_blocks.append(source_container)
-            
-            # Add the toggle button
-            body_blocks.append({
-                "type": "ActionSet",
-                "actions": [
-                    {
-                        "type": "Action.ToggleVisibility",
-                        "title": "Source",
-                        "targetElements": ["sourceContainer"]
+                    
+                    # Wrap in a container with fixed height to ensure scrollable behavior
+                    scrollable_container = {
+                        "type": "Container",
+                        "style": "emphasis",
+                        "isScrollable": True,
+                        "height": "200px",
+                        "items": [{
+                            "type": "Container",
+                            "items": [source_details_container]
+                        }],
+                        "separator": True,
+                        "backgroundImage": {
+                            "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+                        }
                     }
-                ]
-            })
+                    
+                    source_container["items"].append(scrollable_container)
+                
+                body_blocks.append(source_container)
+                
+                # Simple button with no extra styling
+                body_blocks.append({
+                    "type": "ActionSet",
+                    "actions": [
+                        {
+                            "type": "Action.ToggleVisibility",
+                            "title": "Source",
+                            "targetElements": ["sourceContainer"]
+                        }
+                    ]
+                })
 
-            # Create the complete adaptive card
             adaptive_card = {
                 "type": "AdaptiveCard",
                 "body": body_blocks,
@@ -224,7 +222,6 @@ async def _bot_logic(turn_context: TurnContext):
                 "version": "1.5"
             }
             
-            # Send the card as an activity
             message = Activity(
                 type="message",
                 attachments=[{
@@ -234,7 +231,6 @@ async def _bot_logic(turn_context: TurnContext):
             )
             await turn_context.send_activity(message)
         else:
-            # If no source, just send the text response
             await turn_context.send_activity(Activity(type="message", text=main_answer))
 
     except Exception as e:
