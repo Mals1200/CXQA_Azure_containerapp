@@ -176,14 +176,16 @@ async def _bot_logic(turn_context: TurnContext):
                 
                 # Add source details in a properly scrollable container if it exists
                 if appended_details:
-                    # Prepare the content for the scrollable container
+                    # Clean up the appended details to look nicer
+                    clean_details = appended_details.replace("---SOURCE_DETAILS---", "").strip()
+                    
                     source_details_container = {
                         "type": "Container",
                         "style": "default",
                         "items": [
                             {
                                 "type": "TextBlock",
-                                "text": appended_details.strip(),
+                                "text": clean_details,
                                 "wrap": True,
                                 "size": "Small"
                             }
@@ -191,15 +193,12 @@ async def _bot_logic(turn_context: TurnContext):
                         "bleed": True
                     }
                     
-                    # Create an explicitly scrollable container with fixed height
+                    # Wrap in a scrollable container
                     scrollable_container = {
                         "type": "Container",
                         "isScrollable": True,
-                        "height": "200px",  # Fixed height to force scrolling
-                        "verticalContentAlignment": "top",
-                        "style": "emphasis",
-                        "separator": true,
-                        "spacing": "medium",
+                        "height": "auto",
+                        "maxHeight": "250px",
                         "items": [source_details_container]
                     }
                     
@@ -213,8 +212,9 @@ async def _bot_logic(turn_context: TurnContext):
                     "actions": [
                         {
                             "type": "Action.ToggleVisibility",
-                            "title": "Source",
-                            "targetElements": ["sourceContainer"]
+                            "title": "View Source Details",
+                            "targetElements": ["sourceContainer"],
+                            "style": "positive"
                         }
                     ]
                 })
