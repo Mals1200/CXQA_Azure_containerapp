@@ -1,3 +1,7 @@
+# Version 6
+# made source content different color(Blue) and segmented
+#Button from "Show Source" to "Source"
+
 import os
 import asyncio
 from threading import Lock
@@ -136,21 +140,6 @@ async def _bot_logic(turn_context: TurnContext):
             appended_details = ""
 
         if source_line:
-            # Split source_line into separate components if they exist
-            source_components = source_line.strip().split('\n')
-            
-            referenced_from_line = ""
-            calculated_using_line = ""
-            actual_source_line = ""
-            
-            for line in source_components:
-                if line.startswith("referenced from"):
-                    referenced_from_line = line
-                elif line.startswith("Calculated using"):
-                    calculated_using_line = line
-                elif line.startswith("Source:"):
-                    actual_source_line = line
-            
             # Create a more beautified adaptive card with scrollable source section
             body_blocks = [
                 {
@@ -161,98 +150,67 @@ async def _bot_logic(turn_context: TurnContext):
                 }
             ]
             
-            # Add source information components if they exist
-            source_info_blocks = []
-            
-            if referenced_from_line:
-                source_info_blocks.append({
-                    "type": "TextBlock",
-                    "text": referenced_from_line,
-                    "wrap": True,
-                    "size": "Small",
-                    "color": "Accent",
-                    "weight": "Bolder"
-                })
-            
-            if calculated_using_line:
-                source_info_blocks.append({
-                    "type": "TextBlock",
-                    "text": calculated_using_line,
-                    "wrap": True,
-                    "size": "Small",
-                    "color": "Accent",
-                    "weight": "Bolder"
-                })
-            
-            if actual_source_line:
-                source_info_blocks.append({
-                    "type": "TextBlock",
-                    "text": actual_source_line,
-                    "wrap": True,
-                    "size": "Small",
-                    "color": "Good",
-                    "weight": "Bolder"
-                })
-            
-            if source_info_blocks:
-                body_blocks.append({
-                    "type": "Container",
-                    "style": "emphasis",
-                    "items": source_info_blocks,
-                    "bleed": True,
-                    "spacing": "Small"
-                })
-            
             # Create the collapsible source container
-            if appended_details:
+            if source_line or appended_details:
                 # Create a container that will be toggled
                 source_container = {
                     "type": "Container",
                     "id": "sourceContainer",
                     "isVisible": False,
-                    "items": [],
-                    "spacing": "Medium"
-                }
-                
-                # Clean up the appended details to look nicer
-                clean_details = appended_details.replace("---SOURCE_DETAILS---", "").strip()
-                
-                source_details_container = {
-                    "type": "Container",
-                    "style": "default",
                     "items": [
                         {
-                            "type": "TextBlock",
-                            "text": clean_details,
-                            "wrap": True,
-                            "size": "Small"
+                            "type": "Container",
+                            "style": "emphasis",
+                            "items": [
+                                {
+                                    "type": "TextBlock",
+                                    "text": source_line,
+                                    "wrap": True,
+                                    "weight": "Bolder",
+                                    "color": "Accent"
+                                }
+                            ]
                         }
-                    ],
-                    "bleed": True
+                    ]
                 }
                 
-                # Wrap in a scrollable container
-                scrollable_container = {
-                    "type": "Container",
-                    "isScrollable": True,
-                    "height": "auto",
-                    "maxHeight": "250px",
-                    "items": [source_details_container]
-                }
-                
-                source_container["items"].append(scrollable_container)
+                # Add source details in a properly scrollable container if it exists
+                if appended_details:
+                    source_details_container = {
+                        "type": "Container",
+                        "style": "default",
+                        "items": [
+                            {
+                                "type": "TextBlock",
+                                "text": appended_details.strip(),
+                                "wrap": True,
+                                "size": "Small"
+                            }
+                        ],
+                        "bleed": True
+                    }
+                    
+                    # Wrap in a scrollable container
+                    scrollable_container = {
+                        "type": "Container",
+                        "isScrollable": True,
+                        "height": "auto",
+                        "maxHeight": "250px",
+                        "items": [source_details_container]
+                    }
+                    
+                    source_container["items"].append(scrollable_container)
                 
                 body_blocks.append(source_container)
                 
-                # Simple button with improved styling
+                # Simple button with no extra styling
                 body_blocks.append({
                     "type": "ActionSet",
                     "actions": [
                         {
                             "type": "Action.ToggleVisibility",
-                            "title": "View Source Details",
-                            "targetElements": ["sourceContainer"],
-                            "style": "positive"
+                            "title": "Source",
+                            "targetElements": ["sourceContainer"]
                         }
                     ]
                 })
