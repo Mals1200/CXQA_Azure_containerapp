@@ -1,7 +1,8 @@
 # Version 7
 # made source content different color(Blue) and segmented
-#Button from "Show Source" to "Source"
-#Fixed text formatting in Teams adaptive cards
+# Button from "Show Source" to "Source"
+# Fixed text formatting in Teams adaptive cards
+# Scrolling isnt working.
 
 import os
 import asyncio
