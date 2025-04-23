@@ -1,3 +1,7 @@
+# Version 18d:
+# History fix with app.py version(5)
+# Added a line in "final_answering_llm()", to prioritize the Python result if 2 different outputs were available.
+
 import os
 import io
 import re
@@ -685,96 +689,30 @@ Chat_history:
 #######################################################################################
 def post_process_source(final_text, index_dict, python_dict):
     text_lower = final_text.lower()
-    
-    # Extract the source files or code information
+
     if "source: index & python" in text_lower:
-        # Get source filenames from top_k content
         top_k_text = index_dict.get("top_k", "No information")
         code_text = python_dict.get("code", "")
-        
-        # Extract filenames from index data
-        index_files = []
-        if top_k_text and top_k_text != "No information":
-            for line in top_k_text.split('\n'):
-                if line.startswith("title:") or 'title":' in line:
-                    filename = line.split(":", 1)[1].strip().strip('"')
-                    if filename and filename not in index_files:
-                        index_files.append(filename)
-        
-        # Extract filenames from Python code
-        python_files = []
-        if code_text:
-            import re
-            file_pattern = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
-            python_files = list(set(file_pattern.findall(code_text)))
-        
-        # Format the source information
-        source_info = ""
-        if index_files:
-            source_info += f"referenced from {', '.join(f'"{file}"' for file in index_files)}\n"
-        if python_files:
-            source_info += f"Calculated using {', '.join(f'"{file}"' for file in python_files)}\n"
-            
-        # Replace "Source: Index & Python" with our source_info + "Source: Index & Python"
-        final_text = final_text.replace("Source: Index & Python", f"{source_info}Source: Index & Python")
-            
         return f"""{final_text}
 
----SOURCE_DETAILS---
-Index Data:
+The Files:
 {top_k_text}
 
-Python Code:
+The code:
 {code_text}
 """
     elif "source: python" in text_lower:
         code_text = python_dict.get("code", "")
-        
-        # Extract filenames from code
-        python_files = []
-        if code_text:
-            import re
-            file_pattern = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
-            python_files = list(set(file_pattern.findall(code_text)))
-        
-        # Create the "Calculated using" line
-        source_info = ""
-        if python_files:
-            source_info = f"Calculated using {', '.join(f'"{file}"' for file in python_files)}\n"
-        
-        # Replace "Source: Python" with our source_info + "Source: Python"
-        final_text = final_text.replace("Source: Python", f"{source_info}Source: Python")
-            
         return f"""{final_text}
 
----SOURCE_DETAILS---
-Python Code:
+The code:
 {code_text}
 """
     elif "source: index" in text_lower:
         top_k_text = index_dict.get("top_k", "No information")
-        
-        # Extract filenames from index data
-        index_files = []
-        if top_k_text and top_k_text != "No information":
-            for line in top_k_text.split('\n'):
-                if line.startswith("title:") or 'title":' in line:
-                    filename = line.split(":", 1)[1].strip().strip('"')
-                    if filename and filename not in index_files:
-                        index_files.append(filename)
-        
-        # Create the "referenced from" line
-        source_info = ""
-        if index_files:
-            source_info = f"referenced from {', '.join(f'"{file}"' for file in index_files)}\n"
-        
-        # Replace "Source: Index" with our source_info + "Source: Index"
-        final_text = final_text.replace("Source: Index", f"{source_info}Source: Index")
-            
         return f"""{final_text}
 
----SOURCE_DETAILS---
-Index Data:
+The Files:
 {top_k_text}
 """
     else:
