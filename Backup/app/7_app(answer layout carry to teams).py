@@ -1,6 +1,6 @@
 # Version 7
-#Fixed text formatting in Teams adaptive cards
-
+# Fixed text formatting in Teams adaptive cards
+# Scrolling. (Does not work)
 import os
 import asyncio
 from threading import Lock
