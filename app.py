@@ -1,7 +1,6 @@
 # Version 7
-# made source content different color(Blue) and segmented
-#Button from "Show Source" to "Source"
-#Fixed text formatting in Teams adaptive cards
+# Scrolling works.
+# Fixed Source segment.
 
 import os
 import asyncio
@@ -157,7 +156,7 @@ async def _bot_logic(turn_context: TurnContext):
                     "isVisible": False,
                     "style": "emphasis",
                     "bleed": True,
-                    "maxHeight": "200px",
+                    "maxHeight": "500px",
                     "isScrollable": True, 
                     "items": [
                         {
