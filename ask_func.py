@@ -1,6 +1,7 @@
 # Version 19:
 # Testing Cursors code to fix the output in scripts such as jupyter notebook.
 
+
 import os
 import io
 import re
@@ -21,6 +22,9 @@ from functools import lru_cache, wraps
 from collections import OrderedDict
 import difflib
 import time
+import markdown
+from html.parser import HTMLParser
+import html
 
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
@@ -275,12 +279,11 @@ def call_llm(system_prompt, user_prompt, max_tokens=500, temperature=0.0):
         logging.error(err_msg)
         return err_msg
 
-# Replace the simple format_text_for_display function with a more robust implementation
+# Replace the custom formatting function with a markdown-based approach
 def format_text_for_display(text):
     """
-    Comprehensive text formatter that fixes common formatting issues in LLM outputs
-    to ensure professional and consistent display across all platforms.
-    Handles multiple section types, list formats, and edge cases.
+    Complete text reformatting function that aggressively fixes formatting issues
+    by reprocessing numbered lists, enforcing proper structure, and ensuring readability.
     """
     if not text or not isinstance(text, str):
         return "No information available."
@@ -288,82 +291,129 @@ def format_text_for_display(text):
     try:
         import re
         
-        # STEP 1: Pre-processing cleanup
-        # Remove excessive whitespace
-        text = re.sub(r'\s{3,}', '\n\n', text)
-        # Normalize line endings
+        # DRASTIC APPROACH: For severe formatting issues, we'll rebuild the entire text
+
+        # Step 1: Normalize line endings and spacing
         text = text.replace('\r\n', '\n').replace('\r', '\n')
+        text = re.sub(r'\s{3,}', '\n\n', text)
         
-        # STEP 2: Fix section headers with embedded list items
-        # Multiple patterns for different types of headers
-        header_patterns = [
-            # "Follow these steps: 1. First item" -> "Follow these steps:\n1. First item"
-            (r'(.*?follow these steps:)\s*(\d+\.\s+.*?)$', r'\1\n\2'),
-            (r'(.*?steps to follow:)\s*(\d+\.\s+.*?)$', r'\1\n\2'),
-            (r'(.*?steps:)\s*(\d+\.\s+.*?)$', r'\1\n\2'),
-            # Any colon followed by a numbered/bulleted item
-            (r'(.*?:)\s*(\d+\.\s+.*?)$', r'\1\n\2'),
-            (r'(.*?:)\s*(\-\s+.*?)$', r'\1\n\2'),
-            (r'(.*?:)\s*(\•\s+.*?)$', r'\1\n\2'),
-            (r'(.*?:)\s*(\*\s+.*?)$', r'\1\n\2'),
+        # Step 2: Extract and clean up any section headers/introductions
+        # First, identify major sections (like "If you discover a fire...")
+        sections = []
+        
+        # Common section header patterns
+        section_start_patterns = [
+            r"If you discover a fire",
+            r"If you hear the fire alarm",
+            r"For fire suppression",
+            r"In case of emergency",
+            r"When evacuating",
         ]
         
-        for pattern, replacement in header_patterns:
-            text = re.sub(pattern, replacement, text, flags=re.MULTILINE)
+        # Find all potential section starts
+        potential_sections = []
+        for pattern in section_start_patterns:
+            matches = list(re.finditer(pattern, text, re.IGNORECASE))
+            potential_sections.extend([(m.start(), pattern) for m in matches])
         
-        # STEP 3: Ensure proper section spacing
-        # Add blank lines between major sections
-        section_starters = [
-            r'(\.\s*)(If you|For |When |In case of |Note:|Important:|Warning:|To |Steps for )',
-            r'(\n)([A-Z][a-z]+ \d+:)',  # Patterns like "Step 1:" at start of line
-            r'(\.)(\s*\n\s*\d+\.)',  # End of paragraph followed by numbered list
-        ]
+        # Sort by position in text
+        potential_sections.sort()
         
-        for pattern in section_starters:
-            text = re.sub(pattern, r'\1\n\n\2', text)
+        if potential_sections:
+            # Create sections based on these markers
+            for i, (pos, _) in enumerate(potential_sections):
+                end = potential_sections[i+1][0] if i < len(potential_sections)-1 else len(text)
+                sections.append(text[pos:end])
+        else:
+            # No clear sections found, treat the whole text as one section
+            sections = [text]
         
-        # STEP 4: Clean up list formatting
-        # Fix any missing newlines between list items
-        text = re.sub(r'(\d+\.\s+[^\n]+)(\d+\.)', r'\1\n\2', text)
-        text = re.sub(r'(\-\s+[^\n]+)(\-\s+)', r'\1\n\2', text)
-        text = re.sub(r'(\•\s+[^\n]+)(\•\s+)', r'\1\n\2', text)
-        text = re.sub(r'(\*\s+[^\n]+)(\*\s+)', r'\1\n\2', text)
+        # Process each section to enforce proper numbered list formatting
+        processed_sections = []
         
-        # Ensure proper spacing after list items
-        text = re.sub(r'(\d+\.[^\n]+)(\n[a-zA-Z])', r'\1\n\2', text)
+        for section in sections:
+            # Step 1: Separate the header from list items
+            header_match = re.search(r'^(.*?(?:steps:|:))', section, re.IGNORECASE | re.MULTILINE | re.DOTALL)
+            
+            if header_match:
+                header = header_match.group(0).strip()
+                content = section[header_match.end():].strip()
+            else:
+                # No clear header, check if the section starts with a number
+                if re.match(r'^\d+\.', section.strip()):
+                    header = ""
+                    content = section.strip()
+                else:
+                    # Just use the first line as header
+                    lines = section.strip().split('\n', 1)
+                    header = lines[0]
+                    content = lines[1] if len(lines) > 1 else ""
+            
+            # Step 2: Extract all numbered list items
+            # This is a more aggressive approach to find all numbered items
+            numbered_items = []
+            
+            # Pattern for numbered items (both standalone and run-together)
+            item_pattern = r'(\d+)\.\s*([^0-9\.\n]*(?:\n(?!\d+\.)[^\n]*)*)'
+            
+            # Find all matches
+            matches = list(re.finditer(item_pattern, content))
+            
+            if matches:
+                for match in matches:
+                    num = match.group(1)
+                    text = match.group(2).strip().replace('\n', ' ')
+                    numbered_items.append((num, text))
+            
+            # Step 3: Rebuild the section with proper formatting
+            rebuilt_section = header.strip() + "\n"  # Header on its own line
+            
+            if numbered_items:
+                for num, item_text in numbered_items:
+                    rebuilt_section += f"{num}. {item_text}\n"
+            else:
+                # No numbered items found, preserve the content as is
+                rebuilt_section += content
+            
+            processed_sections.append(rebuilt_section)
         
-        # STEP 5: Remove problematic stray characters and common issues
-        # Remove stray single letters that might appear at line starts
-        text = re.sub(r'\n([a-zA-Z])\.\s*\n', '\n', text)
-        # Fix weird enumeration patterns
-        text = re.sub(r'(\d+\.\s+[^\n]+\n)([a-z]\.)', r'\1\n\2', text)
+        # Join the processed sections with clear separation
+        final_text = "\n\n".join(processed_sections)
         
-        # STEP 6: Final cleanup/normalization
-        # Normalize multiple blank lines to max 2
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        # Remove trailing whitespace from lines
-        text = re.sub(r'[ \t]+$', '', text, flags=re.MULTILINE)
-        # Ensure text ends with a single newline
-        text = text.rstrip() + '\n'
+        # Final cleanup
+        final_text = re.sub(r'\n{3,}', '\n\n', final_text)  # Max 2 newlines
+        final_text = re.sub(r'[ \t]+$', '', final_text, flags=re.MULTILINE)  # Remove trailing spaces
         
-        # STEP 7: Formatting verification
-        # Quick check that we didn't create any obvious issues
-        if re.search(r'(\d+\.\s*\d+\.)', text):
-            # Fix cases where numbering got messed up (1.2.)
-            text = re.sub(r'(\d+\.\s*)(\d+\.)', r'\1\n\2', text)
+        return final_text.strip()
         
-        return text.strip()
     except Exception as e:
-        # If anything in our formatting fails, return the original text
-        # but with minimal essential formatting to prevent blank content
         logging.warning(f"Error in format_text_for_display: {e}")
+        # Emergency fallback
         try:
-            # Last-ditch effort to at least fix the most critical issue
-            import re
-            return re.sub(r'(.*?follow these steps:)\s*(\d+\.)', r'\1\n\2', text, flags=re.MULTILINE).strip()
+            # Try a very basic fix at minimum
+            lines = text.split("\n")
+            cleaned = []
+            
+            for i, line in enumerate(lines):
+                # Force each numbered item onto its own line
+                if re.match(r'^\d+\.', line.strip()):
+                    cleaned.append(line.strip())
+                # If a line contains multiple numbered items, split them
+                elif re.search(r'\d+\.\s+.*?\d+\.', line):
+                    parts = re.split(r'(\d+\.)', line)
+                    for j, part in enumerate(parts):
+                        if j == 0 and part.strip():
+                            cleaned.append(part.strip())
+                        elif re.match(r'\d+\.', part):
+                            if j+1 < len(parts):
+                                cleaned.append(f"{part.strip()} {parts[j+1].strip()}")
+                else:
+                    cleaned.append(line)
+                    
+            return "\n".join(cleaned)
         except:
-            # Absolute fallback - at least make sure it's a string
-            return text.strip() if isinstance(text, str) else str(text)
+            # Absolute last resort
+            return text.strip()
 
 #######################################################################################
 #                   COMBINED TEXT CLEANING (Point #2 Optimization)
@@ -728,7 +778,7 @@ def final_answer_llm(user_question, index_dict, python_dict):
 
     if index_top_k.lower() == "no information" and python_result.lower() == "no information":
         fallback_text = tool_3_llm_fallback(user_question)
-        fallback_text = format_text_for_display(fallback_text)  # Format the text
+        fallback_text = format_text_for_display(fallback_text)
         yield f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
         return
 
@@ -741,21 +791,28 @@ You are a helpful assistant generating professional responses for an enterprise 
 *) Always prioritize the Python result if the two sources provide different information.
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
-At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
-- "Index" if only index data was used,
-- "Python" if only python data was used,
-- "Index & Python" if both were used,
-- or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
 
-FORMAT YOUR RESPONSE CAREFULLY FOLLOWING THESE RULES:
-1. Always place each paragraph, bullet point, or list item on its own line
-2. For numbered lists:
-   - Put each number on a new line: "1. First item"
-   - Always separate section headers from the first list item with a line break
-   - Example: "If you discover a fire, follow these steps:" should be on its own line
-3. Ensure consistent spacing between sections
-4. For any groups of steps or instructions, use clear, consistent numbering
-5. Do not place multiple numbered items on the same line
+CRITICAL FORMATTING INSTRUCTIONS:
+1. ANY numbered list must follow this EXACT format:
+   - Section header on its own line ending with a colon
+   - One blank line after the header 
+   - Each numbered item must start with the number, followed by a period and a space
+   - Each numbered item MUST be on its own separate line
+   - NEVER combine multiple numbered items on the same line
+   - Example:
+     If you discover a fire, follow these steps:
+     
+     1. First step description
+     2. Second step description
+     3. Third step description
+
+2. If there are multiple sections with lists, separate them with a blank line.
+
+3. At the end of your response, on a new line, add EXACTLY: "Source: X" where X is:
+   - "Index" if only index data was used
+   - "Python" if only python data was used
+   - "Index & Python" if both were used
+   - "No information was found in the Data. Can I help you with anything else?" if none is truly relevant
 
 User question:
 {user_question}
@@ -773,10 +830,10 @@ Chat_history:
     try:
         final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
         
-        # Double-check formatting - apply our formatter even after explicit instructions
+        # Always apply our aggressive formatter, regardless of what the LLM returned
         final_text = format_text_for_display(final_text)
         
-        # Ensure we never yield an empty or error-laden string without a fallback
+        # Ensure we never yield an empty or error-laden string
         if (not final_text.strip() 
             or final_text.startswith("LLM Error") 
             or final_text.startswith("No content from LLM") 
@@ -787,7 +844,7 @@ Chat_history:
         
         yield final_text
     except Exception as e:
-        # Emergency fallback with generic message rather than exposing error
+        # Never expose error messages to users
         logging.error(f"Error in final_answer_llm: {e}")
         yield "I'm sorry, but I'm having trouble processing your request right now. Please try again in a moment."
 
@@ -991,6 +1048,7 @@ def agent_answer(user_question, user_tier=1):
 
     raw_answer = ""
     for token in final_answer_llm(user_question, index_dict, python_dict):
+        yield token
         raw_answer += token
 
     # Now unify repeated text cleaning
