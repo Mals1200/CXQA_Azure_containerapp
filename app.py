@@ -78,140 +78,100 @@ def format_text_for_adaptive_card(text):
     for display in Teams adaptive cards.
     """
     if not text or not isinstance(text, str):
-        # Return a safe default if text is invalid
         return [{
             "type": "TextBlock",
             "text": str(text) if text is not None else "",
             "wrap": True
         }]
-        
+    
     try:
         # Replace markdown bold with actual bold formatting
         text = text.replace("**", "").replace("__", "")
         
-        # First, try to identify multiple sections with their own lists
-        # Common patterns like "If you discover a fire, follow these steps:" followed by list items
-        section_patterns = [
-            r'(.*?follow these steps:.*?)(\d+\.|\-|\*|\•)',  # "follow these steps:" followed by numbered/bullet
-            r'(.*?steps to follow:.*?)(\d+\.|\-|\*|\•)',     # "steps to follow:" followed by numbered/bullet
-            r'(.*?For .*?:.*?)(\d+\.|\-|\*|\•)',             # "For fire suppression:" followed by numbered/bullet
-            r'(.*?:)(\d+\..*)',                              # Any colon followed by a numbered item
-        ]
+        # Pre-process: Fix common issues that cause formatting problems
+        # 1. Remove any random single letters that might appear at the start of lines
+        text = re.sub(r'\n([a-zA-Z])\.\s*\n', '\n', text)
+        # 2. Ensure proper spacing around section headings
+        text = re.sub(r'(\.\s*)(If you|For )', r'\1\n\n\2', text)
         
-        # Try to split text into sections with their own lists
-        sections = []
-        remaining_text = text
-        
-        for pattern in section_patterns:
-            # Keep finding and extracting sections until no more matches
-            while True:
-                match = re.search(pattern, remaining_text, re.DOTALL)
-                if not match:
-                    break
-                    
-                # Get the introduction including the first list marker
-                intro = match.group(1).strip()
-                # Find where the next section might start
-                next_section_pos = -1
-                for p in section_patterns:
-                    next_match = re.search(p, remaining_text[match.end():], re.DOTALL)
-                    if next_match:
-                        pos = match.end() + next_match.start()
-                        if next_section_pos == -1 or pos < next_section_pos:
-                            next_section_pos = pos
-                
-                if next_section_pos > 0:
-                    # Extract this complete section
-                    section_text = remaining_text[:next_section_pos]
-                    remaining_text = remaining_text[next_section_pos:]
-                else:
-                    # This is the last section
-                    section_text = remaining_text
-                    remaining_text = ""
-                
-                sections.append(section_text)
-                
-                if not remaining_text:
-                    break
-        
-        # If no sections were found, treat the entire text as one section
-        if not sections:
-            sections = [text]
-        elif remaining_text:
-            # Add any remaining text as the final section
-            sections.append(remaining_text)
-        
-        # Now process each section
+        # Main formatting logic
         text_blocks = []
         
+        # 1. Split by major sections (e.g., "If you discover a fire..." vs "If you hear the fire alarm...")
+        section_pattern = r'(If you |For |When you |In case of )'
+        section_starts = [0] + [m.start() for m in re.finditer(section_pattern, text)]
+        
+        if len(section_starts) <= 1:
+            # No clear sections, treat as a single block with lists
+            sections = [text]
+        else:
+            # Multiple sections detected
+            sections = []
+            for i in range(len(section_starts)):
+                start = section_starts[i]
+                end = section_starts[i+1] if i < len(section_starts)-1 else len(text)
+                sections.append(text[start:end])
+        
+        # Process each section
         for section in sections:
-            # Split the section into intro and list items
-            list_start = -1
-            list_patterns = [
-                r'\d+\.', # Numbered list: "1. Item"
-                r'[\•\-\*]', # Bullet list: "• Item" or "- Item"
-                r'[a-zA-Z]\.', # Letter list: "a. Item"
-            ]
-            
-            for pattern in list_patterns:
-                match = re.search(r'(' + pattern + r'\s+)', section)
-                if match and (list_start == -1 or match.start() < list_start):
-                    list_start = match.start()
-            
-            if list_start > 0:
-                intro = section[:list_start].strip()
-                list_text = section[list_start:].strip()
+            section = section.strip()
+            if not section:
+                continue
                 
-                # Add the introduction as a separate text block
-                if intro:
-                    # Check if this intro contains "follow these steps:" or similar
-                    if re.search(r'(follow these steps:|steps to follow:|for.*?:|if you.*?:)', intro, re.IGNORECASE):
+            # Find where the numbered list starts (if any)
+            list_match = re.search(r'(^|\n)(\d+\.|\-|\*|\•)', section)
+            
+            if list_match:
+                # There's a list in this section
+                list_start_pos = list_match.start()
+                
+                # Extract the intro text
+                if list_start_pos > 0:
+                    intro_text = section[:list_start_pos].strip()
+                    if intro_text:
                         text_blocks.append({
                             "type": "TextBlock",
-                            "text": intro,
+                            "text": intro_text,
                             "wrap": True,
-                            "spacing": "medium",
-                            "weight": "bolder"  # Make section headings bold
-                        })
-                    else:
-                        text_blocks.append({
-                            "type": "TextBlock",
-                            "text": intro,
-                            "wrap": True,
+                            "weight": "bolder",
                             "spacing": "medium"
                         })
                 
-                # Process the list items, preserving original numbering/bullets
-                list_items = []
-                for line in list_text.split('\n'):
-                    if line.strip():
-                        list_items.append({
-                            "type": "TextBlock",
-                            "text": line.strip(),
-                            "wrap": True,
-                            "spacing": "small"
-                        })
+                # Process the list items
+                list_text = section[list_start_pos:].strip()
                 
-                if list_items:
+                # Split into list items
+                list_item_pattern = r'(?:^|\n)(?=\d+\.|\-|\*|\•)'
+                list_items_raw = re.split(list_item_pattern, list_text)
+                list_items_raw = [item.strip() for item in list_items_raw if item.strip()]
+                
+                # Create a container for each list item
+                list_containers = []
+                for item in list_items_raw:
+                    list_containers.append({
+                        "type": "TextBlock",
+                        "text": item,
+                        "wrap": True,
+                        "spacing": "small"
+                    })
+                
+                if list_containers:
                     text_blocks.append({
                         "type": "Container",
-                        "items": list_items,
+                        "items": list_containers,
                         "spacing": "small"
                     })
             else:
-                # This section doesn't seem to have list items
-                # Just add as regular text block
+                # No list in this section, just add as regular text
                 text_blocks.append({
                     "type": "TextBlock",
-                    "text": section.strip(),
+                    "text": section,
                     "wrap": True,
                     "spacing": "medium"
                 })
         
         return text_blocks
-        
     except Exception as e:
-        # Global error handler - if anything goes wrong, return the text as a single block
         print(f"Error in format_text_for_adaptive_card: {str(e)}")
         return [{
             "type": "TextBlock",
