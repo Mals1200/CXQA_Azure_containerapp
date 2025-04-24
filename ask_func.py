@@ -2,6 +2,10 @@
 # Testing Cursors code to fix the output in scripts such as jupyter notebook.
 
 
+# Version 18d:
+# History fix with app.py version(5)
+# Added a line in "final_answering_llm()", to prioritize the Python result if 2 different outputs were available. ##
+
 import os
 import io
 import re
@@ -282,138 +286,121 @@ def call_llm(system_prompt, user_prompt, max_tokens=500, temperature=0.0):
 # Replace the custom formatting function with a markdown-based approach
 def format_text_for_display(text):
     """
-    Complete text reformatting function that aggressively fixes formatting issues
-    by reprocessing numbered lists, enforcing proper structure, and ensuring readability.
+    Format text using standard markdown processing to ensure consistent 
+    output with proper list formatting.
     """
     if not text or not isinstance(text, str):
         return "No information available."
     
     try:
+        # Pre-process: fix common issues that markdown processing doesn't handle
+        # 1. Ensure headers and list items are properly separated
         import re
         
-        # DRASTIC APPROACH: For severe formatting issues, we'll rebuild the entire text
-
-        # Step 1: Normalize line endings and spacing
-        text = text.replace('\r\n', '\n').replace('\r', '\n')
-        text = re.sub(r'\s{3,}', '\n\n', text)
+        # Fix numbers running together (e.g., "1. First item 2. Second item")
+        text = re.sub(r'(\d+\..*?)(\s+\d+\.)', r'\1\n\2', text)
         
-        # Step 2: Extract and clean up any section headers/introductions
-        # First, identify major sections (like "If you discover a fire...")
-        sections = []
+        # Ensure section headers and first list items are separated
+        text = re.sub(r'(.*?:)\s*(\d+\.)', r'\1\n\n\2', text)
         
-        # Common section header patterns
-        section_start_patterns = [
-            r"If you discover a fire",
-            r"If you hear the fire alarm",
-            r"For fire suppression",
-            r"In case of emergency",
-            r"When evacuating",
-        ]
+        # Ensure blank line before lists for proper markdown recognition
+        text = re.sub(r'([^\n])\n(\d+\.)', r'\1\n\n\2', text)
         
-        # Find all potential section starts
-        potential_sections = []
-        for pattern in section_start_patterns:
-            matches = list(re.finditer(pattern, text, re.IGNORECASE))
-            potential_sections.extend([(m.start(), pattern) for m in matches])
+        # Handle bullet points properly
+        text = re.sub(r'([^\n])\n(\-\s+)', r'\1\n\n\2', text)
         
-        # Sort by position in text
-        potential_sections.sort()
+        # Normalize multiple blank lines
+        text = re.sub(r'\n{3,}', '\n\n', text)
         
-        if potential_sections:
-            # Create sections based on these markers
-            for i, (pos, _) in enumerate(potential_sections):
-                end = potential_sections[i+1][0] if i < len(potential_sections)-1 else len(text)
-                sections.append(text[pos:end])
-        else:
-            # No clear sections found, treat the whole text as one section
-            sections = [text]
+        # Convert the text to a cleaner markdown format
+        md_text = text
         
-        # Process each section to enforce proper numbered list formatting
-        processed_sections = []
+        # Convert markdown to HTML
+        html_text = markdown.markdown(md_text)
         
-        for section in sections:
-            # Step 1: Separate the header from list items
-            header_match = re.search(r'^(.*?(?:steps:|:))', section, re.IGNORECASE | re.MULTILINE | re.DOTALL)
+        # Parse HTML back to plain text with proper formatting
+        class MLStripper(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.reset()
+                self.strict = False
+                self.convert_charrefs = True
+                self.text = []
+                self.list_depth = 0
+                self.in_list_item = False
+                self.current_line = ""
+                
+            def handle_starttag(self, tag, attrs):
+                if tag == 'ul' or tag == 'ol':
+                    self.list_depth += 1
+                elif tag == 'li' and self.list_depth > 0:
+                    self.in_list_item = True
+                    # Add indentation based on list depth
+                    self.current_line = "  " * (self.list_depth - 1)
+                elif tag == 'p':
+                    if self.text and not self.text[-1].endswith('\n\n'):
+                        self.text.append('\n\n')
+                elif tag == 'br':
+                    self.text.append('\n')
+                elif tag == 'h1' or tag == 'h2' or tag == 'h3' or tag == 'h4':
+                    if self.text and not self.text[-1].endswith('\n\n'):
+                        self.text.append('\n\n')
+                
+            def handle_endtag(self, tag):
+                if tag == 'ul' or tag == 'ol':
+                    self.list_depth -= 1
+                elif tag == 'li':
+                    self.in_list_item = False
+                    self.text.append('\n')
+                elif tag in ['p', 'h1', 'h2', 'h3', 'h4']:
+                    if not self.text[-1].endswith('\n\n'):
+                        self.text.append('\n\n')
+                
+            def handle_data(self, data):
+                if self.in_list_item and not self.current_line:
+                    # This is content for a list item
+                    self.current_line = "  " * (self.list_depth - 1) + "• "
+                
+                self.current_line += data
+                
+                if not self.in_list_item:
+                    self.text.append(self.current_line)
+                    self.current_line = ""
             
-            if header_match:
-                header = header_match.group(0).strip()
-                content = section[header_match.end():].strip()
-            else:
-                # No clear header, check if the section starts with a number
-                if re.match(r'^\d+\.', section.strip()):
-                    header = ""
-                    content = section.strip()
-                else:
-                    # Just use the first line as header
-                    lines = section.strip().split('\n', 1)
-                    header = lines[0]
-                    content = lines[1] if len(lines) > 1 else ""
-            
-            # Step 2: Extract all numbered list items
-            # This is a more aggressive approach to find all numbered items
-            numbered_items = []
-            
-            # Pattern for numbered items (both standalone and run-together)
-            item_pattern = r'(\d+)\.\s*([^0-9\.\n]*(?:\n(?!\d+\.)[^\n]*)*)'
-            
-            # Find all matches
-            matches = list(re.finditer(item_pattern, content))
-            
-            if matches:
-                for match in matches:
-                    num = match.group(1)
-                    text = match.group(2).strip().replace('\n', ' ')
-                    numbered_items.append((num, text))
-            
-            # Step 3: Rebuild the section with proper formatting
-            rebuilt_section = header.strip() + "\n"  # Header on its own line
-            
-            if numbered_items:
-                for num, item_text in numbered_items:
-                    rebuilt_section += f"{num}. {item_text}\n"
-            else:
-                # No numbered items found, preserve the content as is
-                rebuilt_section += content
-            
-            processed_sections.append(rebuilt_section)
+            def get_text(self):
+                if self.current_line:
+                    self.text.append(self.current_line)
+                return ''.join(self.text)
         
-        # Join the processed sections with clear separation
-        final_text = "\n\n".join(processed_sections)
+        stripper = MLStripper()
+        stripper.feed(html_text)
+        formatted_text = stripper.get_text()
         
-        # Final cleanup
-        final_text = re.sub(r'\n{3,}', '\n\n', final_text)  # Max 2 newlines
-        final_text = re.sub(r'[ \t]+$', '', final_text, flags=re.MULTILINE)  # Remove trailing spaces
+        # Final adjustments to ensure readable format
+        # Decode HTML entities
+        formatted_text = html.unescape(formatted_text)
         
-        return final_text.strip()
+        # Normalize line endings
+        formatted_text = re.sub(r'\n{3,}', '\n\n', formatted_text)
+        
+        # Ensure numbered list items are formatted properly
+        formatted_text = re.sub(r'•\s*(\d+\.)', r'\1', formatted_text)
+        
+        # Fix for common markdown-to-text issues
+        formatted_text = formatted_text.replace('• ', '- ')
+        
+        return formatted_text.strip()
         
     except Exception as e:
-        logging.warning(f"Error in format_text_for_display: {e}")
-        # Emergency fallback
+        logging.warning(f"Error in markdown formatting: {e}")
+        # Fall back to minimal text cleanup
         try:
-            # Try a very basic fix at minimum
-            lines = text.split("\n")
-            cleaned = []
-            
-            for i, line in enumerate(lines):
-                # Force each numbered item onto its own line
-                if re.match(r'^\d+\.', line.strip()):
-                    cleaned.append(line.strip())
-                # If a line contains multiple numbered items, split them
-                elif re.search(r'\d+\.\s+.*?\d+\.', line):
-                    parts = re.split(r'(\d+\.)', line)
-                    for j, part in enumerate(parts):
-                        if j == 0 and part.strip():
-                            cleaned.append(part.strip())
-                        elif re.match(r'\d+\.', part):
-                            if j+1 < len(parts):
-                                cleaned.append(f"{part.strip()} {parts[j+1].strip()}")
-                else:
-                    cleaned.append(line)
-                    
-            return "\n".join(cleaned)
-        except:
-            # Absolute last resort
+            import re
+            # At minimum, fix run-together lists
+            text = re.sub(r'(\d+\..*?)(\s+\d+\.)', r'\1\n\2', text)
             return text.strip()
+        except:
+            return text if isinstance(text, str) else str(text)
 
 #######################################################################################
 #                   COMBINED TEXT CLEANING (Point #2 Optimization)
@@ -792,27 +779,24 @@ You are a helpful assistant generating professional responses for an enterprise 
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 
-CRITICAL FORMATTING INSTRUCTIONS:
-1. ANY numbered list must follow this EXACT format:
-   - Section header on its own line ending with a colon
-   - One blank line after the header 
-   - Each numbered item must start with the number, followed by a period and a space
-   - Each numbered item MUST be on its own separate line
-   - NEVER combine multiple numbered items on the same line
-   - Example:
-     If you discover a fire, follow these steps:
-     
-     1. First step description
-     2. Second step description
-     3. Third step description
+FORMATTING INSTRUCTIONS:
+- Use proper markdown formatting for all responses
+- For numbered lists, use the markdown format (1. First item, etc.)
+- Always ensure there is a blank line before starting a list
+- For section headers, use a full line followed by a colon
+- Example of proper formatting:
 
-2. If there are multiple sections with lists, separate them with a blank line.
+If you discover a fire, follow these steps:
 
-3. At the end of your response, on a new line, add EXACTLY: "Source: X" where X is:
-   - "Index" if only index data was used
-   - "Python" if only python data was used
-   - "Index & Python" if both were used
-   - "No information was found in the Data. Can I help you with anything else?" if none is truly relevant
+1. First step description
+2. Second step description
+3. Third step description
+
+At the end of your response, include "Source: X" where X is:
+- "Index" if only index data was used
+- "Python" if only python data was used
+- "Index & Python" if both were used
+- "No information was found in the Data. Can I help you with anything else?" if none is relevant
 
 User question:
 {user_question}
@@ -830,10 +814,10 @@ Chat_history:
     try:
         final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
         
-        # Always apply our aggressive formatter, regardless of what the LLM returned
+        # Apply markdown formatting to ensure proper structure
         final_text = format_text_for_display(final_text)
         
-        # Ensure we never yield an empty or error-laden string
+        # Safety check
         if (not final_text.strip() 
             or final_text.startswith("LLM Error") 
             or final_text.startswith("No content from LLM") 
@@ -844,7 +828,6 @@ Chat_history:
         
         yield final_text
     except Exception as e:
-        # Never expose error messages to users
         logging.error(f"Error in final_answer_llm: {e}")
         yield "I'm sorry, but I'm having trouble processing your request right now. Please try again in a moment."
 
