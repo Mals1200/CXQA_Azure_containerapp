@@ -51,4 +51,6 @@ asyncio==3.4.3
 # voice ui
 PyQt5==5.15.11
 
+# for formatting output
+markdown==3.8
 
