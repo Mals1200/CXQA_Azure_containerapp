@@ -1,6 +1,5 @@
-# Version 18d:
-# History fix with app.py version(5)
-# Added a line in "final_answering_llm()", to prioritize the Python result if 2 different outputs were available.
+# Version 19:
+# Testing Cursors code to fix the output in scripts such as jupyter notebook.
 
 import os
 import io
@@ -258,6 +257,8 @@ def call_llm(system_prompt, user_prompt, max_tokens=500, temperature=0.0):
         if "choices" in data and data["choices"]:
             content = data["choices"][0]["message"].get("content", "").strip()
             if content:
+                # Post-process the content to fix formatting issues
+                content = format_text_for_display(content)
                 return content
             else:
                 logging.warning("LLM returned an empty content field.")
@@ -273,6 +274,96 @@ def call_llm(system_prompt, user_prompt, max_tokens=500, temperature=0.0):
         print(err_msg)                                                  # <‑‑ NEW: show in console/stdout
         logging.error(err_msg)
         return err_msg
+
+# Replace the simple format_text_for_display function with a more robust implementation
+def format_text_for_display(text):
+    """
+    Comprehensive text formatter that fixes common formatting issues in LLM outputs
+    to ensure professional and consistent display across all platforms.
+    Handles multiple section types, list formats, and edge cases.
+    """
+    if not text or not isinstance(text, str):
+        return "No information available."
+    
+    try:
+        import re
+        
+        # STEP 1: Pre-processing cleanup
+        # Remove excessive whitespace
+        text = re.sub(r'\s{3,}', '\n\n', text)
+        # Normalize line endings
+        text = text.replace('\r\n', '\n').replace('\r', '\n')
+        
+        # STEP 2: Fix section headers with embedded list items
+        # Multiple patterns for different types of headers
+        header_patterns = [
+            # "Follow these steps: 1. First item" -> "Follow these steps:\n1. First item"
+            (r'(.*?follow these steps:)\s*(\d+\.\s+.*?)$', r'\1\n\2'),
+            (r'(.*?steps to follow:)\s*(\d+\.\s+.*?)$', r'\1\n\2'),
+            (r'(.*?steps:)\s*(\d+\.\s+.*?)$', r'\1\n\2'),
+            # Any colon followed by a numbered/bulleted item
+            (r'(.*?:)\s*(\d+\.\s+.*?)$', r'\1\n\2'),
+            (r'(.*?:)\s*(\-\s+.*?)$', r'\1\n\2'),
+            (r'(.*?:)\s*(\•\s+.*?)$', r'\1\n\2'),
+            (r'(.*?:)\s*(\*\s+.*?)$', r'\1\n\2'),
+        ]
+        
+        for pattern, replacement in header_patterns:
+            text = re.sub(pattern, replacement, text, flags=re.MULTILINE)
+        
+        # STEP 3: Ensure proper section spacing
+        # Add blank lines between major sections
+        section_starters = [
+            r'(\.\s*)(If you|For |When |In case of |Note:|Important:|Warning:|To |Steps for )',
+            r'(\n)([A-Z][a-z]+ \d+:)',  # Patterns like "Step 1:" at start of line
+            r'(\.)(\s*\n\s*\d+\.)',  # End of paragraph followed by numbered list
+        ]
+        
+        for pattern in section_starters:
+            text = re.sub(pattern, r'\1\n\n\2', text)
+        
+        # STEP 4: Clean up list formatting
+        # Fix any missing newlines between list items
+        text = re.sub(r'(\d+\.\s+[^\n]+)(\d+\.)', r'\1\n\2', text)
+        text = re.sub(r'(\-\s+[^\n]+)(\-\s+)', r'\1\n\2', text)
+        text = re.sub(r'(\•\s+[^\n]+)(\•\s+)', r'\1\n\2', text)
+        text = re.sub(r'(\*\s+[^\n]+)(\*\s+)', r'\1\n\2', text)
+        
+        # Ensure proper spacing after list items
+        text = re.sub(r'(\d+\.[^\n]+)(\n[a-zA-Z])', r'\1\n\2', text)
+        
+        # STEP 5: Remove problematic stray characters and common issues
+        # Remove stray single letters that might appear at line starts
+        text = re.sub(r'\n([a-zA-Z])\.\s*\n', '\n', text)
+        # Fix weird enumeration patterns
+        text = re.sub(r'(\d+\.\s+[^\n]+\n)([a-z]\.)', r'\1\n\2', text)
+        
+        # STEP 6: Final cleanup/normalization
+        # Normalize multiple blank lines to max 2
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        # Remove trailing whitespace from lines
+        text = re.sub(r'[ \t]+$', '', text, flags=re.MULTILINE)
+        # Ensure text ends with a single newline
+        text = text.rstrip() + '\n'
+        
+        # STEP 7: Formatting verification
+        # Quick check that we didn't create any obvious issues
+        if re.search(r'(\d+\.\s*\d+\.)', text):
+            # Fix cases where numbering got messed up (1.2.)
+            text = re.sub(r'(\d+\.\s*)(\d+\.)', r'\1\n\2', text)
+        
+        return text.strip()
+    except Exception as e:
+        # If anything in our formatting fails, return the original text
+        # but with minimal essential formatting to prevent blank content
+        logging.warning(f"Error in format_text_for_display: {e}")
+        try:
+            # Last-ditch effort to at least fix the most critical issue
+            import re
+            return re.sub(r'(.*?follow these steps:)\s*(\d+\.)', r'\1\n\2', text, flags=re.MULTILINE).strip()
+        except:
+            # Absolute fallback - at least make sure it's a string
+            return text.strip() if isinstance(text, str) else str(text)
 
 #######################################################################################
 #                   COMBINED TEXT CLEANING (Point #2 Optimization)
@@ -637,16 +728,17 @@ def final_answer_llm(user_question, index_dict, python_dict):
 
     if index_top_k.lower() == "no information" and python_result.lower() == "no information":
         fallback_text = tool_3_llm_fallback(user_question)
+        fallback_text = format_text_for_display(fallback_text)  # Format the text
         yield f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
         return
 
     combined_info = f"INDEX_DATA:\n{index_top_k}\n\nPYTHON_DATA:\n{python_result}"
 
     system_prompt = f"""
-You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
+You are a helpful assistant generating professional responses for an enterprise organization. The user asked a question, and you have two data sources:
 1) Index data: (INDEX_DATA)
 2) Python data: (PYTHON_DATA)
-*) Always Prioritise The python result if the 2 are different.
+*) Always prioritize the Python result if the two sources provide different information.
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
@@ -655,8 +747,15 @@ At the end of your final answer, put EXACTLY one line with "Source: X" where X c
 - "Index & Python" if both were used,
 - or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
 
-Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
-Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
+FORMAT YOUR RESPONSE CAREFULLY FOLLOWING THESE RULES:
+1. Always place each paragraph, bullet point, or list item on its own line
+2. For numbered lists:
+   - Put each number on a new line: "1. First item"
+   - Always separate section headers from the first list item with a line break
+   - Example: "If you discover a fire, follow these steps:" should be on its own line
+3. Ensure consistent spacing between sections
+4. For any groups of steps or instructions, use clear, consistent numbering
+5. Do not place multiple numbered items on the same line
 
 User question:
 {user_question}
@@ -671,18 +770,26 @@ Chat_history:
 {recent_history if recent_history else []}
 """
 
-    final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
-
-    # Ensure we never yield an empty or error-laden string without a fallback
-    if (not final_text.strip() 
-        or final_text.startswith("LLM Error") 
-        or final_text.startswith("No content from LLM") 
-        or final_text.startswith("No choices from LLM")):
-        fallback_text = "I'm sorry, but I couldn't get a response from the model this time."
-        yield fallback_text
-        return
-
-    yield final_text
+    try:
+        final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
+        
+        # Double-check formatting - apply our formatter even after explicit instructions
+        final_text = format_text_for_display(final_text)
+        
+        # Ensure we never yield an empty or error-laden string without a fallback
+        if (not final_text.strip() 
+            or final_text.startswith("LLM Error") 
+            or final_text.startswith("No content from LLM") 
+            or final_text.startswith("No choices from LLM")):
+            fallback_text = "I'm sorry, but I couldn't get a response based on the available information. Please try rephrasing your question."
+            yield fallback_text
+            return
+        
+        yield final_text
+    except Exception as e:
+        # Emergency fallback with generic message rather than exposing error
+        logging.error(f"Error in final_answer_llm: {e}")
+        yield "I'm sorry, but I'm having trouble processing your request right now. Please try again in a moment."
 
 #######################################################################################
 #                          POST-PROCESS SOURCE
