@@ -219,11 +219,88 @@ async def _bot_logic(turn_context: TurnContext):
                 if "source_details" in response_json:
                     source_details = response_json["source_details"]
                     
-                    # Add files information if available
+                    # Format the source attribution based on type
+                    source_attribution = ""
+                    
+                    # For Index sources, extract file names from the content
+                    if source == "Index" and "files" in source_details and source_details["files"]:
+                        file_content = source_details["files"]
+                        # Extract file names from the top lines (typically the first few lines contain file names)
+                        file_names = []
+                        for line in file_content.strip().split('\n')[:5]:  # Check first 5 lines
+                            line = line.strip()
+                            if line and not line.startswith("---") and len(line) < 100:  # Basic filters
+                                file_names.append(line)
+                        
+                        if file_names:
+                            source_attribution = "Referenced " + " and ".join(file_names)
+                        else:
+                            source_attribution = "Referenced document"
+                    
+                    # For Python sources, extract table names from the code
+                    elif source == "Python" and "code" in source_details and source_details["code"]:
+                        code = source_details["code"]
+                        table_names = []
+                        
+                        # Look for dataframe references like 'dataframes.get("TableName.xlsx")'
+                        import re
+                        pattern = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+                        matches = pattern.findall(code)
+                        
+                        if matches:
+                            table_names = [name.replace('.xlsx', '').replace('.csv', '') for name in matches]
+                            source_attribution = "Calculated using " + " and ".join(table_names)
+                        else:
+                            source_attribution = "Calculated using data tables"
+                    
+                    # For combined sources
+                    elif source == "Index & Python":
+                        file_names = []
+                        table_names = []
+                        
+                        # Extract file names from index
+                        if "files" in source_details and source_details["files"]:
+                            file_content = source_details["files"]
+                            for line in file_content.strip().split('\n')[:5]:
+                                line = line.strip()
+                                if line and not line.startswith("---") and len(line) < 100:
+                                    file_names.append(line)
+                        
+                        # Extract table names from code
+                        if "code" in source_details and source_details["code"]:
+                            code = source_details["code"]
+                            import re
+                            pattern = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+                            matches = pattern.findall(code)
+                            if matches:
+                                table_names = [name.replace('.xlsx', '').replace('.csv', '') for name in matches]
+                        
+                        # Combine into attribution
+                        if file_names and table_names:
+                            source_attribution = f"Retrieved Using {', '.join(table_names)} and {', '.join(file_names)}"
+                        elif file_names:
+                            source_attribution = "Referenced " + " and ".join(file_names)
+                        elif table_names:
+                            source_attribution = "Calculated using " + " and ".join(table_names)
+                        else:
+                            source_attribution = "Retrieved from combined sources"
+                    
+                    # Add the attribution as the first item after the source
+                    if source_attribution:
+                        source_container["items"].insert(1, {
+                            "type": "TextBlock",
+                            "text": source_attribution,
+                            "wrap": True,
+                            "weight": "Bolder",
+                            "spacing": "Small",
+                            "color": "Good"
+                        })
+                    
+                    # Add files information if available (keep original but with a better header)
                     if "files" in source_details and source_details["files"]:
                         source_container["items"].append({
                             "type": "TextBlock",
-                            "text": "**Files:**",
+                            "text": "**Content Details:**",
                             "wrap": True,
                             "weight": "Bolder",
                             "spacing": "Medium"
