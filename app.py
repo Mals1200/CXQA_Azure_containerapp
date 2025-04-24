@@ -1,5 +1,5 @@
-# Version 8  Takes Json format
-# Recieves the answer as JSON Format from ask_func.py version 19b. now it can handle the json as the main display method on teams.
+# Version 9
+# Fixed Files display in src
 
 import os
 import asyncio
@@ -243,7 +243,6 @@ async def _bot_logic(turn_context: TurnContext):
                         table_names = []
                         
                         # Look for dataframe references like 'dataframes.get("TableName.xlsx")'
-                        import re
                         pattern = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
                         matches = pattern.findall(code)
                         
@@ -269,7 +268,6 @@ async def _bot_logic(turn_context: TurnContext):
                         # Extract table names from code
                         if "code" in source_details and source_details["code"]:
                             code = source_details["code"]
-                            import re
                             pattern = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
                             matches = pattern.findall(code)
                             if matches:
