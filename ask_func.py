@@ -1,10 +1,5 @@
 # Version 19:
-# Testing Cursors code to fix the output in scripts such as jupyter notebook.
-
-
-# Version 18d:
-# History fix with app.py version(5)
-# Added a line in "final_answering_llm()", to prioritize the Python result if 2 different outputs were available. ##
+# Fixed Answer layout in the final_answering_llm() function:
 
 import os
 import io
@@ -26,9 +21,6 @@ from functools import lru_cache, wraps
 from collections import OrderedDict
 import difflib
 import time
-import markdown
-from html.parser import HTMLParser
-import html
 
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
@@ -265,8 +257,6 @@ def call_llm(system_prompt, user_prompt, max_tokens=500, temperature=0.0):
         if "choices" in data and data["choices"]:
             content = data["choices"][0]["message"].get("content", "").strip()
             if content:
-                # Post-process the content to fix formatting issues
-                content = format_text_for_display(content)
                 return content
             else:
                 logging.warning("LLM returned an empty content field.")
@@ -282,125 +272,6 @@ def call_llm(system_prompt, user_prompt, max_tokens=500, temperature=0.0):
         print(err_msg)                                                  # <‑‑ NEW: show in console/stdout
         logging.error(err_msg)
         return err_msg
-
-# Replace the custom formatting function with a markdown-based approach
-def format_text_for_display(text):
-    """
-    Format text using standard markdown processing to ensure consistent 
-    output with proper list formatting.
-    """
-    if not text or not isinstance(text, str):
-        return "No information available."
-    
-    try:
-        # Pre-process: fix common issues that markdown processing doesn't handle
-        # 1. Ensure headers and list items are properly separated
-        import re
-        
-        # Fix numbers running together (e.g., "1. First item 2. Second item")
-        text = re.sub(r'(\d+\..*?)(\s+\d+\.)', r'\1\n\2', text)
-        
-        # Ensure section headers and first list items are separated
-        text = re.sub(r'(.*?:)\s*(\d+\.)', r'\1\n\n\2', text)
-        
-        # Ensure blank line before lists for proper markdown recognition
-        text = re.sub(r'([^\n])\n(\d+\.)', r'\1\n\n\2', text)
-        
-        # Handle bullet points properly
-        text = re.sub(r'([^\n])\n(\-\s+)', r'\1\n\n\2', text)
-        
-        # Normalize multiple blank lines
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        
-        # Convert the text to a cleaner markdown format
-        md_text = text
-        
-        # Convert markdown to HTML
-        html_text = markdown.markdown(md_text)
-        
-        # Parse HTML back to plain text with proper formatting
-        class MLStripper(HTMLParser):
-            def __init__(self):
-                super().__init__()
-                self.reset()
-                self.strict = False
-                self.convert_charrefs = True
-                self.text = []
-                self.list_depth = 0
-                self.in_list_item = False
-                self.current_line = ""
-                
-            def handle_starttag(self, tag, attrs):
-                if tag == 'ul' or tag == 'ol':
-                    self.list_depth += 1
-                elif tag == 'li' and self.list_depth > 0:
-                    self.in_list_item = True
-                    # Add indentation based on list depth
-                    self.current_line = "  " * (self.list_depth - 1)
-                elif tag == 'p':
-                    if self.text and not self.text[-1].endswith('\n\n'):
-                        self.text.append('\n\n')
-                elif tag == 'br':
-                    self.text.append('\n')
-                elif tag == 'h1' or tag == 'h2' or tag == 'h3' or tag == 'h4':
-                    if self.text and not self.text[-1].endswith('\n\n'):
-                        self.text.append('\n\n')
-                
-            def handle_endtag(self, tag):
-                if tag == 'ul' or tag == 'ol':
-                    self.list_depth -= 1
-                elif tag == 'li':
-                    self.in_list_item = False
-                    self.text.append('\n')
-                elif tag in ['p', 'h1', 'h2', 'h3', 'h4']:
-                    if not self.text[-1].endswith('\n\n'):
-                        self.text.append('\n\n')
-                
-            def handle_data(self, data):
-                if self.in_list_item and not self.current_line:
-                    # This is content for a list item
-                    self.current_line = "  " * (self.list_depth - 1) + "• "
-                
-                self.current_line += data
-                
-                if not self.in_list_item:
-                    self.text.append(self.current_line)
-                    self.current_line = ""
-            
-            def get_text(self):
-                if self.current_line:
-                    self.text.append(self.current_line)
-                return ''.join(self.text)
-        
-        stripper = MLStripper()
-        stripper.feed(html_text)
-        formatted_text = stripper.get_text()
-        
-        # Final adjustments to ensure readable format
-        # Decode HTML entities
-        formatted_text = html.unescape(formatted_text)
-        
-        # Normalize line endings
-        formatted_text = re.sub(r'\n{3,}', '\n\n', formatted_text)
-        
-        # Ensure numbered list items are formatted properly
-        formatted_text = re.sub(r'•\s*(\d+\.)', r'\1', formatted_text)
-        
-        # Fix for common markdown-to-text issues
-        formatted_text = formatted_text.replace('• ', '- ')
-        
-        return formatted_text.strip()
-        
-    except Exception as e:
-        logging.warning(f"Error in markdown formatting: {e}")
-        # Fall back to minimal text cleanup
-        try:
-            import re
-            # At minimum, fix run-together lists
-            text = re.sub(r'(\d+\..*?)(\s+\d+\.)', r'\1\n\2', text)
-            return text.strip()
-        except:
-            return text if isinstance(text, str) else str(text)
 
 #######################################################################################
 #                   COMBINED TEXT CLEANING (Point #2 Optimization)
@@ -765,34 +636,27 @@ def final_answer_llm(user_question, index_dict, python_dict):
 
     if index_top_k.lower() == "no information" and python_result.lower() == "no information":
         fallback_text = tool_3_llm_fallback(user_question)
-        fallback_text = format_text_for_display(fallback_text)
         yield f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
         return
 
     combined_info = f"INDEX_DATA:\n{index_top_k}\n\nPYTHON_DATA:\n{python_result}"
 
     system_prompt = f"""
-You are a helpful assistant generating professional responses for an enterprise organization. The user asked a question, and you have two data sources:
+You are a helpful assistant. The user asked a question, and you have two data sources:
 1) Index data: (INDEX_DATA)
 2) Python data: (PYTHON_DATA)
 *) Always prioritize the Python result if the two sources provide different information.
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 
-FORMATTING INSTRUCTIONS:
-- Use proper markdown formatting for all responses
-- For numbered lists, use the markdown format (1. First item, etc.)
-- Always ensure there is a blank line before starting a list
-- For section headers, use a full line followed by a colon
-- Example of proper formatting:
+FORMATTING GUIDANCE:
+Present your answer in a clear, readable format. The most important thing is that:
+- Each numbered item or step should appear on its own line.
+- Make sure content is organized in a way that's easy to read.
+- Use natural spacing and structure based on the content type.
+- Use 1), 2), 3), etc. to display numbers.
 
-If you discover a fire, follow these steps:
-
-1. First step description
-2. Second step description
-3. Third step description
-
-At the end of your response, include "Source: X" where X is:
+At the end of your response, add a line with "Source: X" where X is:
 - "Index" if only index data was used
 - "Python" if only python data was used
 - "Index & Python" if both were used
@@ -811,25 +675,18 @@ Chat_history:
 {recent_history if recent_history else []}
 """
 
-    try:
-        final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
-        
-        # Apply markdown formatting to ensure proper structure
-        final_text = format_text_for_display(final_text)
-        
-        # Safety check
-        if (not final_text.strip() 
-            or final_text.startswith("LLM Error") 
-            or final_text.startswith("No content from LLM") 
-            or final_text.startswith("No choices from LLM")):
-            fallback_text = "I'm sorry, but I couldn't get a response based on the available information. Please try rephrasing your question."
-            yield fallback_text
-            return
-        
-        yield final_text
-    except Exception as e:
-        logging.error(f"Error in final_answer_llm: {e}")
-        yield "I'm sorry, but I'm having trouble processing your request right now. Please try again in a moment."
+    final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
+
+    # Ensure we never yield an empty or error-laden string without a fallback
+    if (not final_text.strip() 
+        or final_text.startswith("LLM Error") 
+        or final_text.startswith("No content from LLM") 
+        or final_text.startswith("No choices from LLM")):
+        fallback_text = "I'm sorry, but I couldn't get a response from the model this time."
+        yield fallback_text
+        return
+
+    yield final_text
 
 #######################################################################################
 #                          POST-PROCESS SOURCE
@@ -1031,7 +888,6 @@ def agent_answer(user_question, user_tier=1):
 
     raw_answer = ""
     for token in final_answer_llm(user_question, index_dict, python_dict):
-        yield token
         raw_answer += token
 
     # Now unify repeated text cleaning
