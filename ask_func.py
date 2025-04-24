@@ -1,5 +1,6 @@
 # Version 19:
-# Fixed Answer layout in the final_answering_llm() function:
+
+# Added a line in "final_answering_llm()", to prioritize the Python result if 2 different outputs were available.
 
 import os
 import io
@@ -642,25 +643,21 @@ def final_answer_llm(user_question, index_dict, python_dict):
     combined_info = f"INDEX_DATA:\n{index_top_k}\n\nPYTHON_DATA:\n{python_result}"
 
     system_prompt = f"""
-You are a helpful assistant. The user asked a question, and you have two data sources:
+You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
 1) Index data: (INDEX_DATA)
 2) Python data: (PYTHON_DATA)
-*) Always prioritize the Python result if the two sources provide different information.
+*) Always Prioritise The python result if the 2 are different.
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
+At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
+- "Index" if only index data was used,
+- "Python" if only python data was used,
+- "Index & Python" if both were used,
+- or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
+- Present your answer in a clear, readable format.
 
-FORMATTING GUIDANCE:
-Present your answer in a clear, readable format. The most important thing is that:
-- Each numbered item or step should appear on its own line.
-- Make sure content is organized in a way that's easy to read.
-- Use natural spacing and structure based on the content type.
-- Use 1), 2), 3), etc. to display numbers.
-
-At the end of your response, add a line with "Source: X" where X is:
-- "Index" if only index data was used
-- "Python" if only python data was used
-- "Index & Python" if both were used
-- "No information was found in the Data. Can I help you with anything else?" if none is relevant
+Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
+Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
 
 User question:
 {user_question}
@@ -1030,5 +1027,7 @@ def Ask_Question(question, user_id="anonymous"):
 
     except Exception as e:
         error_msg = f"Critical error in Ask_Question: {str(e)}"
+        logging.error(error_msg)
+        yield error_msg
         logging.error(error_msg)
         yield error_msg
