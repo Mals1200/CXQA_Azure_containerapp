@@ -1,11 +1,11 @@
-# Version 7
-# Scrolling works.
-# Fixed Source segment.
+# Version 8  Takes Json format
+# Recieves the answer as JSON Format from ask_func.py version 19b. now it can handle the json as the main display method on teams.
 
 import os
 import asyncio
 from threading import Lock
 import re
+import json
 
 from flask import Flask, request, jsonify, Response
 from botbuilder.core import (
@@ -130,6 +130,198 @@ async def _bot_logic(turn_context: TurnContext):
         source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
         match = re.search(source_pattern, answer_text, flags=re.DOTALL)
 
+        # Try to parse the response as JSON first
+        try:
+            response_json = json.loads(answer_text)
+            
+            # Check if this is our expected JSON format with content and source
+            if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
+                # We have a structured JSON response!
+                content_items = response_json["content"]
+                source = response_json["source"]
+                
+                # Build the adaptive card body
+                body_blocks = []
+                
+                # Process each content item based on its type
+                for item in content_items:
+                    item_type = item.get("type", "")
+                    
+                    if item_type == "heading":
+                        body_blocks.append({
+                            "type": "TextBlock",
+                            "text": item.get("text", ""),
+                            "wrap": True,
+                            "weight": "Bolder",
+                            "size": "Large",
+                            "spacing": "Medium"
+                        })
+                    
+                    elif item_type == "paragraph":
+                        body_blocks.append({
+                            "type": "TextBlock",
+                            "text": item.get("text", ""),
+                            "wrap": True,
+                            "spacing": "Small"
+                        })
+                    
+                    elif item_type == "bullet_list":
+                        items = item.get("items", [])
+                        for list_item in items:
+                            body_blocks.append({
+                                "type": "TextBlock",
+                                "text": f"• {list_item}",
+                                "wrap": True,
+                                "spacing": "Small"
+                            })
+                    
+                    elif item_type == "numbered_list":
+                        items = item.get("items", [])
+                        for i, list_item in enumerate(items, 1):
+                            body_blocks.append({
+                                "type": "TextBlock",
+                                "text": f"{i}. {list_item}",
+                                "wrap": True,
+                                "spacing": "Small"
+                            })
+                    
+                    elif item_type == "code_block":
+                        body_blocks.append({
+                            "type": "TextBlock",
+                            "text": f"```\n{item.get('code', '')}\n```",
+                            "wrap": True,
+                            "fontType": "Monospace",
+                            "spacing": "Medium"
+                        })
+                
+                # Create the source section
+                source_container = {
+                    "type": "Container",
+                    "id": "sourceContainer",
+                    "isVisible": False,
+                    "style": "emphasis",
+                    "bleed": True,
+                    "maxHeight": "500px",
+                    "isScrollable": True, 
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": f"Source: {source}",
+                            "wrap": True,
+                            "weight": "Bolder",
+                            "color": "Accent",
+                            "spacing": "Medium",
+                        }
+                    ]
+                }
+                
+                # Add source details if they exist
+                if "source_details" in response_json:
+                    source_details = response_json["source_details"]
+                    
+                    # Add files information if available
+                    if "files" in source_details and source_details["files"]:
+                        source_container["items"].append({
+                            "type": "TextBlock",
+                            "text": "**Files:**",
+                            "wrap": True,
+                            "weight": "Bolder",
+                            "spacing": "Medium"
+                        })
+                        source_container["items"].append({
+                            "type": "TextBlock",
+                            "text": source_details["files"],
+                            "wrap": True,
+                            "spacing": "Small",
+                            "fontType": "Monospace",
+                            "size": "Small"
+                        })
+                    
+                    # Add code information if available
+                    if "code" in source_details and source_details["code"]:
+                        source_container["items"].append({
+                            "type": "TextBlock",
+                            "text": "**Code:**",
+                            "wrap": True,
+                            "weight": "Bolder",
+                            "spacing": "Medium"
+                        })
+                        source_container["items"].append({
+                            "type": "TextBlock",
+                            "text": f"```\n{source_details['code']}\n```",
+                            "wrap": True,
+                            "spacing": "Small",
+                            "fontType": "Monospace",
+                            "size": "Small"
+                        })
+                
+                body_blocks.append(source_container)
+                
+                # Add the show/hide source buttons
+                body_blocks.append({
+                    "type": "ColumnSet",
+                    "columns": [
+                        {
+                            "type": "Column",
+                            "id": "showSourceBtn",
+                            "items": [
+                                {
+                                    "type": "ActionSet",
+                                    "actions": [
+                                        {
+                                            "type": "Action.ToggleVisibility",
+                                            "title": "Show Source",
+                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
+                                        }
+                                    ]
+                                }
+                            ]
+                        },
+                        {
+                            "type": "Column",
+                            "id": "hideSourceBtn",
+                            "isVisible": False,
+                            "items": [
+                                {
+                                    "type": "ActionSet",
+                                    "actions": [
+                                        {
+                                            "type": "Action.ToggleVisibility",
+                                            "title": "Hide Source",
+                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                })
+                
+                # Create and send the adaptive card
+                adaptive_card = {
+                    "type": "AdaptiveCard",
+                    "body": body_blocks,
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "version": "1.5"
+                }
+                
+                message = Activity(
+                    type="message",
+                    attachments=[{
+                        "contentType": "application/vnd.microsoft.card.adaptive",
+                        "content": adaptive_card
+                    }]
+                )
+                await turn_context.send_activity(message)
+                
+                # Successfully processed JSON, so return early
+                return
+                
+        except (json.JSONDecodeError, KeyError, TypeError):
+            # Not JSON or not in our expected format, fall back to the regular processing
+            pass
+            
+        # If we're here, the response wasn't valid JSON, so process normally
         if match:
             main_answer = match.group(1).strip()
             source_line = match.group(2).strip()
