@@ -1,8 +1,7 @@
 # Version 7
 # made source content different color(Blue) and segmented
-# Button from "Show Source" to "Source"
-# Fixed text formatting in Teams adaptive cards (still not quite there)
-# Scrolling (not working)
+#Button from "Show Source" to "Source"
+#Fixed text formatting in Teams adaptive cards
 
 import os
 import asyncio
@@ -367,57 +366,118 @@ async def _bot_logic(turn_context: TurnContext):
                     "type": "Container",
                     "id": "sourceContainer",
                     "isVisible": False,
+                    "style": "emphasis",
+                    "bleed": True,
+                    "maxHeight": "200px",        # ← fixed height
+                    "isScrollable": True, 
                     "items": [
                         {
-                            "type": "Container",
-                            "style": "emphasis",
-                            "items": [
-                                {
-                                    "type": "TextBlock",
-                                    "text": source_line,
-                                    "wrap": True,
-                                    "weight": "Bolder",
-                                    "color": "Accent"
-                                }
-                            ]
+                            "type": "TextBlock",
+                            "text": source_line,
+                            "wrap": True,
+                            "weight": "Bolder",
+                            "color": "Accent",
+                            "spacing": "Medium",
                         }
                     ]
                 }
                 
                 # Add source details in a properly scrollable container if it exists
                 if appended_details:
-                    source_details_text_blocks = format_text_for_adaptive_card(appended_details.strip())
-                    source_details_container = {
+                    # source_details_text_blocks = format_text_for_adaptive_card(appended_details.strip())
+                    # source_details_container = {
+                    #     "type": "Container",
+                    #     "style": "default",
+                    #     "items": source_details_text_blocks,
+                    #     "bleed": True
+                    # }
+                    details_blocks = format_text_for_adaptive_card(appended_details.strip())
+                    source_container["items"].append({
                         "type": "Container",
-                        "style": "default",
-                        "items": source_details_text_blocks,
-                        "bleed": True
-                    }
+                        "items": details_blocks,
+                        "spacing": "Small"
+                    })
                     
-                    # Wrap in a scrollable container
-                    scrollable_container = {
-                        "type": "Container",
-                        "isScrollable": True,
-                        "height": "auto",
-                        "maxHeight": "250px",
-                        "items": [source_details_container]
-                    }
+                    # # Wrap in a scrollable container
+                    # scrollable_container = {
+                    #     "type": "Container",
+                    #     "isScrollable": True,
+                    #     "height": "auto",
+                    #     "maxHeight": "250px",
+                    #     "items": [source_details_container]
+                    # }
                     
-                    source_container["items"].append(scrollable_container)
+                    # source_container["items"].append(scrollable_container)
                 
                 body_blocks.append(source_container)
                 
-                # Simple button with no extra styling
+                # ── two toggle buttons ──
+                # body_blocks.append({
+                #     "type": "ActionSet",
+                #     "spacing": "Medium",
+                #     "actions": [
+                #         {
+                #             "type": "Action.ToggleVisibility",
+                #             "id": "showSourceBtn",
+                #             "title": "Show Source",
+                #             "targetElements": [
+                #                 "sourceContainer",
+                #                 "showSourceBtn",
+                #                 "hideSourceBtn"
+                #             ]
+                #         },
+                #         {
+                #             "type": "Action.ToggleVisibility",
+                #             "id": "hideSourceBtn",
+                #             "title": "Hide Source",
+                #             "isVisible": False,
+                #             "targetElements": [
+                #                 "sourceContainer",
+                #                 "showSourceBtn",
+                #                 "hideSourceBtn"
+                #             ]
+                #             }
+                #     ]
+                # })
                 body_blocks.append({
-                    "type": "ActionSet",
-                    "actions": [
+                    "type": "ColumnSet",
+                    "columns": [
                         {
-                            "type": "Action.ToggleVisibility",
-                            "title": "Source",
-                            "targetElements": ["sourceContainer"]
+                            "type": "Column",
+                            "id": "showSourceBtn",
+                            "items": [
+                                {
+                                    "type": "ActionSet",
+                                    "actions": [
+                                        {
+                                            "type": "Action.ToggleVisibility",
+                                            "title": "Show Source",
+                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
+                                        }
+                                    ]
+                                }
+                            ]
+                        },
+                        {
+                            "type": "Column",
+                            "id": "hideSourceBtn",
+                            "isVisible": False,
+                            "items": [
+                                {
+                                    "type": "ActionSet",
+                                    "actions": [
+                                        {
+                                            "type": "Action.ToggleVisibility",
+                                            "title": "Hide Source",
+                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
+                                        }
+                                    ]
+                                }
+                            ]
                         }
                     ]
                 })
+
 
             adaptive_card = {
                 "type": "AdaptiveCard",
