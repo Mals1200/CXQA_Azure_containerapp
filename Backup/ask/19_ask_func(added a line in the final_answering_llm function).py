@@ -1,6 +1,5 @@
 # Version 19:
-
-# Added a line in "final_answering_llm()", to prioritize the Python result if 2 different outputs were available.
+# The final_answering_llm function now produces a json format that will be read and displayed by the app.py version 8. which will convert it to display in an appropriate way
 
 import os
 import io
@@ -637,27 +636,80 @@ def final_answer_llm(user_question, index_dict, python_dict):
 
     if index_top_k.lower() == "no information" and python_result.lower() == "no information":
         fallback_text = tool_3_llm_fallback(user_question)
-        yield f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
+        # Format the fallback as JSON to match the expected format
+        try:
+            import json
+            json_response = {
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "text": fallback_text
+                    }
+                ],
+                "source": "AI Generated"
+            }
+            yield json.dumps(json_response)
+        except:
+            # If JSON conversion fails, fall back to plaintext
+            yield f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
         return
 
     combined_info = f"INDEX_DATA:\n{index_top_k}\n\nPYTHON_DATA:\n{python_result}"
 
+    # ########################################################################
+    # # JSON RESPONSE FORMAT - REMOVE COMMENTS TO ENABLE
+    # # This block modifies the system prompt to output a well-structured JSON
+    # ########################################################################
     system_prompt = f"""
 You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
 1) Index data: (INDEX_DATA)
 2) Python data: (PYTHON_DATA)
 *) Always Prioritise The python result if the 2 are different.
 
-Use only these two sources to answer. If you find relevant info from both, answer using both. 
-At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
-- "Index" if only index data was used,
-- "Python" if only python data was used,
-- "Index & Python" if both were used,
-- or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
-- Present your answer in a clear, readable format.
+Your output must be formatted as a properly escaped JSON with the following structure:
+{{
+  "content": [
+    {{
+      "type": "heading",
+      "text": "Main answer heading/title here"
+    }},
+    {{
+      "type": "paragraph",
+      "text": "Normal paragraph text here"
+    }},
+    {{
+      "type": "bullet_list",
+      "items": [
+        "List item 1",
+        "List item 2",
+        "List item 3"
+      ]
+    }},
+    {{
+      "type": "numbered_list",
+      "items": [
+        "Numbered item 1",
+        "Numbered item 2"
+      ]
+    }}
+  ],
+  "source": "Source type (Index, Python, Index & Python, or AI Generated)"
+}}
 
-Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
-Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
+Important guidelines:
+1. Format your content appropriately based on the answer structure you want to convey
+2. Use "heading" for titles and subtitles
+3. Use "paragraph" for normal text blocks
+4. Use "bullet_list" for unordered lists
+5. Use "numbered_list" for ordered/numbered lists
+6. Use "code_block" for any code snippets
+7. Make sure the JSON is valid and properly escaped
+8. Every section must have a "type" and appropriate content fields
+9. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
+10. Always prioritize Python results if both data sources are available and have different information
+
+Use only these two sources to answer. If you find relevant info from both, answer using both. 
+If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
 
 User question:
 {user_question}
@@ -671,6 +723,39 @@ PYTHON_DATA:
 Chat_history:
 {recent_history if recent_history else []}
 """
+
+    # ########################################################################
+    # # ORIGINAL SYSTEM PROMPT - UNCOMMENT TO USE INSTEAD OF JSON FORMAT
+    # ########################################################################
+    # system_prompt = f"""
+    # You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
+    # 1) Index data: (INDEX_DATA)
+    # 2) Python data: (PYTHON_DATA)
+    # *) Always Prioritise The python result if the 2 are different.
+    # 
+    # Use only these two sources to answer. If you find relevant info from both, answer using both. 
+    # At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
+    # - "Index" if only index data was used,
+    # - "Python" if only python data was used,
+    # - "Index & Python" if both were used,
+    # - or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
+    # - Present your answer in a clear, readable format.
+    # 
+    # Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
+    # Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
+    # 
+    # User question:
+    # {user_question}
+    # 
+    # INDEX_DATA:
+    # {index_top_k}
+    # 
+    # PYTHON_DATA:
+    # {python_result}
+    # 
+    # Chat_history:
+    # {recent_history if recent_history else []}
+    # """
 
     final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
 
@@ -689,6 +774,51 @@ Chat_history:
 #                          POST-PROCESS SOURCE
 #######################################################################################
 def post_process_source(final_text, index_dict, python_dict):
+    # Try to parse as JSON first
+    try:
+        import json
+        response_json = json.loads(final_text)
+        
+        # If it's our expected format with "content" and "source"
+        if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
+            source = response_json["source"]
+            
+            # Add source details based on the source type
+            if source == "Index & Python":
+                top_k_text = index_dict.get("top_k", "No information")
+                code_text = python_dict.get("code", "")
+                
+                # We'll add these as source details, but keeping the structured JSON format
+                source_details = {
+                    "files": top_k_text,
+                    "code": code_text
+                }
+                
+                # Create a new JSON structure with the source_details
+                response_json["source_details"] = source_details
+                return json.dumps(response_json)
+                
+            elif source == "Python":
+                code_text = python_dict.get("code", "")
+                
+                # Only add code to source details
+                response_json["source_details"] = {"code": code_text}
+                return json.dumps(response_json)
+                
+            elif source == "Index":
+                top_k_text = index_dict.get("top_k", "No information")
+                
+                # Only add files to source details
+                response_json["source_details"] = {"files": top_k_text}
+                return json.dumps(response_json)
+                
+            # If it's AI Generated or any other source, return as is
+            return final_text
+    except:
+        # Not JSON, process as regular text
+        pass
+
+    # If we're here, it's not JSON format, so use the original logic
     text_lower = final_text.lower()
 
     if "source: index & python" in text_lower:
