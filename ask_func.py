@@ -654,7 +654,7 @@ At the end of your final answer, put EXACTLY one line with "Source: X" where X c
 - "Python" if only python data was used,
 - "Index & Python" if both were used,
 - or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
-- Present your answer in a clear, readable format.
+- Present your answer in a clear, readable format **AlWAYS Using Adaptive card format**.
 
 Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
 Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
