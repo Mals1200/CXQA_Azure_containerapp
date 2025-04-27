@@ -1,5 +1,5 @@
 # Version 8  Takes Json format
-# Recieves the answer as JSON Format from ask_func.py version 19b. now it can handle the json as the main display method on teams.
+# Recieves the answer as JSON Format from ask_func.py version 19. now it can handle the json as the main display method on teams.
 
 import os
 import asyncio
