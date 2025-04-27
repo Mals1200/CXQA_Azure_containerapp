@@ -590,7 +590,7 @@ Chat_history:
             if match not in table_names:
                 table_names.append(match)
     
-    # Limit to max 3 table names
+    # Limit to max 3 table names, but keep file extensions
     table_names = table_names[:3]
 
     execution_result = execute_generated_code(code_str)
@@ -738,11 +738,15 @@ Important guidelines:
 6. Use "code_block" for any code snippets
 7. Make sure the JSON is valid and properly escaped
 8. Every section must have a "type" and appropriate content fields
-9. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
-10. Always prioritize Python results if both data sources are available and have different information
+9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
+10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
+11. When questions have multiple parts needing different sources, use "Index & Python" as the source
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
+
+For multi-part questions, organize your response clearly with appropriate headings or sections 
+for each part of the answer. If one part comes from Index and another from Python, use both sources.
 
 User question:
 {user_question}
@@ -790,18 +794,23 @@ Chat_history:
     # {recent_history if recent_history else []}
     # """
 
-    final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
+    try:
+        final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
 
-    # Ensure we never yield an empty or error-laden string without a fallback
-    if (not final_text.strip() 
-        or final_text.startswith("LLM Error") 
-        or final_text.startswith("No content from LLM") 
-        or final_text.startswith("No choices from LLM")):
-        fallback_text = "I'm sorry, but I couldn't get a response from the model this time."
+        # Ensure we never yield an empty or error-laden string without a fallback
+        if (not final_text.strip() 
+            or final_text.startswith("LLM Error") 
+            or final_text.startswith("No content from LLM") 
+            or final_text.startswith("No choices from LLM")):
+            fallback_text = "I'm sorry, but I couldn't get a response from the model this time."
+            yield fallback_text
+            return
+
+        yield final_text
+    except Exception as e:
+        logging.error(f"Error in final_answer_llm: {str(e)}")
+        fallback_text = f"I'm sorry, but an error occurred: {str(e)}"
         yield fallback_text
-        return
-
-    yield final_text
 
 #######################################################################################
 #                          POST-PROCESS SOURCE
@@ -858,8 +867,9 @@ def post_process_source(final_text, index_dict, python_dict):
                 return json.dumps(response_json)
                 
             # If it's AI Generated or any other source, return as is
-            return final_text
-    except:
+            return json.dumps(response_json)
+    except Exception as e:
+        logging.warning(f"JSON parsing error in post_process_source: {str(e)}")
         # Not JSON, process as regular text
         pass
 
