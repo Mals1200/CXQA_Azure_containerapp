@@ -1,4 +1,4 @@
-# Version 19b (attempt to fix the file name):
+# Version 10
 
 import os
 import io
@@ -890,17 +890,20 @@ def post_process_source(final_text, index_dict, python_dict):
             prefix = final_text[:end_of_line]
             suffix = final_text[end_of_line:]
             
-            file_info = f"\nReferenced: {', '.join(file_names)}" if file_names else ""
-            table_info = f"\nCalculated using: {', '.join(table_names)}" if table_names else ""
+            # Include both file names and table names in the attribution
+            file_info = f"\nReferenced {', '.join(file_names)}" if file_names else ""
+            table_info = f"\nCalculated using {', '.join(table_names)}" if table_names else ""
             
             final_text = prefix + file_info + table_info + suffix
             
+        # Use this format for both files and code - always include both when both tools were used
         return f"""{final_text}
 
-The Files:
+---SOURCE_DETAILS---
+Content Details:
 {top_k_text}
 
-The code:
+Code:
 {code_text}
 """
     elif "source: python" in text_lower:
@@ -917,7 +920,7 @@ The code:
             prefix = final_text[:end_of_line]
             suffix = final_text[end_of_line:]
             
-            table_info = f"\nCalculated using: {', '.join(table_names)}" if table_names else ""
+            table_info = f"\nCalculated using {', '.join(table_names)}" if table_names else ""
             
             final_text = prefix + table_info + suffix
         
@@ -940,7 +943,7 @@ The code:
             prefix = final_text[:end_of_line]
             suffix = final_text[end_of_line:]
             
-            file_info = f"\nReferenced: {', '.join(file_names)}" if file_names else ""
+            file_info = f"\nReferenced {', '.join(file_names)}" if file_names else ""
             
             final_text = prefix + file_info + suffix
         
