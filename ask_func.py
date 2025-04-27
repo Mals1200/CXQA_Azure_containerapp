@@ -485,8 +485,15 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1):
         docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
         docs_top_k = docs_sorted[:top_k]
         
-        # Extract file names and texts separately
-        file_names = [d["title"] for d in docs_top_k]
+        # Extract file names and texts separately - ensure no duplicates
+        file_names = []
+        for d in docs_top_k:
+            if d["title"] not in file_names:  # Avoid duplicates
+                file_names.append(d["title"])
+        
+        # Limit to max 3 file names
+        file_names = file_names[:3]
+        
         re_ranked_texts = [d["snippet"] for d in docs_top_k]
         combined = "\n\n---\n\n".join(re_ranked_texts)
 
@@ -564,12 +571,27 @@ Chat_history:
         # Return a short "no access" style message
         return {"result": access_issue, "code": "", "table_names": []}
     
-    # Extract table names from the code
+    # Extract table names from the code - check both patterns
     table_names = []
-    pattern = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
-    matches = pattern.findall(code_str)
-    if matches:
-        table_names = list(set(matches))  # Remove duplicates
+    
+    # Pattern 1: dataframes.get("filename")
+    pattern1 = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+    matches1 = pattern1.findall(code_str)
+    if matches1:
+        for match in matches1:
+            if match not in table_names:
+                table_names.append(match)
+    
+    # Pattern 2: pd.read_excel("filename") or pd.read_csv("filename")
+    pattern2 = re.compile(r'pd\.read_(?:excel|csv)\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+    matches2 = pattern2.findall(code_str)
+    if matches2:
+        for match in matches2:
+            if match not in table_names:
+                table_names.append(match)
+    
+    # Limit to max 3 table names
+    table_names = table_names[:3]
 
     execution_result = execute_generated_code(code_str)
     return {"result": execution_result, "code": code_str, "table_names": table_names}
@@ -850,10 +872,22 @@ def post_process_source(final_text, index_dict, python_dict):
         file_names = index_dict.get("file_names", [])
         table_names = python_dict.get("table_names", [])
         
-        file_names_text = "\nFiles used: " + ", ".join(file_names) if file_names else ""
-        table_names_text = "\nTables used: " + ", ".join(table_names) if table_names else ""
-        
-        return f"""{final_text}{file_names_text}{table_names_text}
+        # Add source information right after the "Source: X" line
+        source_index = final_text.lower().find("source:")
+        if source_index >= 0:
+            end_of_line = final_text.find("\n", source_index)
+            if end_of_line < 0:  # If no newline found
+                end_of_line = len(final_text)
+                
+            prefix = final_text[:end_of_line]
+            suffix = final_text[end_of_line:]
+            
+            file_info = f"\nReferenced: {', '.join(file_names)}" if file_names else ""
+            table_info = f"\nCalculated using: {', '.join(table_names)}" if table_names else ""
+            
+            final_text = prefix + file_info + table_info + suffix
+            
+        return f"""{final_text}
 
 The Files:
 {top_k_text}
@@ -865,9 +899,21 @@ The code:
         code_text = python_dict.get("code", "")
         table_names = python_dict.get("table_names", [])
         
-        table_names_text = "\nTables used: " + ", ".join(table_names) if table_names else ""
+        # Add source information right after the "Source: X" line
+        source_index = final_text.lower().find("source:")
+        if source_index >= 0:
+            end_of_line = final_text.find("\n", source_index)
+            if end_of_line < 0:  # If no newline found
+                end_of_line = len(final_text)
+                
+            prefix = final_text[:end_of_line]
+            suffix = final_text[end_of_line:]
+            
+            table_info = f"\nCalculated using: {', '.join(table_names)}" if table_names else ""
+            
+            final_text = prefix + table_info + suffix
         
-        return f"""{final_text}{table_names_text}
+        return f"""{final_text}
 
 The code:
 {code_text}
@@ -876,9 +922,21 @@ The code:
         top_k_text = index_dict.get("top_k", "No information")
         file_names = index_dict.get("file_names", [])
         
-        file_names_text = "\nFiles used: " + ", ".join(file_names) if file_names else ""
+        # Add source information right after the "Source: X" line
+        source_index = final_text.lower().find("source:")
+        if source_index >= 0:
+            end_of_line = final_text.find("\n", source_index)
+            if end_of_line < 0:  # If no newline found
+                end_of_line = len(final_text)
+                
+            prefix = final_text[:end_of_line]
+            suffix = final_text[end_of_line:]
+            
+            file_info = f"\nReferenced: {', '.join(file_names)}" if file_names else ""
+            
+            final_text = prefix + file_info + suffix
         
-        return f"""{final_text}{file_names_text}
+        return f"""{final_text}
 
 The Files:
 {top_k_text}
