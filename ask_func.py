@@ -1,5 +1,6 @@
-# Version 19:
-# The final_answering_llm function now produces a json format that will be read and displayed by the app.py version 8. which will convert it to display in an appropriate way
+# Version 19b (attempt to fix the file name):
+
+
 
 import os
 import io
@@ -454,7 +455,7 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1):
                     merged_docs.append({"title": title, "snippet": snippet})
 
         if not merged_docs:
-            return {"top_k": "No information"}
+            return {"top_k": "No information", "file_names": []}
 
         # Filter by access + relevance
         relevant_docs = []
@@ -467,7 +468,7 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1):
                     relevant_docs.append(doc)
 
         if not relevant_docs:
-            return {"top_k": "No information"}
+            return {"top_k": "No information", "file_names": []}
 
         # Weighted scoring
         for doc in relevant_docs:
@@ -483,14 +484,17 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1):
 
         docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
         docs_top_k = docs_sorted[:top_k]
+        
+        # Extract file names and texts separately
+        file_names = [d["title"] for d in docs_top_k]
         re_ranked_texts = [d["snippet"] for d in docs_top_k]
         combined = "\n\n---\n\n".join(re_ranked_texts)
 
-        return {"top_k": combined}
+        return {"top_k": combined, "file_names": file_names}
 
     except Exception as e:
         logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}")
-        return {"top_k": "No information"}
+        return {"top_k": "No information", "file_names": []}
 
 #######################################################################################
 #                 HELPER to check table references vs. user tier
@@ -521,7 +525,7 @@ def reference_table_data(code_str, user_tier):
 @azure_retry()
 def tool_2_code_run(user_question, user_tier=1):
     if not references_tabular_data(user_question, TABLES):
-        return {"result": "No information", "code": ""}
+        return {"result": "No information", "code": "", "table_names": []}
 
     system_prompt = f"""
 You are a python expert. Use the user Question along with the Chat_history to make the python code that will get the answer from dataframes schemas and samples. 
@@ -552,16 +556,23 @@ Chat_history:
     code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.7)
 
     if not code_str or code_str == "404":
-        return {"result": "No information", "code": ""}
+        return {"result": "No information", "code": "", "table_names": []}
 
     # Check references vs. user tier
     access_issue = reference_table_data(code_str, user_tier)
     if access_issue:
         # Return a short "no access" style message
-        return {"result": access_issue, "code": ""}
+        return {"result": access_issue, "code": "", "table_names": []}
+    
+    # Extract table names from the code
+    table_names = []
+    pattern = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+    matches = pattern.findall(code_str)
+    if matches:
+        table_names = list(set(matches))  # Remove duplicates
 
     execution_result = execute_generated_code(code_str)
-    return {"result": execution_result, "code": code_str}
+    return {"result": execution_result, "code": code_str, "table_names": table_names}
 
 def execute_generated_code(code_str):
     account_url = CONFIG["ACCOUNT_URL"]
@@ -787,11 +798,15 @@ def post_process_source(final_text, index_dict, python_dict):
             if source == "Index & Python":
                 top_k_text = index_dict.get("top_k", "No information")
                 code_text = python_dict.get("code", "")
+                file_names = index_dict.get("file_names", [])
+                table_names = python_dict.get("table_names", [])
                 
                 # We'll add these as source details, but keeping the structured JSON format
                 source_details = {
                     "files": top_k_text,
-                    "code": code_text
+                    "code": code_text,
+                    "file_names": file_names,
+                    "table_names": table_names
                 }
                 
                 # Create a new JSON structure with the source_details
@@ -800,16 +815,24 @@ def post_process_source(final_text, index_dict, python_dict):
                 
             elif source == "Python":
                 code_text = python_dict.get("code", "")
+                table_names = python_dict.get("table_names", [])
                 
                 # Only add code to source details
-                response_json["source_details"] = {"code": code_text}
+                response_json["source_details"] = {
+                    "code": code_text,
+                    "table_names": table_names
+                }
                 return json.dumps(response_json)
                 
             elif source == "Index":
                 top_k_text = index_dict.get("top_k", "No information")
+                file_names = index_dict.get("file_names", [])
                 
                 # Only add files to source details
-                response_json["source_details"] = {"files": top_k_text}
+                response_json["source_details"] = {
+                    "files": top_k_text,
+                    "file_names": file_names
+                }
                 return json.dumps(response_json)
                 
             # If it's AI Generated or any other source, return as is
@@ -824,7 +847,13 @@ def post_process_source(final_text, index_dict, python_dict):
     if "source: index & python" in text_lower:
         top_k_text = index_dict.get("top_k", "No information")
         code_text = python_dict.get("code", "")
-        return f"""{final_text}
+        file_names = index_dict.get("file_names", [])
+        table_names = python_dict.get("table_names", [])
+        
+        file_names_text = "\nFiles used: " + ", ".join(file_names) if file_names else ""
+        table_names_text = "\nTables used: " + ", ".join(table_names) if table_names else ""
+        
+        return f"""{final_text}{file_names_text}{table_names_text}
 
 The Files:
 {top_k_text}
@@ -834,14 +863,22 @@ The code:
 """
     elif "source: python" in text_lower:
         code_text = python_dict.get("code", "")
-        return f"""{final_text}
+        table_names = python_dict.get("table_names", [])
+        
+        table_names_text = "\nTables used: " + ", ".join(table_names) if table_names else ""
+        
+        return f"""{final_text}{table_names_text}
 
 The code:
 {code_text}
 """
     elif "source: index" in text_lower:
         top_k_text = index_dict.get("top_k", "No information")
-        return f"""{final_text}
+        file_names = index_dict.get("file_names", [])
+        
+        file_names_text = "\nFiles used: " + ", ".join(file_names) if file_names else ""
+        
+        return f"""{final_text}{file_names_text}
 
 The Files:
 {top_k_text}
