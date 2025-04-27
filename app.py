@@ -1,7 +1,4 @@
-# Version 9:
-# fixed the filename variables in ask_func.py verion 19b.
-# This app.py version takes that variable and displays it under source.
-
+# Version 10
 import os
 import asyncio
 from threading import Lock
@@ -442,15 +439,94 @@ async def _bot_logic(turn_context: TurnContext):
                     ]
                 }
                 
-                # Add source details if it exists
-                if appended_details:
+                # Check if this is a combined source (Index & Python)
+                combined_source = "Index & Python" in source_line
+                
+                # Extract file names and table names if they appear in the text
+                referenced_pattern = r"Referenced\s+([^:\n]+)"
+                calculated_pattern = r"Calculated using\s+([^:\n]+)"
+                
+                referenced_match = re.search(referenced_pattern, main_answer + source_line, re.IGNORECASE)
+                calculated_match = re.search(calculated_pattern, main_answer + source_line, re.IGNORECASE)
+                
+                file_info = referenced_match.group(1).strip() if referenced_match else ""
+                table_info = calculated_match.group(1).strip() if calculated_match else ""
+                
+                # Add file/table attribution
+                if file_info:
                     source_container["items"].append({
                         "type": "TextBlock",
-                        "text": appended_details.strip(),
+                        "text": f"Referenced: {file_info}",
                         "wrap": True,
-                        "spacing": "Small"
+                        "weight": "Bolder",
+                        "spacing": "Small",
+                        "color": "Good"
                     })
                     
+                if table_info:
+                    source_container["items"].append({
+                        "type": "TextBlock",
+                        "text": f"Calculated using: {table_info}",
+                        "wrap": True,
+                        "weight": "Bolder",
+                        "spacing": "Small",
+                        "color": "Good"
+                    })
+                
+                # Parse the appended details more carefully
+                if appended_details:
+                    # Extract content details and code separately if this is a combined source
+                    if combined_source and "---SOURCE_DETAILS---" in appended_details:
+                        content_pattern = r"Content Details:\s*(.*?)(?:Code:|$)"
+                        code_pattern = r"Code:\s*(.*?)$"
+                        
+                        content_match = re.search(content_pattern, appended_details, re.DOTALL)
+                        code_match = re.search(code_pattern, appended_details, re.DOTALL)
+                        
+                        if content_match:
+                            content_text = content_match.group(1).strip()
+                            source_container["items"].append({
+                                "type": "TextBlock",
+                                "text": "**Content Details:**",
+                                "wrap": True,
+                                "weight": "Bolder",
+                                "spacing": "Medium"
+                            })
+                            source_container["items"].append({
+                                "type": "TextBlock",
+                                "text": content_text,
+                                "wrap": True,
+                                "spacing": "Small",
+                                "fontType": "Monospace",
+                                "size": "Small"
+                            })
+                        
+                        if code_match:
+                            code_text = code_match.group(1).strip()
+                            source_container["items"].append({
+                                "type": "TextBlock",
+                                "text": "**Code:**",
+                                "wrap": True,
+                                "weight": "Bolder",
+                                "spacing": "Medium"
+                            })
+                            source_container["items"].append({
+                                "type": "TextBlock",
+                                "text": f"```\n{code_text}\n```",
+                                "wrap": True,
+                                "spacing": "Small",
+                                "fontType": "Monospace",
+                                "size": "Small"
+                            })
+                    else:
+                        # For older format or non-combined sources
+                        source_container["items"].append({
+                            "type": "TextBlock",
+                            "text": appended_details.strip(),
+                            "wrap": True,
+                            "spacing": "Small"
+                        })
+                
                 body_blocks.append(source_container)
                 
                 body_blocks.append({
