@@ -1,5 +1,4 @@
-# Version 19b:
-# Store the files used to pass to app.py version 9. so it can display it under source as a reference.
+# Version 19b (attempt to fix the file name):
 
 import os
 import io
@@ -793,23 +792,23 @@ Chat_history:
     # {recent_history if recent_history else []}
     # """
 
-    # try:
-    #     final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
+    try:
+        final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
 
-    #     # Ensure we never yield an empty or error-laden string without a fallback
-    #     if (not final_text.strip() 
-    #         or final_text.startswith("LLM Error") 
-    #         or final_text.startswith("No content from LLM") 
-    #         or final_text.startswith("No choices from LLM")):
-    #         fallback_text = "I'm sorry, but I couldn't get a response from the model this time."
-    #         yield fallback_text
-    #         return
+        # Ensure we never yield an empty or error-laden string without a fallback
+        if (not final_text.strip() 
+            or final_text.startswith("LLM Error") 
+            or final_text.startswith("No content from LLM") 
+            or final_text.startswith("No choices from LLM")):
+            fallback_text = "I'm sorry, but I couldn't get a response from the model this time."
+            yield fallback_text
+            return
 
-    #     yield final_text
-    # except Exception as e:
-    #     logging.error(f"Error in final_answer_llm: {str(e)}")
-    #     fallback_text = f"I'm sorry, but an error occurred: {str(e)}"
-    #     yield fallback_text
+        yield final_text
+    except Exception as e:
+        logging.error(f"Error in final_answer_llm: {str(e)}")
+        fallback_text = f"I'm sorry, but an error occurred: {str(e)}"
+        yield fallback_text
 
 #######################################################################################
 #                          POST-PROCESS SOURCE
