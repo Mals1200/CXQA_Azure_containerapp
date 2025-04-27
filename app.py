@@ -227,25 +227,54 @@ async def _bot_logic(turn_context: TurnContext):
                     
                     # For Index sources, show file names if available
                     if source == "Index" and file_names:
-                        source_attribution = "Referenced " + " and ".join(file_names)
+                        # Ensure no duplicates and limit to 3
+                        unique_files = []
+                        for fname in file_names:
+                            if fname not in unique_files:
+                                unique_files.append(fname)
+                        
+                        if len(unique_files) > 3:
+                            unique_files = unique_files[:3]
+                            
+                        source_attribution = "Referenced " + " and ".join(unique_files)
                     
                     # For Python sources, show table names if available
                     elif source == "Python" and table_names:
                         # Clean up table names (remove extensions for display)
-                        clean_table_names = [name.replace('.xlsx', '').replace('.csv', '') for name in table_names]
-                        source_attribution = "Calculated using " + " and ".join(clean_table_names)
+                        unique_tables = []
+                        for name in table_names:
+                            clean_name = name.replace('.xlsx', '').replace('.csv', '')
+                            if clean_name not in unique_tables:
+                                unique_tables.append(clean_name)
+                        
+                        if len(unique_tables) > 3:
+                            unique_tables = unique_tables[:3]
+                            
+                        source_attribution = "Calculated using " + " and ".join(unique_tables)
                     
                     # For combined sources, show both if available
                     elif source == "Index & Python":
                         file_parts = []
                         table_parts = []
                         
+                        # Ensure no duplicates in files and limit to 3
                         if file_names:
-                            file_parts = file_names
+                            for fname in file_names:
+                                if fname not in file_parts:
+                                    file_parts.append(fname)
                             
+                            if len(file_parts) > 3:
+                                file_parts = file_parts[:3]
+                            
+                        # Ensure no duplicates in tables and limit to 3
                         if table_names:
-                            # Clean up table names
-                            table_parts = [name.replace('.xlsx', '').replace('.csv', '') for name in table_names]
+                            for name in table_names:
+                                clean_name = name.replace('.xlsx', '').replace('.csv', '')
+                                if clean_name not in table_parts:
+                                    table_parts.append(clean_name)
+                            
+                            if len(table_parts) > 3:
+                                table_parts = table_parts[:3]
                         
                         if file_parts and table_parts:
                             source_attribution = f"Retrieved Using {', '.join(table_parts)} and {', '.join(file_parts)}"
