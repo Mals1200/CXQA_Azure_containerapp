@@ -1,4 +1,6 @@
-# Version 9 (attempt to fix the file name):
+# Version 9:
+# fixed the filename variables in ask_func.py verion 19b.
+# This app.py version takes that variable and displays it under source.
 
 import os
 import asyncio
