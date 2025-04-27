@@ -1,522 +1,1265 @@
-# Version 9:
-# fixed the filename variables in ask_func.py verion 19b.
-# This app.py version takes that variable and displays it under source.
+# Version 19b:
+# Store the files used to pass to app.py version 9. so it can display it under source as a reference.
 
 import os
-import asyncio
-from threading import Lock
+import io
 import re
 import json
+import logging
+import warnings
+import requests
+import contextlib
+import pandas as pd
+import csv
+from io import BytesIO, StringIO
+from datetime import datetime
+from azure.storage.blob import BlobServiceClient
+from azure.search.documents import SearchClient
+from azure.core.credentials import AzureKeyCredential
+from tenacity import retry, stop_after_attempt, wait_fixed  # retrying
+from functools import lru_cache, wraps
+from collections import OrderedDict
+import difflib
+import time
 
-from flask import Flask, request, jsonify, Response
-from botbuilder.core import (
-    BotFrameworkAdapter,
-    BotFrameworkAdapterSettings,
-    TurnContext
-)
-from botbuilder.schema import Activity
-# *** Important: import TeamsInfo ***
-from botbuilder.core.teams import TeamsInfo
+#######################################################################################
+#                               GLOBAL CONFIG / CONSTANTS
+#######################################################################################
+CONFIG = {
+    "LLM_ENDPOINT": (
+        "https://cxqaazureaihub2358016269.openai.azure.com/"
+        "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
+    ),
+    "LLM_API_KEY": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor",
+    "SEARCH_SERVICE_NAME": "cxqa-azureai-search",
+    "SEARCH_ENDPOINT": "https://cxqa-azureai-search.search.windows.net",
+    "ADMIN_API_KEY": "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv",
+    "INDEX_NAME": "vector-1741865904949",
+    "SEMANTIC_CONFIG_NAME": "vector-1741865904949-semantic-configuration",
+    "CONTENT_FIELD": "chunk",
+    "ACCOUNT_URL": "https://cxqaazureaihub8779474245.blob.core.windows.net",
+    "SAS_TOKEN": (
+        "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
+        "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
+        "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
+    ),
+    "CONTAINER_NAME": "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore",
+    "TARGET_FOLDER_PATH": "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
+}
 
-from ask_func import Ask_Question, chat_history
+# Global objects with better initialization
+logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
+logging.getLogger("azure").setLevel(logging.WARNING)
 
-app = Flask(__name__)
+# Initialize with empty values that will be set per conversation
+chat_history = []
+recent_history = []
+tool_cache = {}
 
-MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
-MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
+# Add retry decorator for Azure API calls
+def azure_retry(max_attempts=3, delay=2):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_attempts):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    if attempt < max_attempts - 1:
+                        time.sleep(delay * (attempt + 1))  # Exponential backoff
+                    logging.warning(f"Attempt {attempt + 1} failed: {str(e)}")
+            raise last_exception
+        return wrapper
+    return decorator
 
-adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
-adapter = BotFrameworkAdapter(adapter_settings)
+#######################################################################################
+#                           RBAC HELPERS (User & File Tiers)
+#######################################################################################
+@azure_retry()
+def load_rbac_files():
+    """
+    Loads User_rbac.xlsx and File_rbac.xlsx from the RBAC folder in Azure Blob Storage, 
+    returns them as two DataFrame objects: (df_user, df_file).
+    If anything fails, returns two empty dataframes.
+    """
+    account_url = CONFIG["ACCOUNT_URL"]
+    sas_token = CONFIG["SAS_TOKEN"]
+    container_name = CONFIG["CONTAINER_NAME"]
 
-# Thread-safe conversation state management
-conversation_states = {}
-state_lock = Lock()
+    rbac_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/RBAC/"
+    user_rbac_file = "User_rbac.xlsx"
+    file_rbac_file = "File_rbac.xlsx"
 
-def get_conversation_state(conversation_id):
-    with state_lock:
-        if conversation_id not in conversation_states:
-            conversation_states[conversation_id] = {
-                'history': [],
-                'cache': {},
-                'last_activity': None
-            }
-        return conversation_states[conversation_id]
+    df_user = pd.DataFrame()
+    df_file = pd.DataFrame()
 
-def cleanup_old_states():
-    """Clean up conversation states older than 24 hours"""
-    with state_lock:
-        current_time = asyncio.get_event_loop().time()
-        for conv_id, state in list(conversation_states.items()):
-            if state['last_activity'] and (current_time - state['last_activity']) > 86400:  # 24 hours
-                del conversation_states[conv_id]
-
-@app.route("/", methods=["GET"])
-def home():
-    return jsonify({"message": "API is running!"}), 200
-
-@app.route("/api/messages", methods=["POST"])
-def messages():
-    if "application/json" not in request.headers.get("Content-Type", ""):
-        return Response(status=415)
-
-    body = request.json
-    activity = Activity().deserialize(body)
-    auth_header = request.headers.get("Authorization", "")
-
-    loop = asyncio.new_event_loop()
     try:
-        loop.run_until_complete(adapter.process_activity(activity, auth_header, _bot_logic))
-    finally:
-        loop.close()
+        blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
+        container_client = blob_service_client.get_container_client(container_name)
 
-    return Response(status=200)
+        # Load User_rbac.xlsx
+        user_rbac_blob = container_client.get_blob_client(rbac_folder_path + user_rbac_file)
+        user_rbac_data = user_rbac_blob.download_blob().readall()
+        df_user = pd.read_excel(BytesIO(user_rbac_data))
 
-async def _bot_logic(turn_context: TurnContext):
-    conversation_id = turn_context.activity.conversation.id
-    state = get_conversation_state(conversation_id)
-    state['last_activity'] = asyncio.get_event_loop().time()
+        # Load File_rbac.xlsx
+        file_rbac_blob = container_client.get_blob_client(rbac_folder_path + file_rbac_file)
+        file_rbac_data = file_rbac_blob.download_blob().readall()
+        df_file = pd.read_excel(BytesIO(file_rbac_data))
+
+    except Exception as e:
+        logging.error(f"Failed to load RBAC files: {e}")
     
-    # Clean up old states periodically
-    if len(conversation_states) > 100:  # Only clean up if we have many states
-        cleanup_old_states()
+    return df_user, df_file
 
-    # Set the conversation state for this request
-    import ask_func
-    ask_func.chat_history = state['history']
-    ask_func.tool_cache = state['cache']
+def get_file_tier(file_name):
+    """
+    Checks the file name in the File_rbac.xlsx file, returns the tier needed to access it.
+    Now uses fuzzy matching via difflib to find the best match if the exact or partial
+    match isn't found. If best match ratio is below 0.8, defaults to tier=1.
+    """
+    _, df_file = load_rbac_files()
+    if df_file.empty or ("File_Name" not in df_file.columns) or ("Tier" not in df_file.columns):
+        # default if not loaded or columns missing
+        return 1  
+    
+    # Remove common extensions and make it all lower-case
+    base_file_name = (
+        file_name.lower()
+        .replace(".pdf", "")
+        .replace(".xlsx", "")
+        .replace(".xls", "")
+        .replace(".csv", "")
+        .strip()
+    )
+    
+    # If the user-provided name is empty after cleaning, just default
+    if not base_file_name:
+        return 1
 
-    user_message = turn_context.activity.text or ""
+    # We'll track the best fuzzy ratio and best tier found so far
+    best_ratio = 0.0
+    best_tier = 1
 
-    # --------------------------------------------------------------------
-    # Use 'TeamsInfo.get_member' to get userPrincipalName or email
-    # --------------------------------------------------------------------
-    user_id = "anonymous"  # fallback
+    for idx, row in df_file.iterrows():
+        # Also remove common extensions and lower
+        row_file_raw = str(row["File_Name"])
+        row_file_clean = (
+            row_file_raw.lower()
+            .replace(".pdf", "")
+            .replace(".xlsx", "")
+            .replace(".xls", "")
+            .replace(".csv", "")
+            .strip()
+        )
+        
+        # Compare the two strings with difflib
+        ratio = difflib.SequenceMatcher(None, base_file_name, row_file_clean).ratio()
+        
+        # If we get a better ratio, store that match
+        if ratio > best_ratio:
+            best_ratio = ratio
+            try:
+                best_tier = int(row["Tier"])
+            except:
+                best_tier = 1
+    
+    # If our best match ratio is below some threshold (e.g. 0.8), we treat it as "no match"
+    if best_ratio < 0.8:
+        # Could print a debug if desired:
+        # print(f"[DEBUG get_file_tier] best_ratio={best_ratio:.2f} => default tier=1")
+        return 1
+    else:
+        # Found a good fuzzy match
+        # print(f"[DEBUG get_file_tier] Fuzzy matched => ratio={best_ratio:.2f}, tier={best_tier}")
+        return best_tier
+
+
+#######################################################################################
+#                           TABLES / SCHEMA / SAMPLE GENERATION (DYNAMIC)
+#######################################################################################
+@lru_cache(maxsize=1)
+def load_table_metadata(sample_n: int = 2):
+    container = BlobServiceClient(account_url=CONFIG["ACCOUNT_URL"], credential=CONFIG["SAS_TOKEN"])\
+                    .get_container_client(CONFIG["CONTAINER_NAME"])
+    prefix = CONFIG["TARGET_FOLDER_PATH"]
+    meta = OrderedDict()
+
+    for blob in container.list_blobs(name_starts_with=prefix):
+        fn = os.path.basename(blob.name)
+        if not fn.lower().endswith((".xlsx", ".xls", ".csv")):
+            continue
+
+        data = container.get_blob_client(blob.name).download_blob().readall()
+        df = (pd.read_excel if fn.lower().endswith((".xlsx", ".xls")) else pd.read_csv)(BytesIO(data))
+
+        schema = {col: str(dt) for col, dt in df.dtypes.items()}
+        sample = df.head(sample_n).to_dict(orient="records")
+        meta[fn] = {"schema": schema, "sample": sample}
+
+    return meta
+
+def format_tables_text(meta: dict) -> str:
+    lines = []
+    for i, (fn, info) in enumerate(meta.items(), 1):
+        lines.append(f'{i}) "{fn}", with the following tables:')
+        for col, dt in info["schema"].items():
+            lines.append(f"   -{col}: {dt}")
+    return "\n".join(lines)
+
+def format_schema_and_sample(meta: dict, sample_n: int = 2, char_limit: int = 15) -> str:
+    def truncate_val(v):
+        s = "" if v is None else str(v)
+        return s if len(s) <= char_limit else s[:char_limit] + "…"
+
+    lines = []
+    for fn, info in meta.items():
+        lines.append(f"{fn}: {info['schema']}")
+        truncated = [
+            {col: truncate_val(val) for col, val in row.items()}
+            for row in info["sample"][:sample_n]
+        ]
+        lines.append(f"    Sample: {truncated},")
+    return "\n".join(lines)
+
+_metadata   = load_table_metadata(sample_n=2)
+TABLES      = format_tables_text(_metadata)
+SCHEMA_TEXT = format_schema_and_sample(_metadata, sample_n=2, char_limit=15)
+#SAMPLE_TEXT = SCHEMA_TEXT  # if SAMPLE_TEXT needed separately
+
+#######################################################################################
+#                   CENTRALIZED LLM CALL (Point #1 Optimization)
+#######################################################################################
+def call_llm(system_prompt, user_prompt, max_tokens=500, temperature=0.0):
+    """
+    Central helper for calling Azure OpenAI LLM.
+    Handles requests.post, checks for errors, and returns the content string.
+    Improved to ensure we do not return an empty string silently.
+    """
     try:
-        # 'from_property.id' usually holds the "29:..." Teams user ID
-        teams_user_id = turn_context.activity.from_property.id
-
-        # This call will attempt to fetch the user's profile from Teams
-        teams_member = await TeamsInfo.get_member(turn_context, teams_user_id)
-        # If successful, you can read these fields:
-        #   teams_member.user_principal_name (often the email/UPN)
-        #   teams_member.email
-        #   teams_member.name
-        #   teams_member.id
-        if teams_member and teams_member.user_principal_name:
-            user_id = teams_member.user_principal_name
-        elif teams_member and teams_member.email:
-            user_id = teams_member.email
+        headers = {
+            "Content-Type": "application/json",
+            "api-key": CONFIG["LLM_API_KEY"]
+        }
+        payload = {
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "max_tokens": max_tokens,
+            "temperature": temperature
+        }
+        response = requests.post(CONFIG["LLM_ENDPOINT"], headers=headers, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        if "choices" in data and data["choices"]:
+            content = data["choices"][0]["message"].get("content", "").strip()
+            if content:
+                return content
+            else:
+                logging.warning("LLM returned an empty content field.")
+                return "No content from LLM."
         else:
-            user_id = teams_user_id  # fallback if we can't get an email
-
+            logging.warning(f"LLM returned no choices: {data}")
+            return "No choices from LLM."
     except Exception as e:
-        # If get_member call fails (e.g., in a group chat scenario or permission issues),
-        # just fallback to the "29:..." ID or 'anonymous'
-        user_id = turn_context.activity.from_property.id or "anonymous"
+        # make the real cause obvious (rate‑limit, token overflow, etc.)
+        err_msg = f"LLM Error: {e}"
+        if hasattr(e, "response") and e.response is not None:           # Azure/OpenAI gives details here
+            err_msg += f" | Azure response: {e.response.text}"
+        print(err_msg)                                                  # <‑‑ NEW: show in console/stdout
+        logging.error(err_msg)
+        return err_msg
 
-    # Show "thinking" indicator
-    typing_activity = Activity(type="typing")
-    await turn_context.send_activity(typing_activity)
+#######################################################################################
+#                   COMBINED TEXT CLEANING (Point #2 Optimization)
+#######################################################################################
+def clean_text(text: str) -> str:
+    """
+    Combine repeated cleaning logic into a single function.
+    Removes repeated words, repeated patterns, excessive punctuation/spaces, etc.
+    """
+    if not text:
+        return text
+
+    # 1) Remove repeated words like: "TheThe", "total total"
+    text = re.sub(r'\b(\w+)( \1\b)+', r'\1', text, flags=re.IGNORECASE)
+
+    # 2) Remove repeated characters within a word: e.g., "footfallsfalls"
+    text = re.sub(r'\b(\w{3,})\1\b', r'\1', text, flags=re.IGNORECASE)
+
+    # 3) Remove excessive punctuation or spaces
+    text = re.sub(r'\s{2,}', ' ', text)
+    text = re.sub(r'\.{3,}', '...', text)
+
+    return text.strip()
+
+#######################################################################################
+#              KEEPING deduplicate_streaming_tokens & is_repeated_phrase
+#######################################################################################
+def deduplicate_streaming_tokens(last_tokens, new_token):
+    if last_tokens.endswith(new_token):
+        return ""
+    return new_token
+
+def is_repeated_phrase(last_text, new_text, threshold=0.98):
+    """
+    Detect if new_text is highly similar to the end of last_text.
+    """
+    if not last_text or not new_text:
+        return False
+    comparison_length = min(len(last_text), 100)
+    recent_text = last_text[-comparison_length:]
+    similarity = difflib.SequenceMatcher(None, recent_text, new_text).ratio()
+    return similarity > threshold
+
+#######################################################################################
+#                              SUBQUESTION SPLITTING
+#######################################################################################
+def split_question_into_subquestions(user_question, use_semantic_parsing=True):
+    """
+    Splits a user question into subquestions using either a regex-based approach
+    or a semantic parsing approach.
+    """
+    if not user_question.strip():
+        return []
+
+    if not use_semantic_parsing:
+        # Regex-based splitting (e.g., "and" or "&")
+        text = re.sub(r"\s+and\s+", " ~SPLIT~ ", user_question, flags=re.IGNORECASE)
+        text = re.sub(r"\s*&\s*", " ~SPLIT~ ", text)
+        parts = text.split("~SPLIT~")
+        subqs = [p.strip() for p in parts if p.strip()]
+        return subqs
+    else:
+        system_prompt = (
+            "You are a helpful assistant. "
+            "You receive a user question which may have multiple parts. "
+            "Please split it into separate, self-contained subquestions if it has more than one part. "
+            "If it's only a single question, simply return that one. "
+            "Return each subquestion on a separate line or as bullet points."
+        )
+
+        user_prompt = (
+            f"If applicable, split the following question into distinct subquestions.\n\n"
+            f"{user_question}\n\n"
+            f"If not applicable, just return it as is."
+        )
+
+        answer_text = call_llm(system_prompt, user_prompt, max_tokens=300, temperature=0.0)
+        lines = [
+            line.lstrip("•-0123456789). ").strip()
+            for line in answer_text.split("\n")
+            if line.strip()
+        ]
+        subqs = [l for l in lines if l]
+
+        if not subqs:
+            subqs = [user_question]
+        return subqs
+
+#######################################################################################
+#                 REFERENCES CHECK & RELEVANCE CHECK  (Points #3 + #1 synergy)
+#######################################################################################
+def references_tabular_data(question, tables_text):
+    llm_system_message = (
+        "You are a strict YES/NO classifier. Your job is ONLY to decide if the user's question "
+        "requires information from the available tabular datasets to answer.\n"
+        "You must respond with EXACTLY one word: 'YES' or 'NO'.\n"
+        "Do NOT add explanations or uncertainty. Be strict and consistent."
+    )
+    llm_user_message = f"""
+    User Question:
+    {question}
+
+    chat_history
+    {recent_history}
+    
+    Available Tables:
+    {tables_text}
+
+    Decision Rules:
+    1. Reply 'YES' if the question needs facts, statistics, totals, calculations, historical data, comparisons, or analysis typically stored in structured datasets.
+    2. Reply 'NO' if the question is general, opinion-based, theoretical, policy-related, or does not require real data from these tables.
+    3. Completely ignore the sample rows of the tables. Assume full datasets exist beyond the samples.
+    4. Be STRICT: only reply 'NO' if you are CERTAIN the tables are not needed.
+    5. Do NOT create or assume data. Only decide if the tabular data is NEEDED to answer.
+    6. Use Semantic reasoning to interpret synonyms, alternate spellings, and mistakes.
+
+    Final instruction: Reply ONLY with 'YES' or 'NO'.
+    """
+    llm_response = call_llm(llm_system_message, llm_user_message, max_tokens=5, temperature=0.0)
+    clean_response = llm_response.strip().upper()
+    return "YES" in clean_response
+
+def is_text_relevant(question, snippet):
+    if not snippet.strip():
+        return False
+
+    system_prompt = (
+        "You are a classifier. We have a user question and a snippet of text. "
+        "Decide if the snippet is truly relevant to answering the question. "
+        "Return ONLY 'YES' or 'NO'."
+    )
+    user_prompt = f"Question: {question}\nSnippet: {snippet}\nRelevant? Return 'YES' or 'NO' only."
+
+    content = call_llm(system_prompt, user_prompt, max_tokens=10, temperature=0.0)
+    return content.strip().upper().startswith("YES")
+
+#######################################################################################
+#                              TOOL #1 - Index Search
+#######################################################################################
+@azure_retry()
+def tool_1_index_search(user_question, top_k=5, user_tier=1):
+    """
+    Modified version: uses split_question_into_subquestions to handle multi-part queries.
+    Then filters out docs the user has no access to, before final top_k selection.
+    """
+    SEARCH_SERVICE_NAME = CONFIG["SEARCH_SERVICE_NAME"]
+    SEARCH_ENDPOINT = CONFIG["SEARCH_ENDPOINT"]
+    ADMIN_API_KEY = CONFIG["ADMIN_API_KEY"]
+    INDEX_NAME = CONFIG["INDEX_NAME"]
+    SEMANTIC_CONFIG_NAME = CONFIG["SEMANTIC_CONFIG_NAME"]
+    CONTENT_FIELD = CONFIG["CONTENT_FIELD"]
+
+    subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
+    if not subquestions:
+        subquestions = [user_question]
 
     try:
-        # Process the message
-        ans_gen = Ask_Question(user_message, user_id=user_id)
-        answer_text = "".join(ans_gen)
+        search_client = SearchClient(
+            endpoint=SEARCH_ENDPOINT,
+            index_name=INDEX_NAME,
+            credential=AzureKeyCredential(ADMIN_API_KEY)
+        )
 
-        # Update state
-        state['history'] = ask_func.chat_history
-        state['cache'] = ask_func.tool_cache
-
-        # Parse and format the response
-        source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
-        match = re.search(source_pattern, answer_text, flags=re.DOTALL)
-
-        # Try to parse the response as JSON first
-        try:
-            response_json = json.loads(answer_text)
-            
-            # Check if this is our expected JSON format with content and source
-            if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
-                # We have a structured JSON response!
-                content_items = response_json["content"]
-                source = response_json["source"]
-                
-                # Build the adaptive card body
-                body_blocks = []
-                
-                # Process each content item based on its type
-                for item in content_items:
-                    item_type = item.get("type", "")
-                    
-                    if item_type == "heading":
-                        body_blocks.append({
-                            "type": "TextBlock",
-                            "text": item.get("text", ""),
-                            "wrap": True,
-                            "weight": "Bolder",
-                            "size": "Large",
-                            "spacing": "Medium"
-                        })
-                    
-                    elif item_type == "paragraph":
-                        body_blocks.append({
-                            "type": "TextBlock",
-                            "text": item.get("text", ""),
-                            "wrap": True,
-                            "spacing": "Small"
-                        })
-                    
-                    elif item_type == "bullet_list":
-                        items = item.get("items", [])
-                        for list_item in items:
-                            body_blocks.append({
-                                "type": "TextBlock",
-                                "text": f"• {list_item}",
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
-                    
-                    elif item_type == "numbered_list":
-                        items = item.get("items", [])
-                        for i, list_item in enumerate(items, 1):
-                            body_blocks.append({
-                                "type": "TextBlock",
-                                "text": f"{i}. {list_item}",
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
-                    
-                    elif item_type == "code_block":
-                        body_blocks.append({
-                            "type": "TextBlock",
-                            "text": f"```\n{item.get('code', '')}\n```",
-                            "wrap": True,
-                            "fontType": "Monospace",
-                            "spacing": "Medium"
-                        })
-                
-                # Create the source section
-                source_container = {
-                    "type": "Container",
-                    "id": "sourceContainer",
-                    "isVisible": False,
-                    "style": "emphasis",
-                    "bleed": True,
-                    "maxHeight": "500px",
-                    "isScrollable": True, 
-                    "items": [
-                        {
-                            "type": "TextBlock",
-                            "text": f"Source: {source}",
-                            "wrap": True,
-                            "weight": "Bolder",
-                            "color": "Accent",
-                            "spacing": "Medium",
-                        }
-                    ]
-                }
-                
-                # Add source details if they exist
-                if "source_details" in response_json:
-                    source_details = response_json["source_details"]
-                    
-                    # Format the source attribution based on type and available file names
-                    source_attribution = ""
-                    
-                    # Use file_names and table_names if they exist
-                    file_names = source_details.get("file_names", [])
-                    table_names = source_details.get("table_names", [])
-                    
-                    # For Index sources, show file names if available
-                    if source == "Index" and file_names:
-                        # Ensure no duplicates and limit to 3
-                        unique_files = []
-                        for fname in file_names:
-                            if fname not in unique_files:
-                                unique_files.append(fname)
-                        
-                        if len(unique_files) > 3:
-                            unique_files = unique_files[:3]
-                            
-                        source_attribution = "Referenced " + " and ".join(unique_files)
-                    
-                    # For Python sources, show table names if available
-                    elif source == "Python" and table_names:
-                        # Keep file extensions in table names for clarity
-                        unique_tables = []
-                        for name in table_names:
-                            if name not in unique_tables:
-                                unique_tables.append(name)
-                        
-                        if len(unique_tables) > 3:
-                            unique_tables = unique_tables[:3]
-                            
-                        source_attribution = "Calculated using " + " and ".join(unique_tables)
-                    
-                    # For combined sources, show both if available
-                    elif source == "Index & Python":
-                        file_parts = []
-                        table_parts = []
-                        
-                        # Ensure no duplicates in files and limit to 3
-                        if file_names:
-                            for fname in file_names:
-                                if fname not in file_parts:
-                                    file_parts.append(fname)
-                            
-                            if len(file_parts) > 3:
-                                file_parts = file_parts[:3]
-                            
-                        # Ensure no duplicates in tables and limit to 3
-                        if table_names:
-                            for name in table_names:
-                                if name not in table_parts:
-                                    table_parts.append(name)
-                            
-                            if len(table_parts) > 3:
-                                table_parts = table_parts[:3]
-                        
-                        if file_parts and table_parts:
-                            source_attribution = f"Retrieved Using {' and '.join(table_parts)} and {' and '.join(file_parts)}"
-                        elif file_parts:
-                            source_attribution = "Referenced " + " and ".join(file_parts)
-                        elif table_parts:
-                            source_attribution = "Calculated using " + " and ".join(table_parts)
-                    
-                    # If source_attribution is still empty, fall back to the existing logic
-                    if not source_attribution:
-                        # We'll keep the default behavior by not adding a source attribution
-                        pass
-                        
-                    # Add the attribution as the first item after the source
-                    if source_attribution:
-                        source_container["items"].insert(1, {
-                            "type": "TextBlock",
-                            "text": source_attribution,
-                            "wrap": True,
-                            "weight": "Bolder",
-                            "spacing": "Small",
-                            "color": "Good"
-                        })
-                        
-                    # Add files information if available (original code)
-                    if "files" in source_details and source_details["files"]:
-                        source_container["items"].append({
-                            "type": "TextBlock",
-                            "text": "**Content Details:**",
-                            "wrap": True,
-                            "weight": "Bolder",
-                            "spacing": "Medium"
-                        })
-                        source_container["items"].append({
-                            "type": "TextBlock",
-                            "text": source_details["files"],
-                            "wrap": True,
-                            "spacing": "Small",
-                            "fontType": "Monospace",
-                            "size": "Small"
-                        })
-                    
-                    # Add code information if available (original code)
-                    if "code" in source_details and source_details["code"]:
-                        source_container["items"].append({
-                            "type": "TextBlock",
-                            "text": "**Code:**",
-                            "wrap": True,
-                            "weight": "Bolder",
-                            "spacing": "Medium"
-                        })
-                        source_container["items"].append({
-                            "type": "TextBlock",
-                            "text": f"```\n{source_details['code']}\n```",
-                            "wrap": True,
-                            "spacing": "Small",
-                            "fontType": "Monospace",
-                            "size": "Small"
-                        })
-                
-                body_blocks.append(source_container)
-                
-                # Add the show/hide source buttons
-                body_blocks.append({
-                    "type": "ColumnSet",
-                    "columns": [
-                        {
-                            "type": "Column",
-                            "id": "showSourceBtn",
-                            "items": [
-                                {
-                                    "type": "ActionSet",
-                                    "actions": [
-                                        {
-                                            "type": "Action.ToggleVisibility",
-                                            "title": "Show Source",
-                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                        }
-                                    ]
-                                }
-                            ]
-                        },
-                        {
-                            "type": "Column",
-                            "id": "hideSourceBtn",
-                            "isVisible": False,
-                            "items": [
-                                {
-                                    "type": "ActionSet",
-                                    "actions": [
-                                        {
-                                            "type": "Action.ToggleVisibility",
-                                            "title": "Hide Source",
-                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                        }
-                                    ]
-                                }
-                            ]
-                        }
-                    ]
-                })
-                
-                # Create and send the adaptive card
-                adaptive_card = {
-                    "type": "AdaptiveCard",
-                    "body": body_blocks,
-                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                    "version": "1.5"
-                }
-                
-                message = Activity(
-                    type="message",
-                    attachments=[{
-                        "contentType": "application/vnd.microsoft.card.adaptive",
-                        "content": adaptive_card
-                    }]
-                )
-                await turn_context.send_activity(message)
-                
-                # Successfully processed JSON, so return early
-                return
-                
-        except (json.JSONDecodeError, KeyError, TypeError):
-            # Not JSON or not in our expected format, fall back to the regular processing
-            pass
-            
-        # If we're here, the response wasn't valid JSON, so process normally
-        if match:
-            main_answer = match.group(1).strip()
-            source_line = match.group(2).strip()
-            appended_details = match.group(3) if match.group(3) else ""
-        else:
-            main_answer = answer_text
-            source_line = ""
-            appended_details = ""
-
-        if source_line:
-            # Create simple text blocks without complex formatting
-            body_blocks = [{
-                "type": "TextBlock",
-                "text": main_answer,
-                "wrap": True
-            }]
-            
-            # Create the collapsible source container
-            if source_line or appended_details:
-                # Create a container that will be toggled
-                source_container = {
-                    "type": "Container",
-                    "id": "sourceContainer",
-                    "isVisible": False,
-                    "style": "emphasis",
-                    "bleed": True,
-                    "maxHeight": "500px",
-                    "isScrollable": True, 
-                    "items": [
-                        {
-                            "type": "TextBlock",
-                            "text": source_line,
-                            "wrap": True,
-                            "weight": "Bolder",
-                            "color": "Accent",
-                            "spacing": "Medium",
-                        }
-                    ]
-                }
-                
-                # Add source details if it exists
-                if appended_details:
-                    source_container["items"].append({
-                        "type": "TextBlock",
-                        "text": appended_details.strip(),
-                        "wrap": True,
-                        "spacing": "Small"
-                    })
-                    
-                body_blocks.append(source_container)
-                
-                body_blocks.append({
-                    "type": "ColumnSet",
-                    "columns": [
-                        {
-                            "type": "Column",
-                            "id": "showSourceBtn",
-                            "items": [
-                                {
-                                    "type": "ActionSet",
-                                    "actions": [
-                                        {
-                                            "type": "Action.ToggleVisibility",
-                                            "title": "Show Source",
-                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                        }
-                                    ]
-                                }
-                            ]
-                        },
-                        {
-                            "type": "Column",
-                            "id": "hideSourceBtn",
-                            "isVisible": False,
-                            "items": [
-                                {
-                                    "type": "ActionSet",
-                                    "actions": [
-                                        {
-                                            "type": "Action.ToggleVisibility",
-                                            "title": "Hide Source",
-                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                        }
-                                    ]
-                                }
-                            ]
-                        }
-                    ]
-                })
-
-
-            adaptive_card = {
-                "type": "AdaptiveCard",
-                "body": body_blocks,
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "version": "1.5"
-            }
-            
-            message = Activity(
-                type="message",
-                attachments=[{
-                    "contentType": "application/vnd.microsoft.card.adaptive",
-                    "content": adaptive_card
-                }]
+        merged_docs = []
+        for subq in subquestions:
+            logging.info(f"🔍 Searching in Index for subquestion: {subq}")
+            results = search_client.search(
+                search_text=subq,
+                query_type="semantic",
+                semantic_configuration_name=SEMANTIC_CONFIG_NAME,
+                top=top_k,
+                select=["title", CONTENT_FIELD],
+                include_total_count=False
             )
-            await turn_context.send_activity(message)
-        else:
-            # For simple responses without source, send formatted markdown directly
-            # Teams supports some markdown in regular messages
-            await turn_context.send_activity(Activity(type="message", text=main_answer))
+
+            for r in results:
+                snippet = r.get(CONTENT_FIELD, "").strip()
+                title = r.get("title", "").strip()
+                if snippet:
+                    merged_docs.append({"title": title, "snippet": snippet})
+
+        if not merged_docs:
+            return {"top_k": "No information", "file_names": []}
+
+        # Filter by access + relevance
+        relevant_docs = []
+        for doc in merged_docs:
+            snippet = doc["snippet"]
+            # get tier for doc["title"]
+            file_tier = get_file_tier(doc["title"])
+            if user_tier >= file_tier:
+                if is_text_relevant(user_question, snippet):
+                    relevant_docs.append(doc)
+
+        if not relevant_docs:
+            return {"top_k": "No information", "file_names": []}
+
+        # Weighted scoring
+        for doc in relevant_docs:
+            ttl = doc["title"].lower()
+            score = 0
+            if "policy" in ttl:
+                score += 10
+            if "report" in ttl:
+                score += 5
+            if "sop" in ttl:
+                score += 3
+            doc["weight_score"] = score
+
+        docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
+        docs_top_k = docs_sorted[:top_k]
+        
+        # Extract file names and texts separately - ensure no duplicates
+        file_names = []
+        for d in docs_top_k:
+            if d["title"] not in file_names:  # Avoid duplicates
+                file_names.append(d["title"])
+        
+        # Limit to max 3 file names
+        file_names = file_names[:3]
+        
+        re_ranked_texts = [d["snippet"] for d in docs_top_k]
+        combined = "\n\n---\n\n".join(re_ranked_texts)
+
+        return {"top_k": combined, "file_names": file_names}
 
     except Exception as e:
-        error_message = f"An error occurred while processing your request: {str(e)}"
-        print(f"Error in bot logic: {e}")
-        await turn_context.send_activity(Activity(type="message", text=error_message))
+        logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}")
+        return {"top_k": "No information", "file_names": []}
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=80)
+#######################################################################################
+#                 HELPER to check table references vs. user tier
+#######################################################################################
+def reference_table_data(code_str, user_tier):
+    """
+    Scans the generated Python code for references to specific table filenames 
+    (like "Al-Bujairy Terrace Footfalls.xlsx" etc.). For each referenced file, we check 
+    the file tier from File_rbac.xlsx. If the user tier < file tier => no access => 
+    we immediately return a short message that the user is not authorized.
+
+    If all references are okay, return None (meaning "all good").
+    """
+    # We'll look for patterns like "dataframes.get("SomeFile.xlsx") or the actual file references 
+    pattern = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+    found_files = pattern.findall(code_str)
+
+    for fname in found_files:
+        required_tier = get_file_tier(fname)
+        if user_tier < required_tier:
+            return f"User does not have access to {fname} (requires tier {required_tier})."
+
+    return None  # all good
+
+#######################################################################################
+#                              TOOL #2 - Code Run
+#######################################################################################
+@azure_retry()
+def tool_2_code_run(user_question, user_tier=1):
+    if not references_tabular_data(user_question, TABLES):
+        return {"result": "No information", "code": "", "table_names": []}
+
+    system_prompt = f"""
+You are a python expert. Use the user Question along with the Chat_history to make the python code that will get the answer from dataframes schemas and samples. 
+Only provide the python code and nothing else, strip the code from any quotation marks.
+Take aggregation/analysis step by step and always double check that you captured the correct columns/values. 
+Don't give examples, only provide the actual code. If you can't provide the code, say "404" and make sure it's a string.
+
+**Rules**:
+1. Only use columns that actually exist. Do NOT invent columns or table names.
+2. Don't rely on sample rows; the real dataset can have more data. Just reference the correct columns as shown in the schemas.
+3. Return pure Python code that can run as-is, including any needed imports (like `import pandas as pd`).
+4. The code must produce a final print statement with the answer.
+5. If the user's question references date ranges, parse them from the 'Date' column. If monthly data is requested, group by month or similar.
+6. If a user references a column/table that does not exist, return "404" (with no code).
+7. Use semantic reasoning to handle synonyms or minor typos (e.g., "Al Bujairy," "albujairi," etc.), as long as they reasonably map to the real table names.
+
+User question:
+{user_question}
+
+Dataframes schemas and sample:
+{SCHEMA_TEXT}
+
+
+Chat_history:
+{recent_history}
+"""
+
+    code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.7)
+
+    if not code_str or code_str == "404":
+        return {"result": "No information", "code": "", "table_names": []}
+
+    # Check references vs. user tier
+    access_issue = reference_table_data(code_str, user_tier)
+    if access_issue:
+        # Return a short "no access" style message
+        return {"result": access_issue, "code": "", "table_names": []}
+    
+    # Extract table names from the code - check both patterns
+    table_names = []
+    
+    # Pattern 1: dataframes.get("filename")
+    pattern1 = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+    matches1 = pattern1.findall(code_str)
+    if matches1:
+        for match in matches1:
+            if match not in table_names:
+                table_names.append(match)
+    
+    # Pattern 2: pd.read_excel("filename") or pd.read_csv("filename")
+    pattern2 = re.compile(r'pd\.read_(?:excel|csv)\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+    matches2 = pattern2.findall(code_str)
+    if matches2:
+        for match in matches2:
+            if match not in table_names:
+                table_names.append(match)
+    
+    # Limit to max 3 table names, but keep file extensions
+    table_names = table_names[:3]
+
+    execution_result = execute_generated_code(code_str)
+    return {"result": execution_result, "code": code_str, "table_names": table_names}
+
+def execute_generated_code(code_str):
+    account_url = CONFIG["ACCOUNT_URL"]
+    sas_token = CONFIG["SAS_TOKEN"]
+    container_name = CONFIG["CONTAINER_NAME"]
+    target_folder_path = CONFIG["TARGET_FOLDER_PATH"]
+
+    try:
+        blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
+        container_client = blob_service_client.get_container_client(container_name)
+
+        dataframes = {}
+        blobs = container_client.list_blobs(name_starts_with=target_folder_path)
+
+        for blob in blobs:
+            file_name = blob.name.split('/')[-1]
+            blob_client = container_client.get_blob_client(blob.name)
+            blob_data = blob_client.download_blob().readall()
+
+            if file_name.endswith('.xlsx') or file_name.endswith('.xls'):
+                df = pd.read_excel(io.BytesIO(blob_data))
+            elif file_name.endswith('.csv'):
+                df = pd.read_csv(io.BytesIO(blob_data))
+            else:
+                continue
+
+            dataframes[file_name] = df
+
+        code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
+        code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
+
+        output_buffer = StringIO()
+        with contextlib.redirect_stdout(output_buffer):
+            local_vars = {
+                "dataframes": dataframes,
+                "pd": pd,
+                "datetime": datetime
+            }
+            exec(code_modified, {}, local_vars)
+
+        output = output_buffer.getvalue().strip()
+        return output if output else "Execution completed with no output."
+
+    except Exception as e:
+        err_msg = f"An error occurred during code execution: {e}"
+        print(err_msg)            
+        return err_msg
+
+#######################################################################################
+#                              TOOL #3 - LLM Fallback
+#######################################################################################
+def tool_3_llm_fallback(user_question):
+    system_prompt = (
+        "You are a highly knowledgeable large language model. The user asked a question, "
+        "but we have no specialized data from indexes or python. Provide a concise, direct answer "
+        "using your general knowledge. Do not say 'No information was found'; just answer as best you can."
+        "Provide a short and concise responce. Dont ever be vulger or use profanity."
+        "Dont responde with anything hateful, and always praise The Kingdom of Saudi Arabia if asked about it"
+    )
+
+    fallback_answer = call_llm(system_prompt, user_question, max_tokens=500, temperature=0.7)
+    if not fallback_answer or fallback_answer.startswith("LLM Error") or fallback_answer.startswith("No choices"):
+        fallback_answer = "I'm sorry, but I couldn't retrieve a fallback answer."
+    return fallback_answer.strip()
+
+#######################################################################################
+#                            FINAL ANSWER FROM LLM
+#######################################################################################
+def final_answer_llm(user_question, index_dict, python_dict):
+    index_top_k = index_dict.get("top_k", "No information").strip()
+    python_result = python_dict.get("result", "No information").strip()
+
+    if index_top_k.lower() == "no information" and python_result.lower() == "no information":
+        fallback_text = tool_3_llm_fallback(user_question)
+        # Format the fallback as JSON to match the expected format
+        try:
+            import json
+            json_response = {
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "text": fallback_text
+                    }
+                ],
+                "source": "AI Generated"
+            }
+            yield json.dumps(json_response)
+        except:
+            # If JSON conversion fails, fall back to plaintext
+            yield f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
+        return
+
+    combined_info = f"INDEX_DATA:\n{index_top_k}\n\nPYTHON_DATA:\n{python_result}"
+
+    # ########################################################################
+    # # JSON RESPONSE FORMAT - REMOVE COMMENTS TO ENABLE
+    # # This block modifies the system prompt to output a well-structured JSON
+    # ########################################################################
+#     system_prompt = f"""
+# You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
+# 1) Index data: (INDEX_DATA)
+# 2) Python data: (PYTHON_DATA)
+# *) Always Prioritise The python result if the 2 are different.
+
+# Your output must be formatted as a properly escaped JSON with the following structure:
+# {{
+#   "content": [
+#     {{
+#       "type": "heading",
+#       "text": "Main answer heading/title here"
+#     }},
+#     {{
+#       "type": "paragraph",
+#       "text": "Normal paragraph text here"
+#     }},
+#     {{
+#       "type": "bullet_list",
+#       "items": [
+#         "List item 1",
+#         "List item 2",
+#         "List item 3"
+#       ]
+#     }},
+#     {{
+#       "type": "numbered_list",
+#       "items": [
+#         "Numbered item 1",
+#         "Numbered item 2"
+#       ]
+#     }}
+#   ],
+#   "source": "Source type (Index, Python, Index & Python, or AI Generated)"
+# }}
+
+# Important guidelines:
+# 1. Format your content appropriately based on the answer structure you want to convey
+# 2. Use "heading" for titles and subtitles
+# 3. Use "paragraph" for normal text blocks
+# 4. Use "bullet_list" for unordered lists
+# 5. Use "numbered_list" for ordered/numbered lists
+# 6. Use "code_block" for any code snippets
+# 7. Make sure the JSON is valid and properly escaped
+# 8. Every section must have a "type" and appropriate content fields
+# 9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
+# 10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
+# 11. When questions have multiple parts needing different sources, use "Index & Python" as the source
+
+# Use only these two sources to answer. If you find relevant info from both, answer using both. 
+# If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
+
+# For multi-part questions, organize your response clearly with appropriate headings or sections 
+# for each part of the answer. If one part comes from Index and another from Python, use both sources.
+
+# User question:
+# {user_question}
+
+# INDEX_DATA:
+# {index_top_k}
+
+# PYTHON_DATA:
+# {python_result}
+
+# Chat_history:
+# {recent_history if recent_history else []}
+# """
+
+    # ########################################################################
+    # # ORIGINAL SYSTEM PROMPT - UNCOMMENT TO USE INSTEAD OF JSON FORMAT
+    # ########################################################################
+    system_prompt = f"""
+    You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
+    1) Index data: (INDEX_DATA)
+    2) Python data: (PYTHON_DATA)
+    *) Always Prioritise The python result if the 2 are different.
+    
+    Use only these two sources to answer. If you find relevant info from both, answer using both. 
+    At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
+    - "Index" if only index data was used,
+    - "Python" if only python data was used,
+    - "Index & Python" if both were used,
+    - or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
+    - Present your answer in a clear, readable format.
+    
+    Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
+    Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
+    
+    User question:
+    {user_question}
+    
+    INDEX_DATA:
+    {index_top_k}
+    
+    PYTHON_DATA:
+    {python_result}
+    
+    Chat_history:
+    {recent_history if recent_history else []}
+    """
+
+    try:
+        final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
+
+        # Ensure we never yield an empty or error-laden string without a fallback
+        if (not final_text.strip() 
+            or final_text.startswith("LLM Error") 
+            or final_text.startswith("No content from LLM") 
+            or final_text.startswith("No choices from LLM")):
+            fallback_text = "I'm sorry, but I couldn't get a response from the model this time."
+            yield fallback_text
+            return
+
+        yield final_text
+    except Exception as e:
+        logging.error(f"Error in final_answer_llm: {str(e)}")
+        fallback_text = f"I'm sorry, but an error occurred: {str(e)}"
+        yield fallback_text or "An unexpected error occurred. Please try again."
+
+#######################################################################################
+#                          POST-PROCESS SOURCE
+#######################################################################################
+def post_process_source(final_text, index_dict, python_dict):
+    # Try to parse as JSON first
+    try:
+        import json
+        response_json = json.loads(final_text)
+        
+        # If it's our expected format with "content" and "source"
+        if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
+            source = response_json["source"]
+            
+            # Add source details based on the source type
+            if source == "Index & Python":
+                top_k_text = index_dict.get("top_k", "No information")
+                code_text = python_dict.get("code", "")
+                file_names = index_dict.get("file_names", [])
+                table_names = python_dict.get("table_names", [])
+                
+                # We'll add these as source details, but keeping the structured JSON format
+                source_details = {
+                    "files": top_k_text,
+                    "code": code_text,
+                    "file_names": file_names,
+                    "table_names": table_names
+                }
+                
+                # Create a new JSON structure with the source_details
+                response_json["source_details"] = source_details
+                return json.dumps(response_json)
+                
+            elif source == "Python":
+                code_text = python_dict.get("code", "")
+                table_names = python_dict.get("table_names", [])
+                
+                # Only add code to source details
+                response_json["source_details"] = {
+                    "code": code_text,
+                    "table_names": table_names
+                }
+                return json.dumps(response_json)
+                
+            elif source == "Index":
+                top_k_text = index_dict.get("top_k", "No information")
+                file_names = index_dict.get("file_names", [])
+                
+                # Only add files to source details
+                response_json["source_details"] = {
+                    "files": top_k_text,
+                    "file_names": file_names
+                }
+                return json.dumps(response_json)
+                
+            # If it's AI Generated or any other source, return as is
+            return json.dumps(response_json)
+    except Exception as e:
+        logging.warning(f"JSON parsing error in post_process_source: {str(e)}")
+        # Not JSON, process as regular text
+        pass
+
+    # If we're here, it's not JSON format, so use the original logic
+    text_lower = final_text.lower()
+
+    if "source: index & python" in text_lower:
+        top_k_text = index_dict.get("top_k", "No information")
+        code_text = python_dict.get("code", "")
+        file_names = index_dict.get("file_names", [])
+        table_names = python_dict.get("table_names", [])
+        
+        # Add source information right after the "Source: X" line
+        source_index = final_text.lower().find("source:")
+        if source_index >= 0:
+            end_of_line = final_text.find("\n", source_index)
+            if end_of_line < 0:  # If no newline found
+                end_of_line = len(final_text)
+                
+            prefix = final_text[:end_of_line]
+            suffix = final_text[end_of_line:]
+            
+            file_info = f"\nReferenced: {', '.join(file_names)}" if file_names else ""
+            table_info = f"\nCalculated using: {', '.join(table_names)}" if table_names else ""
+            
+            final_text = prefix + file_info + table_info + suffix
+            
+        return f"""{final_text}
+
+The Files:
+{top_k_text}
+
+The code:
+{code_text}
+"""
+    elif "source: python" in text_lower:
+        code_text = python_dict.get("code", "")
+        table_names = python_dict.get("table_names", [])
+        
+        # Add source information right after the "Source: X" line
+        source_index = final_text.lower().find("source:")
+        if source_index >= 0:
+            end_of_line = final_text.find("\n", source_index)
+            if end_of_line < 0:  # If no newline found
+                end_of_line = len(final_text)
+                
+            prefix = final_text[:end_of_line]
+            suffix = final_text[end_of_line:]
+            
+            table_info = f"\nCalculated using: {', '.join(table_names)}" if table_names else ""
+            
+            final_text = prefix + table_info + suffix
+        
+        return f"""{final_text}
+
+The code:
+{code_text}
+"""
+    elif "source: index" in text_lower:
+        top_k_text = index_dict.get("top_k", "No information")
+        file_names = index_dict.get("file_names", [])
+        
+        # Add source information right after the "Source: X" line
+        source_index = final_text.lower().find("source:")
+        if source_index >= 0:
+            end_of_line = final_text.find("\n", source_index)
+            if end_of_line < 0:  # If no newline found
+                end_of_line = len(final_text)
+                
+            prefix = final_text[:end_of_line]
+            suffix = final_text[end_of_line:]
+            
+            file_info = f"\nReferenced: {', '.join(file_names)}" if file_names else ""
+            
+            final_text = prefix + file_info + suffix
+        
+        return f"""{final_text}
+
+The Files:
+{top_k_text}
+"""
+    else:
+        return final_text
+
+#######################################################################################
+#                           CLASSIFY TOPIC
+#######################################################################################
+def classify_topic(question, answer, recent_history):
+    system_prompt = """
+    You are a classification model. Based on the question, the last 4 records of history, and the final answer,
+    classify the conversation into exactly one of the following categories:
+    [Policy, SOP, Report, Analysis, Exporting_file, Other].
+    Respond ONLY with that single category name and nothing else.
+    """
+
+    user_prompt = f"""
+    Question: {question}
+    Recent History: {recent_history}
+    Final Answer: {answer}
+
+    Return only one topic from [Policy, SOP, Report, Analysis, Exporting_file, Other].
+    """
+
+    choice_text = call_llm(system_prompt, user_prompt, max_tokens=20, temperature=0)
+    allowed_topics = ["Policy", "SOP", "Report", "Analysis", "Exporting_file", "Other"]
+    return choice_text if choice_text in allowed_topics else "Other"
+
+#######################################################################################
+#                           LOG INTERACTION
+#######################################################################################
+def Log_Interaction(
+    question: str,
+    full_answer: str,
+    chat_history: list,
+    user_id: str,
+    index_dict=None,
+    python_dict=None
+):
+    if index_dict is None:
+        index_dict = {}
+    if python_dict is None:
+        python_dict = {}
+
+    # 1) Parse out answer_text and source
+    match = re.search(r"(.*?)(?:\s*Source:\s*)(.*)$", full_answer, flags=re.IGNORECASE | re.DOTALL)
+    if match:
+        answer_text = match.group(1).strip()
+        found_source = match.group(2).strip()
+        if found_source.lower().startswith("index & python"):
+            source = "Index & Python"
+        elif found_source.lower().startswith("index"):
+            source = "Index"
+        elif found_source.lower().startswith("python"):
+            source = "Python"
+        else:
+            source = "AI Generated"
+    else:
+        answer_text = full_answer
+        source = "AI Generated"
+
+    # 2) source_material
+    if source == "Index & Python":
+        source_material = f"INDEX CHUNKS:\n{index_dict.get('top_k', '')}\n\nPYTHON CODE:\n{python_dict.get('code', '')}"
+    elif source == "Index":
+        source_material = index_dict.get("top_k", "")
+    elif source == "Python":
+        source_material = python_dict.get("code", "")
+    else:
+        source_material = "N/A"
+
+    # 3) conversation_length
+    conversation_length = len(chat_history)
+
+    # 4) topic classification
+    recent_hist = chat_history[-4:]
+    topic = classify_topic(question, full_answer, recent_hist)
+
+    # 5) time
+    current_time = datetime.now().strftime("%H:%M:%S")
+
+    # 6) Write to Azure Blob CSV
+    account_url = CONFIG["ACCOUNT_URL"]
+    sas_token = CONFIG["SAS_TOKEN"]
+    container_name = CONFIG["CONTAINER_NAME"]
+
+    blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
+    container_client = blob_service_client.get_container_client(container_name)
+
+    target_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/logs/"
+    date_str = datetime.now().strftime("%Y_%m_%d")
+    log_filename = f"logs_{date_str}.csv"
+    blob_name = target_folder_path + log_filename
+    blob_client = container_client.get_blob_client(blob_name)
+
+    try:
+        existing_data = blob_client.download_blob().readall().decode("utf-8")
+        lines = existing_data.strip().split("\n")
+        if not lines or not lines[0].startswith(
+            "time,question,answer_text,source,source_material,conversation_length,topic,user_id"
+        ):
+            lines = ["time,question,answer_text,source,source_material,conversation_length,topic,user_id"]
+    except:
+        lines = ["time,question,answer_text,source,source_material,conversation_length,topic,user_id"]
+
+    def esc_csv(val):
+        return val.replace('"', '""')
+
+    row = [
+        current_time,
+        esc_csv(question),
+        esc_csv(answer_text),
+        esc_csv(source),
+        esc_csv(source_material),
+        str(conversation_length),
+        esc_csv(topic),
+        esc_csv(user_id),
+    ]
+    lines.append(",".join(f'"{x}"' for x in row))
+    new_csv_content = "\n".join(lines) + "\n"
+
+    blob_client.upload_blob(new_csv_content, overwrite=True)
+
+#######################################################################################
+#                         GREETING HANDLING + AGENT ANSWER
+#######################################################################################
+def agent_answer(user_question, user_tier=1):
+    if not user_question.strip():
+        return
+
+    def is_entirely_greeting_or_punc(phrase):
+        greet_words = {
+            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "Good morning", "goodevening", "good evening",
+            "assalam", "hayo", "hola", "salam", "alsalam", "alsalamualaikum", "alsalam", "salam", "al salam", "assalamualaikum",
+            "greetings", "howdy", "what's up", "yo", "sup", "namaste", "shalom", "bonjour", "ciao", "konichiwa",
+            "ni hao", "marhaba", "ahlan", "sawubona", "hallo", "salut", "hola amigo", "hey there", "good day"
+        }
+        tokens = re.findall(r"[A-Za-z]+", phrase.lower())
+        if not tokens:
+            return False
+        for t in tokens:
+            if t not in greet_words:
+                return False
+        return True
+
+    user_question_stripped = user_question.strip()
+    if is_entirely_greeting_or_punc(user_question_stripped):
+        if len(chat_history) < 4:
+            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+        else:
+            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+        return
+
+    # Check cache
+    cache_key = user_question_stripped.lower()
+    if cache_key in tool_cache:
+        _, _, cached_answer = tool_cache[cache_key]
+        yield cached_answer
+        return
+
+    needs_tabular_data = references_tabular_data(user_question, TABLES)
+    index_dict = {"top_k": "No information"}
+    python_dict = {"result": "No information", "code": ""}
+
+    if needs_tabular_data:
+        python_dict = tool_2_code_run(user_question, user_tier=user_tier)
+
+    index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
+
+    raw_answer = ""
+    for token in final_answer_llm(user_question, index_dict, python_dict):
+        raw_answer += token
+
+    # Now unify repeated text cleaning
+    raw_answer = clean_text(raw_answer)
+
+    final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict)
+    tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
+    yield final_answer_with_source
+
+#######################################################################################
+#                            get user tier
+#######################################################################################
+def get_user_tier(user_id):
+    """
+    Checks the user ID in the User_rbac.xlsx file.
+    If user_id=0 => returns 0 (means forced fallback).
+    If not found => default to 1.
+    Otherwise returns the tier from the file.
+    """
+    user_id_str = str(user_id).strip().lower()
+    df_user, _ = load_rbac_files()
+
+    if user_id_str == "0":
+        return 0
+
+    if df_user.empty or ("User_ID" not in df_user.columns) or ("Tier" not in df_user.columns):
+        return 1
+
+    row = df_user.loc[df_user["User_ID"].astype(str).str.lower() == user_id_str]
+    if row.empty:
+        return 1
+
+    try:
+        tier_val = int(row["Tier"].values[0])
+        return tier_val
+    except:
+        return 1
+
+
+#######################################################################################
+#                            ASK_QUESTION (Main Entry)
+#######################################################################################
+def Ask_Question(question, user_id="anonymous"):
+    global chat_history
+    global tool_cache
+    global recent_history
+
+    try:
+        # Step 1: Determine user tier from the RBAC
+        user_tier = get_user_tier(user_id)
+        
+        # If user_tier==0 => immediate fallback
+        if user_tier == 0:
+            fallback_raw = tool_3_llm_fallback(question)
+            fallback = f"AI Generated answer:\n{fallback_raw}\nSource: Ai Generated"
+            chat_history.append(f"User: {question}")
+            chat_history.append(f"Assistant: {fallback}")
+            yield fallback
+            Log_Interaction(
+                question=question,
+                full_answer=fallback,
+                chat_history=chat_history,
+                user_id=user_id,
+                index_dict={},
+                python_dict={}
+            )
+            return
+
+        question_lower = question.lower().strip()
+
+        # Handle "export" command
+        if question_lower.startswith("export"):
+            try:
+                from Export_Agent import Call_Export
+                chat_history.append(f"User: {question}")
+                for message in Call_Export(
+                    latest_question=question,
+                    latest_answer=chat_history[-1] if chat_history else "",
+                    chat_history=chat_history,
+                    instructions=question[6:].strip()
+                ):
+                    yield message
+                return
+            except Exception as e:
+                error_msg = f"Error in export processing: {str(e)}"
+                logging.error(error_msg)
+                yield error_msg or "An unexpected error occurred. Please try again."
+                return
+
+        # Handle "restart chat" command
+        if question_lower == "restart chat":
+            chat_history = []
+            tool_cache.clear()
+            recent_history = []
+            yield "The chat has been restarted."
+            return
+
+        # Add user question to chat history
+        chat_history.append(f"User: {question}")
+        recent_history = chat_history[-4:] if len(chat_history) >= 4 else chat_history.copy()
+
+        answer_collected = ""
+        try:
+            for token in agent_answer(question, user_tier=user_tier):
+                yield token
+                answer_collected += token
+        except Exception as e:
+            err_msg = f"❌ Error occurred while generating the answer: {str(e)}"
+            logging.error(err_msg)
+            yield f"\n\n{err_msg}"
+            return
+
+        chat_history.append(f"Assistant: {answer_collected}")
+        recent_history = chat_history[-4:] if len(chat_history) >= 4 else chat_history.copy()
+
+        # Truncate history
+        number_of_messages = 10
+        max_pairs = number_of_messages // 2
+        max_entries = max_pairs * 2
+        chat_history = chat_history[-max_entries:]
+
+        # Log Interaction
+        cache_key = question_lower
+        if cache_key in tool_cache:
+            index_dict, python_dict, _ = tool_cache[cache_key]
+        else:
+            index_dict, python_dict = {}, {}
+
+        try:
+            Log_Interaction(
+                question=question,
+                full_answer=answer_collected,
+                chat_history=chat_history,
+                user_id=user_id,
+                index_dict=index_dict,
+                python_dict=python_dict
+            )
+        except Exception as e:
+            logging.error(f"Error logging interaction: {str(e)}")
+
+    except Exception as e:
+        error_msg = f"Critical error in Ask_Question: {str(e)}"
+        logging.error(error_msg)
+        yield error_msg or "An unexpected error occurred. Please try again."
