@@ -240,12 +240,11 @@ async def _bot_logic(turn_context: TurnContext):
                     
                     # For Python sources, show table names if available
                     elif source == "Python" and table_names:
-                        # Clean up table names (remove extensions for display)
+                        # Keep file extensions in table names for clarity
                         unique_tables = []
                         for name in table_names:
-                            clean_name = name.replace('.xlsx', '').replace('.csv', '')
-                            if clean_name not in unique_tables:
-                                unique_tables.append(clean_name)
+                            if name not in unique_tables:
+                                unique_tables.append(name)
                         
                         if len(unique_tables) > 3:
                             unique_tables = unique_tables[:3]
@@ -269,15 +268,14 @@ async def _bot_logic(turn_context: TurnContext):
                         # Ensure no duplicates in tables and limit to 3
                         if table_names:
                             for name in table_names:
-                                clean_name = name.replace('.xlsx', '').replace('.csv', '')
-                                if clean_name not in table_parts:
-                                    table_parts.append(clean_name)
+                                if name not in table_parts:
+                                    table_parts.append(name)
                             
                             if len(table_parts) > 3:
                                 table_parts = table_parts[:3]
                         
                         if file_parts and table_parts:
-                            source_attribution = f"Retrieved Using {', '.join(table_parts)} and {', '.join(file_parts)}"
+                            source_attribution = f"Retrieved Using {' and '.join(table_parts)} and {' and '.join(file_parts)}"
                         elif file_parts:
                             source_attribution = "Referenced " + " and ".join(file_parts)
                         elif table_parts:
