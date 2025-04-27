@@ -1,9 +1,6 @@
 # Version 19b:
 # Store the files used to pass to app.py version 9. so it can display it under source as a reference.
 
-# Version 19b:
-# Store the files used to pass to app.py version 9. so it can display it under source as a reference.
-
 import os
 import io
 import re
@@ -894,19 +891,11 @@ def post_process_source(final_text, index_dict, python_dict):
             prefix = final_text[:end_of_line]
             suffix = final_text[end_of_line:]
             
-            # Include both file names and table names in the attribution
-            file_info = ""
-            if file_names:
-                file_info = f"\nReferenced: {', '.join(file_names)}"
-            
-            table_info = ""
-            if table_names:
-                table_info = f"\nCalculated using: {', '.join(table_names)}"
+            file_info = f"\nReferenced: {', '.join(file_names)}" if file_names else ""
+            table_info = f"\nCalculated using: {', '.join(table_names)}" if table_names else ""
             
             final_text = prefix + file_info + table_info + suffix
-        
-        # IMPORTANT FIX: For combined sources, always include both the Index content and Python code
-        # Note: If top_k_text is "No information", we'll still include it for consistency
+            
         return f"""{final_text}
 
 The Files:
@@ -1119,21 +1108,15 @@ def agent_answer(user_question, user_tier=1):
         yield cached_answer
         return
 
-    # Process the question to determine which tools to use
     needs_tabular_data = references_tabular_data(user_question, TABLES)
-    
-    # Initialize with proper defaults
-    index_dict = {"top_k": "No information", "file_names": []}
-    python_dict = {"result": "No information", "code": "", "table_names": []}
+    index_dict = {"top_k": "No information"}
+    python_dict = {"result": "No information", "code": ""}
 
-    # Get data from both tools if needed
     if needs_tabular_data:
         python_dict = tool_2_code_run(user_question, user_tier=user_tier)
-    
-    # Always try the index search
+
     index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
 
-    # Generate answer using both data sources
     raw_answer = ""
     for token in final_answer_llm(user_question, index_dict, python_dict):
         raw_answer += token
@@ -1141,7 +1124,6 @@ def agent_answer(user_question, user_tier=1):
     # Now unify repeated text cleaning
     raw_answer = clean_text(raw_answer)
 
-    # Post-process to include source information
     final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict)
     tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
     yield final_answer_with_source
