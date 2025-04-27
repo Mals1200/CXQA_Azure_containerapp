@@ -1,5 +1,4 @@
-# Version 9
-# Fixed Files display in src
+# Version 9 (attempt to fix the file name):
 
 import os
 import asyncio
@@ -219,162 +218,47 @@ async def _bot_logic(turn_context: TurnContext):
                 if "source_details" in response_json:
                     source_details = response_json["source_details"]
                     
-                    # Format the source attribution based on type
+                    # Format the source attribution based on type and available file names
                     source_attribution = ""
                     
-                    # For Index sources, extract file names from the content
-                    if source == "Index" and "files" in source_details and source_details["files"]:
-                        file_content = source_details["files"]
-                        
-                        # Define terms to exclude as they are likely metadata, not filenames
-                        exclude_terms = [
-                            "information classification", "confidential", "internal", 
-                            "prepared by", "document owner", "approved", "revision",
-                            "date:", "version:", "classification:", "status:", "draft",
-                            "effective date", "review date", "security level"
-                        ]
-                        
-                        # First approach: try to find filenames with extensions - highest priority
-                        file_names = []
-                        extensions = ['.pdf', '.xlsx', '.xls', '.csv', '.docx', '.doc', '.txt', '.ppt', '.pptx']
-                        
-                        # Look for full filenames using more comprehensive patterns
-                        # This pattern looks for words/phrases ending with a file extension
-                        filename_patterns = [
-                            r'\b([a-zA-Z0-9_\-]+[_\s][\w\s\-\.]+\.(pdf|xlsx?|docx?|csv|txt|pptx?))\b',  # Words_With_Underscores.ext
-                            r'"([^"]+\.(pdf|xlsx?|docx?|csv|txt|pptx?))"',  # "Anything in quotes.ext"
-                            r'\'([^\']+\.(pdf|xlsx?|docx?|csv|txt|pptx?))\'',  # 'Anything in quotes.ext'
-                            r'\b(DC_[A-Z]{2}_\w+_\d+.*\.(pdf|xlsx?|docx?|csv|txt|pptx?))\b',  # DC_XX_Something_123.ext
-                            r'\b(SOP[-_]\d+.*\.(pdf|xlsx?|docx?|csv|txt|pptx?))\b',  # SOP-123.ext or SOP_123.ext
-                            r'\b([A-Z]{2,}_[A-Z]{2,}_\w+_\d+.*)\b'  # Catches DC_AM_Retail_102_Tier 2_Fire Evacuation...
-                        ]
-                        
-                        # Search through all lines with filename patterns
-                        for line in file_content.split('\n'):
-                            line = line.strip()
-                            
-                            # Skip lines containing exclusion terms
-                            should_skip = False
-                            for term in exclude_terms:
-                                if term.lower() in line.lower():
-                                    should_skip = True
-                                    break
-                            
-                            if should_skip:
-                                continue
-                                
-                            # Try all our filename patterns
-                            for pattern in filename_patterns:
-                                matches = re.findall(pattern, line, re.IGNORECASE)
-                                if matches:
-                                    for match in matches:
-                                        # Handle tuple results from regex groups
-                                        if isinstance(match, tuple):
-                                            match = match[0]  # Get the first capturing group
-                                        file_names.append(match)
-                            
-                            # Also try the simple extension check
-                            for ext in extensions:
-                                if ext in line.lower():
-                                    # Extract words containing the extension
-                                    words = line.split()
-                                    for word in words:
-                                        if word.lower().endswith(ext) and len(word) > len(ext) + 2:
-                                            file_names.append(word)
-                        
-                        # If no filenames found yet, look for specific SOP/document patterns
-                        if not file_names:
-                            sop_patterns = [
-                                r'(fire\s+evacuation\s+sop)',  # Fire Evacuation SOP
-                                r'(dc_am_retail_\d+)',  # DC_AM_RETAIL_102
-                                r'(tier\s+\d+\s+fire\s+evacuation)',  # Tier 2 Fire Evacuation
-                                r'(fire\s+alarm\s+response\s+plan)'  # Fire Alarm Response Plan
-                            ]
-                            
-                            for pattern in sop_patterns:
-                                for line in file_content.split('\n'):
-                                    matches = re.findall(pattern, line.lower())
-                                    if matches:
-                                        # Try to get more context - the entire line may be the title
-                                        # Skip if line contains exclude terms
-                                        should_skip = False
-                                        for term in exclude_terms:
-                                            if term.lower() in line.lower():
-                                                should_skip = True
-                                                break
-                                        
-                                        if not should_skip and 5 < len(line) < 100:
-                                            file_names.append(line)
-                                            break
-                                
-                                if file_names:
-                                    break
-                        
-                        # If we found potential filenames, clean them up
-                        if file_names:
-                            # Remove duplicates while preserving order
-                            unique_files = []
-                            for f in file_names:
-                                f = f.strip().strip('"\'')  # Remove quotes and extra spaces
-                                if f not in unique_files and len(f) > 4:  # Ensure it's not too short
-                                    unique_files.append(f)
-                            
-                            # Prioritize filenames with extensions
-                            with_extensions = [f for f in unique_files if any(f.lower().endswith(ext) for ext in extensions)]
-                            if with_extensions:
-                                source_attribution = "Referenced " + " and ".join(with_extensions)
-                            else:
-                                source_attribution = "Referenced " + " and ".join(unique_files)
-                        else:
-                            # If all else fails, just say "Referenced document"
-                            source_attribution = "Referenced document"
+                    # Use file_names and table_names if they exist
+                    file_names = source_details.get("file_names", [])
+                    table_names = source_details.get("table_names", [])
                     
-                    # For Python sources, extract table names from the code
-                    elif source == "Python" and "code" in source_details and source_details["code"]:
-                        code = source_details["code"]
-                        table_names = []
-                        
-                        # Look for dataframe references like 'dataframes.get("TableName.xlsx")'
-                        pattern = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
-                        matches = pattern.findall(code)
-                        
-                        if matches:
-                            table_names = [name.replace('.xlsx', '').replace('.csv', '') for name in matches]
-                            source_attribution = "Calculated using " + " and ".join(table_names)
-                        else:
-                            source_attribution = "Calculated using data tables"
+                    # For Index sources, show file names if available
+                    if source == "Index" and file_names:
+                        source_attribution = "Referenced " + " and ".join(file_names)
                     
-                    # For combined sources
+                    # For Python sources, show table names if available
+                    elif source == "Python" and table_names:
+                        # Clean up table names (remove extensions for display)
+                        clean_table_names = [name.replace('.xlsx', '').replace('.csv', '') for name in table_names]
+                        source_attribution = "Calculated using " + " and ".join(clean_table_names)
+                    
+                    # For combined sources, show both if available
                     elif source == "Index & Python":
-                        file_names = []
-                        table_names = []
+                        file_parts = []
+                        table_parts = []
                         
-                        # Extract file names from index
-                        if "files" in source_details and source_details["files"]:
-                            file_content = source_details["files"]
-                            for line in file_content.strip().split('\n')[:5]:
-                                line = line.strip()
-                                if line and not line.startswith("---") and len(line) < 100:
-                                    file_names.append(line)
+                        if file_names:
+                            file_parts = file_names
+                            
+                        if table_names:
+                            # Clean up table names
+                            table_parts = [name.replace('.xlsx', '').replace('.csv', '') for name in table_names]
                         
-                        # Extract table names from code
-                        if "code" in source_details and source_details["code"]:
-                            code = source_details["code"]
-                            pattern = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
-                            matches = pattern.findall(code)
-                            if matches:
-                                table_names = [name.replace('.xlsx', '').replace('.csv', '') for name in matches]
-                        
-                        # Combine into attribution
-                        if file_names and table_names:
-                            source_attribution = f"Retrieved Using {', '.join(table_names)} and {', '.join(file_names)}"
-                        elif file_names:
-                            source_attribution = "Referenced " + " and ".join(file_names)
-                        elif table_names:
-                            source_attribution = "Calculated using " + " and ".join(table_names)
-                        else:
-                            source_attribution = "Retrieved from combined sources"
+                        if file_parts and table_parts:
+                            source_attribution = f"Retrieved Using {', '.join(table_parts)} and {', '.join(file_parts)}"
+                        elif file_parts:
+                            source_attribution = "Referenced " + " and ".join(file_parts)
+                        elif table_parts:
+                            source_attribution = "Calculated using " + " and ".join(table_parts)
                     
+                    # If source_attribution is still empty, fall back to the existing logic
+                    if not source_attribution:
+                        # We'll keep the default behavior by not adding a source attribution
+                        pass
+                        
                     # Add the attribution as the first item after the source
                     if source_attribution:
                         source_container["items"].insert(1, {
@@ -385,8 +269,8 @@ async def _bot_logic(turn_context: TurnContext):
                             "spacing": "Small",
                             "color": "Good"
                         })
-                    
-                    # Add files information if available (keep original but with a better header)
+                        
+                    # Add files information if available (original code)
                     if "files" in source_details and source_details["files"]:
                         source_container["items"].append({
                             "type": "TextBlock",
@@ -404,7 +288,7 @@ async def _bot_logic(turn_context: TurnContext):
                             "size": "Small"
                         })
                     
-                    # Add code information if available
+                    # Add code information if available (original code)
                     if "code" in source_details and source_details["code"]:
                         source_container["items"].append({
                             "type": "TextBlock",
