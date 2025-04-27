@@ -1,5 +1,5 @@
-# Version 19c:
-# Complex/compounded questions now show both file sources. (Attempting)
+# Version 19b:
+# Store the files used to pass to app.py version 9. so it can display it under source as a reference.
 
 import os
 import io
@@ -1108,27 +1108,22 @@ def agent_answer(user_question, user_tier=1):
         yield cached_answer
         return
 
-    # Initialize dictionaries - process them in the correct order 
-    index_dict = {"top_k": "No information", "file_names": []}
-    python_dict = {"result": "No information", "code": "", "table_names": []}
-
-    # First, check if we need to use Index search (always run this for all questions)
-    index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
-    
-    # Next, check if we need to run Python for tabular data
     needs_tabular_data = references_tabular_data(user_question, TABLES)
+    index_dict = {"top_k": "No information"}
+    python_dict = {"result": "No information", "code": ""}
+
     if needs_tabular_data:
         python_dict = tool_2_code_run(user_question, user_tier=user_tier)
 
-    # Generate the answer using both tools' results
+    index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
+
     raw_answer = ""
     for token in final_answer_llm(user_question, index_dict, python_dict):
         raw_answer += token
 
-    # Clean up text
+    # Now unify repeated text cleaning
     raw_answer = clean_text(raw_answer)
 
-    # Process the final answer with source information
     final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict)
     tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
     yield final_answer_with_source
