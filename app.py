@@ -225,12 +225,61 @@ async def _bot_logic(turn_context: TurnContext):
                     # For Index sources, extract file names from the content
                     if source == "Index" and "files" in source_details and source_details["files"]:
                         file_content = source_details["files"]
-                        # Extract file names from the top lines (typically the first few lines contain file names)
+                        
+                        # First, look for actual filenames (patterns ending with common extensions)
+                        file_patterns = [
+                            # Specific pattern for the example file: DC_AM_Retail_102_Tier 2_Fire Evacuation SOP_Rev.000.pdf
+                            r'(DC_[A-Za-z0-9_]+_\d+_Tier\s*\d+_[A-Za-z0-9_\s]+_Rev\.\d+\.pdf)',
+                            r'(DC_[A-Za-z0-9_]+_[A-Za-z0-9_\s]+_Rev\.\d+\.pdf)',
+                            # Generic patterns for filename detection
+                            r'([A-Za-z0-9_\-]+_Rev\.\d+\.pdf)',
+                            r'(DC_[A-Za-z0-9_\-]+\.pdf)',
+                            r'([A-Za-z0-9_\-]+_Tier\s*\d+_[A-Za-z0-9_\s\-]+\.pdf)',
+                            # Standard file extensions
+                            r'([A-Za-z0-9_\-]+\.pdf)',
+                            r'([A-Za-z0-9_\-]+\.docx?)',
+                            r'([A-Za-z0-9_\-]+\.xlsx?)',
+                            r'([A-Za-z0-9_\-]+\.csv)',
+                            r'([A-Za-z0-9_\-]+\.txt)'
+                        ]
+                        
                         file_names = []
-                        for line in file_content.strip().split('\n')[:5]:  # Check first 5 lines
-                            line = line.strip()
-                            if line and not line.startswith("---") and len(line) < 100:  # Basic filters
-                                file_names.append(line)
+                        # Try to find filenames using regex patterns first
+                        for pattern in file_patterns:
+                            matches = re.findall(pattern, file_content, re.IGNORECASE)
+                            if matches:
+                                file_names.extend(matches)
+                        
+                        # If we didn't find any filenames using patterns, fall back to a better line extraction
+                        if not file_names:
+                            # Avoid lines that are clearly metadata
+                            skip_patterns = [
+                                r'approved date', r'document owner', r'revision', r'document prepared by',
+                                r'effective date', r'review date', r'policy number', r'sop number',
+                                r'^section', r'^chapter', r'^appendix', r'^table of contents'
+                            ]
+                            
+                            for line in file_content.split('\n'):
+                                line = line.strip()
+                                # Skip empty lines, long text, or lines matching skip patterns
+                                if not line or len(line) > 100:
+                                    continue
+                                    
+                                should_skip = False
+                                for skip in skip_patterns:
+                                    if re.search(skip, line, re.IGNORECASE):
+                                        should_skip = True
+                                        break
+                                
+                                if not should_skip and not line.startswith('-') and not line.startswith('*'):
+                                    # Check if this looks like a title (capitalize most words)
+                                    if sum(1 for word in line.split() if word[0].isupper()) >= len(line.split())/2:
+                                        file_names.append(line)
+                                        # Only take the first good title-like line
+                                        break
+                        
+                        # Deduplicate file names
+                        file_names = list(dict.fromkeys(file_names))
                         
                         if file_names:
                             source_attribution = "Referenced " + " and ".join(file_names)
