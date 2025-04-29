@@ -1,5 +1,5 @@
 # Version 18c:
-# return error
+# incase of error, return the error
 
 import os
 import io
@@ -27,7 +27,7 @@ import difflib
 CONFIG = {
     "LLM_ENDPOINT": (
         "https://cxqaazureaihub2358016269.openai.azure.com/"
-        "openai/deployments/gpt-4o-3/chat/completions?api-version=2024-08-01-preview"
+        "openai/deployments/gpt-4o-3/chat/completions?api-version=2025-01-01-preview"
     ),
     "LLM_API_KEY": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor",
     "SEARCH_SERVICE_NAME": "cxqa-azureai-search",
