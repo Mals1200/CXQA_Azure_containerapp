@@ -829,154 +829,81 @@ Chat_history:
         yield fallback_text
 
 #######################################################################################
-#                          POST-PROCESS SOURCE
+#                          POST-PROCESS SOURCE  — NEW VERSION
 #######################################################################################
 def post_process_source(final_text, index_dict, python_dict):
-    # Try to parse as JSON first
+    """
+    • Works for BOTH JSON answers (Teams) and plain-text answers (Notebook).
+    • When the answer is JSON it appends a bullet-list with the referenced
+      file-names / table-names *inside* the same “content” array so your
+      existing app.py renders them automatically.
+    """
+    # ---------- 1) Try to treat the answer as JSON first ----------
     try:
         import json
-        response_json = json.loads(final_text)
-        
-        # If it's our expected format with "content" and "source"
-        if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
-            # --- Robust override logic for source field ---
-            index_nontrivial = index_dict.get("top_k", "").strip().lower() not in ["", "no information"]
-            python_nontrivial = python_dict.get("result", "").strip().lower() not in ["", "no information"]
-            if response_json["source"] == "Python" and index_nontrivial:
-                response_json["source"] = "Index & Python"
-            elif response_json["source"] == "Index" and python_nontrivial:
-                response_json["source"] = "Index & Python"
-            # --- End robust override logic ---
-            source = response_json["source"]
-            
-            # Add source details based on the source type
-            if source == "Index & Python":
-                top_k_text = index_dict.get("top_k", "No information")
-                code_text = python_dict.get("code", "")
-                file_names = index_dict.get("file_names", [])
-                table_names = python_dict.get("table_names", [])
-                
-                # We'll add these as source details, but keeping the structured JSON format
-                source_details = {
-                    "files": top_k_text,
-                    "code": code_text,
-                    "file_names": file_names,
-                    "table_names": table_names
-                }
-                
-                # Create a new JSON structure with the source_details
-                response_json["source_details"] = source_details
-                return json.dumps(response_json)
-                
-            elif source == "Python":
-                code_text = python_dict.get("code", "")
-                table_names = python_dict.get("table_names", [])
-                
-                # Only add code to source details
-                response_json["source_details"] = {
-                    "code": code_text,
-                    "table_names": table_names
-                }
-                return json.dumps(response_json)
-                
-            elif source == "Index":
-                top_k_text = index_dict.get("top_k", "No information")
-                file_names = index_dict.get("file_names", [])
-                
-                # Only add files to source details
-                response_json["source_details"] = {
-                    "files": top_k_text,
-                    "file_names": file_names
-                }
-                return json.dumps(response_json)
-                
-            # If it's AI Generated or any other source, return as is
-            return json.dumps(response_json)
-    except Exception as e:
-        logging.warning(f"JSON parsing error in post_process_source: {str(e)}")
-        # Not JSON, process as regular text
-        pass
+        resp = json.loads(final_text)
 
-    # If we're here, it's not JSON format, so use the original logic
+        # -------- only continue if structure looks right ----------
+        if isinstance(resp, dict) and "content" in resp and "source" in resp:
+
+            # ---- collect the names you already extracted earlier ----
+            file_names  = index_dict.get("file_names",  [])
+            table_names = python_dict.get("table_names", [])
+
+            # ---- build one or two bullet-lists (only if needed) ----
+            extras = []
+            if file_names:
+                extras.append({
+                    "type": "bullet_list",
+                    "items": [f"Referenced file: {fn}" for fn in file_names]
+                })
+            if table_names:
+                extras.append({
+                    "type": "bullet_list",
+                    "items": [f"Calculated using table: {tn}" for tn in table_names]
+                })
+
+            # ---- append them to the existing “content” ----
+            resp["content"].extend(extras)
+
+            # ---- keep the raw names as metadata (optional) ----
+            resp["source_details"] = {
+                "file_names":  file_names,
+                "table_names": table_names
+            }
+
+            return json.dumps(resp)        # ← Teams layout + names now visible
+    except Exception as e:
+        logging.warning(f"JSON parse failed in post_process_source: {e}")
+        # fall through to the plaintext handler below …
+
+    # ---------- 2) Fallback – answer is plain-text -----------------
     text_lower = final_text.lower()
 
+    def _inject(after_tag: str, extra_text: str):
+        idx = final_text.lower().find(after_tag)
+        if idx < 0:
+            return final_text
+        eol = final_text.find("\n", idx)
+        if eol < 0:
+            eol = len(final_text)
+        return final_text[:eol] + extra_text + final_text[eol:]
+
     if "source: index & python" in text_lower:
-        top_k_text = index_dict.get("top_k", "No information")
-        code_text = python_dict.get("code", "")
-        file_names = index_dict.get("file_names", [])
-        table_names = python_dict.get("table_names", [])
-        
-        # Add source information right after the "Source: X" line
-        source_index = final_text.lower().find("source:")
-        if source_index >= 0:
-            end_of_line = final_text.find("\n", source_index)
-            if end_of_line < 0:  # If no newline found
-                end_of_line = len(final_text)
-                
-            prefix = final_text[:end_of_line]
-            suffix = final_text[end_of_line:]
-            
-            file_info = f"\nReferenced: {', '.join(file_names)}" if file_names else ""
-            table_info = f"\nCalculated using: {', '.join(table_names)}" if table_names else ""
-            
-            final_text = prefix + file_info + table_info + suffix
-            
-        return f"""{final_text}
+        fn = ", ".join(index_dict.get("file_names",  []))
+        tn = ", ".join(python_dict.get("table_names", []))
+        return _inject("source:", f"\nReferenced: {fn}\nCalculated with: {tn}")
 
-The Files:
-{top_k_text}
-
-The code:
-{code_text}
-"""
     elif "source: python" in text_lower:
-        code_text = python_dict.get("code", "")
-        table_names = python_dict.get("table_names", [])
-        
-        # Add source information right after the "Source: X" line
-        source_index = final_text.lower().find("source:")
-        if source_index >= 0:
-            end_of_line = final_text.find("\n", source_index)
-            if end_of_line < 0:  # If no newline found
-                end_of_line = len(final_text)
-                
-            prefix = final_text[:end_of_line]
-            suffix = final_text[end_of_line:]
-            
-            table_info = f"\nCalculated using: {', '.join(table_names)}" if table_names else ""
-            
-            final_text = prefix + table_info + suffix
-        
-        return f"""{final_text}
+        tn = ", ".join(python_dict.get("table_names", []))
+        return _inject("source:", f"\nCalculated with: {tn}")
 
-The code:
-{code_text}
-"""
     elif "source: index" in text_lower:
-        top_k_text = index_dict.get("top_k", "No information")
-        file_names = index_dict.get("file_names", [])
-        
-        # Add source information right after the "Source: X" line
-        source_index = final_text.lower().find("source:")
-        if source_index >= 0:
-            end_of_line = final_text.find("\n", source_index)
-            if end_of_line < 0:  # If no newline found
-                end_of_line = len(final_text)
-                
-            prefix = final_text[:end_of_line]
-            suffix = final_text[end_of_line:]
-            
-            file_info = f"\nReferenced: {', '.join(file_names)}" if file_names else ""
-            
-            final_text = prefix + file_info + suffix
-        
-        return f"""{final_text}
+        fn = ", ".join(index_dict.get("file_names", []))
+        return _inject("source:", f"\nReferenced: {fn}")
 
-The Files:
-{top_k_text}
-"""
-    else:
-        return final_text
+    return final_text
+
 
 #######################################################################################
 #                           CLASSIFY TOPIC
