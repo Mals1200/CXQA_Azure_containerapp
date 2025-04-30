@@ -1,6 +1,4 @@
-# version 20c 
-# Handles trailing commas, missing closing braces, and code block markers (like ```json ... ```) in the LLM's output.
-# If the LLM returns slightly malformed JSON, your backend will now repair and parse it, so "source_details" (with file/table names) will be added and shown in Teams.
+# version 20b commented
 
 import os
 import io
@@ -696,106 +694,106 @@ def final_answer_llm(user_question, index_dict, python_dict):
     # # JSON RESPONSE FORMAT - REMOVE COMMENTS TO ENABLE
     # # This block modifies the system prompt to output a well-structured JSON
     # ########################################################################
-    system_prompt = f"""
-You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
-1) Index data: (INDEX_DATA)
-2) Python data: (PYTHON_DATA)
-*) Always Prioritise The python result if the 2 are different.
+#     system_prompt = f"""
+# You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
+# 1) Index data: (INDEX_DATA)
+# 2) Python data: (PYTHON_DATA)
+# *) Always Prioritise The python result if the 2 are different.
 
-Your output must be formatted as a properly escaped JSON with the following structure:
-{{
-  "content": [
-    {{
-      "type": "heading",
-      "text": "Main answer heading/title here"
-    }},
-    {{
-      "type": "paragraph",
-      "text": "Normal paragraph text here"
-    }},
-    {{
-      "type": "bullet_list",
-      "items": [
-        "List item 1",
-        "List item 2",
-        "List item 3"
-      ]
-    }},
-    {{
-      "type": "numbered_list",
-      "items": [
-        "Numbered item 1",
-        "Numbered item 2"
-      ]
-    }}
-  ],
-  "source": "Source type (Index, Python, Index & Python, or AI Generated)"
-}}
+# Your output must be formatted as a properly escaped JSON with the following structure:
+# {{
+#   "content": [
+#     {{
+#       "type": "heading",
+#       "text": "Main answer heading/title here"
+#     }},
+#     {{
+#       "type": "paragraph",
+#       "text": "Normal paragraph text here"
+#     }},
+#     {{
+#       "type": "bullet_list",
+#       "items": [
+#         "List item 1",
+#         "List item 2",
+#         "List item 3"
+#       ]
+#     }},
+#     {{
+#       "type": "numbered_list",
+#       "items": [
+#         "Numbered item 1",
+#         "Numbered item 2"
+#       ]
+#     }}
+#   ],
+#   "source": "Source type (Index, Python, Index & Python, or AI Generated)"
+# }}
 
-Important guidelines:
-1. Format your content appropriately based on the answer structure you want to convey
-2. Use "heading" for titles and subtitles
-3. Use "paragraph" for normal text blocks
-4. Use "bullet_list" for unordered lists
-5. Use "numbered_list" for ordered/numbered lists
-6. Use "code_block" for any code snippets
-7. Make sure the JSON is valid and properly escaped
-8. Every section must have a "type" and appropriate content fields
-9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
-10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
-11. When questions have multiple parts needing different sources, use "Index & Python" as the source
+# Important guidelines:
+# 1. Format your content appropriately based on the answer structure you want to convey
+# 2. Use "heading" for titles and subtitles
+# 3. Use "paragraph" for normal text blocks
+# 4. Use "bullet_list" for unordered lists
+# 5. Use "numbered_list" for ordered/numbered lists
+# 6. Use "code_block" for any code snippets
+# 7. Make sure the JSON is valid and properly escaped
+# 8. Every section must have a "type" and appropriate content fields
+# 9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
+# 10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
+# 11. When questions have multiple parts needing different sources, use "Index & Python" as the source
 
-Use only these two sources to answer. If you find relevant info from both, answer using both. 
-If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
+# Use only these two sources to answer. If you find relevant info from both, answer using both. 
+# If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
 
-For multi-part questions, organize your response clearly with appropriate headings or sections 
-for each part of the answer. If one part comes from Index and another from Python, use both sources.
+# For multi-part questions, organize your response clearly with appropriate headings or sections 
+# for each part of the answer. If one part comes from Index and another from Python, use both sources.
 
-User question:
-{user_question}
+# User question:
+# {user_question}
 
-INDEX_DATA:
-{index_top_k}
+# INDEX_DATA:
+# {index_top_k}
 
-PYTHON_DATA:
-{python_result}
+# PYTHON_DATA:
+# {python_result}
 
-Chat_history:
-{recent_history if recent_history else []}
-"""
+# Chat_history:
+# {recent_history if recent_history else []}
+# """
 
     # ########################################################################
     # # ORIGINAL SYSTEM PROMPT - UNCOMMENT TO USE INSTEAD OF JSON FORMAT
     # ########################################################################
-    # system_prompt = f"""
-    # You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
-    # 1) Index data: (INDEX_DATA)
-    # 2) Python data: (PYTHON_DATA)
-    # *) Always Prioritise The python result if the 2 are different.
+    system_prompt = f"""
+    You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
+    1) Index data: (INDEX_DATA)
+    2) Python data: (PYTHON_DATA)
+    *) Always Prioritise The python result if the 2 are different.
     
-    # Use only these two sources to answer. If you find relevant info from both, answer using both. 
-    # At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
-    # - "Index" if only index data was used,
-    # - "Python" if only python data was used,
-    # - "Index & Python" if both were used,
-    # - or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
-    # - Present your answer in a clear, readable format.
+    Use only these two sources to answer. If you find relevant info from both, answer using both. 
+    At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
+    - "Index" if only index data was used,
+    - "Python" if only python data was used,
+    - "Index & Python" if both were used,
+    - or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
+    - Present your answer in a clear, readable format.
     
-    # Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
-    # Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
+    Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
+    Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
     
-    # User question:
-    # {user_question}
+    User question:
+    {user_question}
     
-    # INDEX_DATA:
-    # {index_top_k}
+    INDEX_DATA:
+    {index_top_k}
     
-    # PYTHON_DATA:
-    # {python_result}
+    PYTHON_DATA:
+    {python_result}
     
-    # Chat_history:
-    # {recent_history if recent_history else []}
-    # """
+    Chat_history:
+    {recent_history if recent_history else []}
+    """
 
     try:
         final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
@@ -818,33 +816,11 @@ Chat_history:
 #######################################################################################
 #                          POST-PROCESS SOURCE
 #######################################################################################
-def repair_json_str(s):
-    """
-    Attempts to repair common JSON issues:
-    - Removes trailing commas before closing brackets/braces
-    - Adds missing closing brace if needed
-    - Strips code block markers (```json ... ```)
-    - Strips leading/trailing whitespace
-    """
-    import re
-    s = s.strip()
-    # Remove code block markers
-    s = re.sub(r'^```json', '', s, flags=re.IGNORECASE).strip()
-    s = re.sub(r'^```', '', s).strip()
-    s = re.sub(r'```$', '', s).strip()
-    # Remove trailing commas before } or ]
-    s = re.sub(r',\s*([}\]])', r'\1', s)
-    # Add missing closing brace if it looks like a dict and is missing
-    if s.count('{') > s.count('}'):
-        s += '}'
-    return s
-
 def post_process_source(final_text, index_dict, python_dict):
     # Try to parse as JSON first
     try:
         import json
-        json_str = repair_json_str(final_text)
-        response_json = json.loads(json_str)
+        response_json = json.loads(final_text)
         
         # If it's our expected format with "content" and "source"
         if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
