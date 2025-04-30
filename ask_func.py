@@ -423,97 +423,94 @@ def is_text_relevant(question, snippet):
     return content.strip().upper().startswith("YES")
 
 #######################################################################################
-#                              TOOL #1 - Index Search
+#                              TOOL #1 – Index Search  (FULL REPLACEMENT)
 #######################################################################################
 @azure_retry()
 def tool_1_index_search(user_question, top_k=5, user_tier=1):
     """
-    Modified version: uses split_question_into_subquestions to handle multi-part queries.
-    Then filters out docs the user has no access to, before final top_k selection.
+    Searches the Azure AI Search index for each sub-question, keeps only documents
+    the user is authorized to see, and returns the combined snippets plus up to
+    three unique file names.
     """
-    SEARCH_SERVICE_NAME = CONFIG["SEARCH_SERVICE_NAME"]
-    SEARCH_ENDPOINT = CONFIG["SEARCH_ENDPOINT"]
-    ADMIN_API_KEY = CONFIG["ADMIN_API_KEY"]
-    INDEX_NAME = CONFIG["INDEX_NAME"]
-    SEMANTIC_CONFIG_NAME = CONFIG["SEMANTIC_CONFIG_NAME"]
-    CONTENT_FIELD = CONFIG["CONTENT_FIELD"]
+    SEARCH_SERVICE_NAME   = CONFIG["SEARCH_SERVICE_NAME"]
+    SEARCH_ENDPOINT       = CONFIG["SEARCH_ENDPOINT"]
+    ADMIN_API_KEY         = CONFIG["ADMIN_API_KEY"]
+    INDEX_NAME            = CONFIG["INDEX_NAME"]
+    SEMANTIC_CONFIG_NAME  = CONFIG["SEMANTIC_CONFIG_NAME"]
+    CONTENT_FIELD         = CONFIG["CONTENT_FIELD"]
 
-    subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
-    if not subquestions:
-        subquestions = [user_question]
+    subquestions = split_question_into_subquestions(
+        user_question, use_semantic_parsing=True
+    ) or [user_question]
 
     try:
         search_client = SearchClient(
-            endpoint=SEARCH_ENDPOINT,
-            index_name=INDEX_NAME,
-            credential=AzureKeyCredential(ADMIN_API_KEY)
+            endpoint   = SEARCH_ENDPOINT,
+            index_name = INDEX_NAME,
+            credential = AzureKeyCredential(ADMIN_API_KEY)
         )
 
         merged_docs = []
         for subq in subquestions:
             logging.info(f"🔍 Searching in Index for subquestion: {subq}")
             results = search_client.search(
-                search_text=subq,
-                query_type="semantic",
-                semantic_configuration_name=SEMANTIC_CONFIG_NAME,
-                top=top_k,
-                select=["title", CONTENT_FIELD],
-                include_total_count=False
+                search_text                 = subq,
+                query_type                  = "semantic",
+                semantic_configuration_name = SEMANTIC_CONFIG_NAME,
+                top                         = top_k,
+                select                      = ["title", CONTENT_FIELD],
+                include_total_count         = False
             )
-
             for r in results:
                 snippet = r.get(CONTENT_FIELD, "").strip()
-                title = r.get("title", "").strip()
+                title   = r.get("title", "").strip()
                 if snippet:
                     merged_docs.append({"title": title, "snippet": snippet})
 
         if not merged_docs:
             return {"top_k": "No information", "file_names": []}
 
-        # Filter by access + relevance
+        # ---------------- Filter by access + relevance ----------------
         relevant_docs = []
         for doc in merged_docs:
-            snippet = doc["snippet"]
-            # get tier for doc["title"]
-            file_tier = get_file_tier(doc["title"])
-            if user_tier >= file_tier:
-                if is_text_relevant(user_question, snippet):
-                    relevant_docs.append(doc)
+            if user_tier >= get_file_tier(doc["title"]) and \
+               is_text_relevant(user_question, doc["snippet"]):
+                relevant_docs.append(doc)
 
         if not relevant_docs:
             return {"top_k": "No information", "file_names": []}
 
-        # Weighted scoring
+        # ---------------- Weight policies / reports higher ------------
         for doc in relevant_docs:
             ttl = doc["title"].lower()
             score = 0
-            if "policy" in ttl:
-                score += 10
-            if "report" in ttl:
-                score += 5
-            if "sop" in ttl:
-                score += 3
+            if "policy" in ttl: score += 10
+            if "report" in ttl: score += 5
+            if "sop"    in ttl: score += 3
             doc["weight_score"] = score
 
-        docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
-        docs_top_k = docs_sorted[:top_k]
-        
-        # Extract file names and texts separately - ensure no duplicates
-        file_names = []
-        for d in docs_top_k:
-            if d["title"] not in file_names:  # Avoid duplicates
-                file_names.append(d["title"])
-        
-        # Limit to max 3 file names
-        file_names = file_names[:3]
-        
-        re_ranked_texts = [d["snippet"] for d in docs_top_k]
-        combined = "\n\n---\n\n".join(re_ranked_texts)
+        relevant_docs.sort(key=lambda d: d["weight_score"], reverse=True)
 
-        return {"top_k": combined, "file_names": file_names}
+        # ---------------- Collect unique file names -------------------
+        file_names = []
+        for doc in relevant_docs:
+            t = doc["title"].strip()
+            if t and t not in file_names:
+                file_names.append(t)
+        file_names = file_names[:3]                     # keep only 3
+
+        # ---------------- Build combined answer text ------------------
+        combined_snippets = "\n\n---\n\n".join(
+            d["snippet"] for d in relevant_docs[:top_k]
+        )
+
+        return {
+            "top_k":      combined_snippets or "No information",
+            "file_names": file_names
+        }
 
     except Exception as e:
-        logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}")
+        logging.error(f"⚠️ Error in tool_1_index_search: {e}")
         return {"top_k": "No information", "file_names": []}
 
 #######################################################################################
@@ -540,14 +537,17 @@ def reference_table_data(code_str, user_tier):
     return None  # all good
 
 #######################################################################################
-#                              TOOL #2 - Code Run
+#                              TOOL #2 – Code Run  (FULL REPLACEMENT)
 #######################################################################################
 @azure_retry()
 def tool_2_code_run(user_question, user_tier=1, recent_history=None):
+    """
+    Generates Python code to answer tabular questions, executes it,
+    and returns the printed result plus up to three table names.
+    """
     if not references_tabular_data(user_question, TABLES):
         return {"result": "No information", "code": "", "table_names": []}
 
-    # Centralize fallback logic for chat history
     rhistory = recent_history if recent_history else []
 
     system_prompt = f"""
@@ -576,88 +576,45 @@ Chat_history:
 {rhistory}
 """
 
-    code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.7)
+    code_str = call_llm(system_prompt, user_question,
+                        max_tokens=1200, temperature=0.7)
 
-    if not code_str or code_str == "404":
+    if not code_str or code_str.strip() == "404":
         return {"result": "No information", "code": "", "table_names": []}
 
-    # Check references vs. user tier
+    # ---------- Authorisation check ----------
     access_issue = reference_table_data(code_str, user_tier)
     if access_issue:
-        # Return a short "no access" style message
         return {"result": access_issue, "code": "", "table_names": []}
-    
-    # Extract table names from the code - check both patterns
+
+    # ---------- Extract table names ----------
     table_names = []
-    
-    # Pattern 1: dataframes.get("filename")
-    pattern1 = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
-    matches1 = pattern1.findall(code_str)
-    if matches1:
-        for match in matches1:
-            if match not in table_names:
-                table_names.append(match)
-    
-    # Pattern 2: pd.read_excel("filename") or pd.read_csv("filename")
-    pattern2 = re.compile(r'pd\.read_(?:excel|csv)\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
-    matches2 = pattern2.findall(code_str)
-    if matches2:
-        for match in matches2:
-            if match not in table_names:
-                table_names.append(match)
-    
-    # Limit to max 3 table names, but keep file extensions
-    table_names = table_names[:3]
+
+    # pattern 1: dataframes.get("filename")
+    table_names += re.findall(
+        r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)', code_str
+    )
+
+    # pattern 2: pd.read_excel/read_csv("filename")
+    table_names += re.findall(
+        r'pd\.read_(?:excel|csv)\(\s*[\'"]([^\'"]+)[\'"]\s*\)', code_str
+    )
+
+    # -------------- extra fallback ---------------
+    if not table_names:
+        extra = re.findall(r'[\w\-\s]+\.(?:xlsx|csv)', code_str, flags=re.I)
+        table_names.extend(extra)
+
+    # deduplicate & limit
+    table_names = list(dict.fromkeys(table_names))[:3]
 
     execution_result = execute_generated_code(code_str)
-    return {"result": execution_result, "code": code_str, "table_names": table_names}
 
-def execute_generated_code(code_str):
-    account_url = CONFIG["ACCOUNT_URL"]
-    sas_token = CONFIG["SAS_TOKEN"]
-    container_name = CONFIG["CONTAINER_NAME"]
-    target_folder_path = CONFIG["TARGET_FOLDER_PATH"]
-
-    try:
-        blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
-        container_client = blob_service_client.get_container_client(container_name)
-
-        dataframes = {}
-        blobs = container_client.list_blobs(name_starts_with=target_folder_path)
-
-        for blob in blobs:
-            file_name = blob.name.split('/')[-1]
-            blob_client = container_client.get_blob_client(blob.name)
-            blob_data = blob_client.download_blob().readall()
-
-            if file_name.endswith('.xlsx') or file_name.endswith('.xls'):
-                df = pd.read_excel(io.BytesIO(blob_data))
-            elif file_name.endswith('.csv'):
-                df = pd.read_csv(io.BytesIO(blob_data))
-            else:
-                continue
-
-            dataframes[file_name] = df
-
-        code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
-        code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
-
-        output_buffer = StringIO()
-        with contextlib.redirect_stdout(output_buffer):
-            local_vars = {
-                "dataframes": dataframes,
-                "pd": pd,
-                "datetime": datetime
-            }
-            exec(code_modified, {}, local_vars)
-
-        output = output_buffer.getvalue().strip()
-        return output if output else "Execution completed with no output."
-
-    except Exception as e:
-        err_msg = f"An error occurred during code execution: {e}"
-        print(err_msg)            
-        return err_msg
+    return {
+        "result":      execution_result,
+        "code":        code_str,
+        "table_names": table_names
+    }
 
 #######################################################################################
 #                              TOOL #3 - LLM Fallback
@@ -829,80 +786,65 @@ Chat_history:
         yield fallback_text
 
 #######################################################################################
-#                          POST-PROCESS SOURCE  — NEW VERSION
+#                   POST-PROCESS SOURCE  (FULL REPLACEMENT)
 #######################################################################################
 def post_process_source(final_text, index_dict, python_dict):
     """
-    • Works for BOTH JSON answers (Teams) and plain-text answers (Notebook).
-    • When the answer is JSON it appends a bullet-list with the referenced
-      file-names / table-names *inside* the same “content” array so your
-      existing app.py renders them automatically.
+    Adds file/table names to both JSON (Teams) and plain-text (Notebook) answers
+    without disturbing existing formatting.
     """
-    # ---------- 1) Try to treat the answer as JSON first ----------
+    file_names  = index_dict.get("file_names",  [])
+    table_names = python_dict.get("table_names", [])
+
+    # ---------------- JSON branch ----------------
     try:
         import json
         resp = json.loads(final_text)
 
-        # -------- only continue if structure looks right ----------
         if isinstance(resp, dict) and "content" in resp and "source" in resp:
-
-            # ---- collect the names you already extracted earlier ----
-            file_names  = index_dict.get("file_names",  [])
-            table_names = python_dict.get("table_names", [])
-
-            # ---- build one or two bullet-lists (only if needed) ----
-            extras = []
+            # Build a compact bullet list with all details
+            details = []
             if file_names:
-                extras.append({
-                    "type": "bullet_list",
-                    "items": [f"Referenced file: {fn}" for fn in file_names]
-                })
+                details.extend([f"Referenced file: {fn}"   for fn in file_names])
             if table_names:
-                extras.append({
-                    "type": "bullet_list",
-                    "items": [f"Calculated using table: {tn}" for tn in table_names]
+                details.extend([f"Calculated from: {tn}"   for tn in table_names])
+
+            if details:
+                resp["content"].append({
+                    "type":  "bullet_list",
+                    "items": details
                 })
 
-            # ---- append them to the existing “content” ----
-            resp["content"].extend(extras)
-
-            # ---- keep the raw names as metadata (optional) ----
+            # Optional raw metadata
             resp["source_details"] = {
                 "file_names":  file_names,
                 "table_names": table_names
             }
 
-            return json.dumps(resp)        # ← Teams layout + names now visible
+            return json.dumps(resp)
     except Exception as e:
-        logging.warning(f"JSON parse failed in post_process_source: {e}")
-        # fall through to the plaintext handler below …
+        logging.warning(f"post_process_source JSON path failed: {e}")
 
-    # ---------- 2) Fallback – answer is plain-text -----------------
-    text_lower = final_text.lower()
-
-    def _inject(after_tag: str, extra_text: str):
-        idx = final_text.lower().find(after_tag)
+    # ---------------- Plain-text branch ----------------
+    def _inject(extra_text):
+        idx = final_text.lower().find("source:")
         if idx < 0:
-            return final_text
+            return final_text + "\n" + extra_text
         eol = final_text.find("\n", idx)
-        if eol < 0:
-            eol = len(final_text)
+        eol = len(final_text) if eol < 0 else eol
         return final_text[:eol] + extra_text + final_text[eol:]
 
-    if "source: index & python" in text_lower:
-        fn = ", ".join(index_dict.get("file_names",  []))
-        tn = ", ".join(python_dict.get("table_names", []))
-        return _inject("source:", f"\nReferenced: {fn}\nCalculated with: {tn}")
+    extras = []
+    if file_names:
+        extras.append("Referenced: "      + ", ".join(file_names))
+    if table_names:
+        extras.append("Calculated from: " + ", ".join(table_names))
 
-    elif "source: python" in text_lower:
-        tn = ", ".join(python_dict.get("table_names", []))
-        return _inject("source:", f"\nCalculated with: {tn}")
-
-    elif "source: index" in text_lower:
-        fn = ", ".join(index_dict.get("file_names", []))
-        return _inject("source:", f"\nReferenced: {fn}")
+    if extras:
+        return _inject("\n" + "\n".join(extras))
 
     return final_text
+
 
 
 #######################################################################################
