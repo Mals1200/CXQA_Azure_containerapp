@@ -1,4 +1,4 @@
-# version 2b commented
+# Version 19b (attempt to fix the file name):
 
 import os
 import io
@@ -528,12 +528,9 @@ def reference_table_data(code_str, user_tier):
 #                              TOOL #2 - Code Run
 #######################################################################################
 @azure_retry()
-def tool_2_code_run(user_question, user_tier=1, recent_history=None):
+def tool_2_code_run(user_question, user_tier=1):
     if not references_tabular_data(user_question, TABLES):
         return {"result": "No information", "code": "", "table_names": []}
-
-    # Centralize fallback logic for chat history
-    rhistory = recent_history if recent_history else []
 
     system_prompt = f"""
 You are a python expert. Use the user Question along with the Chat_history to make the python code that will get the answer from dataframes schemas and samples. 
@@ -549,7 +546,6 @@ Don't give examples, only provide the actual code. If you can't provide the code
 5. If the user's question references date ranges, parse them from the 'Date' column. If monthly data is requested, group by month or similar.
 6. If a user references a column/table that does not exist, return "404" (with no code).
 7. Use semantic reasoning to handle synonyms or minor typos (e.g., "Al Bujairy," "albujairi," etc.), as long as they reasonably map to the real table names.
-8. Do not use Chat_history embed Information or Answers in the code. 
 
 User question:
 {user_question}
@@ -557,8 +553,9 @@ User question:
 Dataframes schemas and sample:
 {SCHEMA_TEXT}
 
+
 Chat_history:
-{rhistory}
+{recent_history}
 """
 
     code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.7)
@@ -824,14 +821,6 @@ def post_process_source(final_text, index_dict, python_dict):
         
         # If it's our expected format with "content" and "source"
         if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
-            # --- Robust override logic for source field ---
-            index_nontrivial = index_dict.get("top_k", "").strip().lower() not in ["", "no information"]
-            python_nontrivial = python_dict.get("result", "").strip().lower() not in ["", "no information"]
-            if response_json["source"] == "Python" and index_nontrivial:
-                response_json["source"] = "Index & Python"
-            elif response_json["source"] == "Index" and python_nontrivial:
-                response_json["source"] = "Index & Python"
-            # --- End robust override logic ---
             source = response_json["source"]
             
             # Add source details based on the source type
@@ -886,56 +875,80 @@ def post_process_source(final_text, index_dict, python_dict):
     text_lower = final_text.lower()
 
     if "source: index & python" in text_lower:
+        top_k_text = index_dict.get("top_k", "No information")
+        code_text = python_dict.get("code", "")
         file_names = index_dict.get("file_names", [])
         table_names = python_dict.get("table_names", [])
+        
         # Add source information right after the "Source: X" line
         source_index = final_text.lower().find("source:")
         if source_index >= 0:
             end_of_line = final_text.find("\n", source_index)
             if end_of_line < 0:  # If no newline found
                 end_of_line = len(final_text)
+                
             prefix = final_text[:end_of_line]
             suffix = final_text[end_of_line:]
+            
             file_info = f"\nReferenced: {', '.join(file_names)}" if file_names else ""
             table_info = f"\nCalculated using: {', '.join(table_names)}" if table_names else ""
+            
             final_text = prefix + file_info + table_info + suffix
-        # Uncomment the following lines to display the retrieved top_k and code in the answer output:
-        # top_k_text = index_dict.get("top_k", "No information")
-        # code_text = python_dict.get("code", "")
-        # return f"""{final_text}\n\nThe Files:\n{top_k_text}\n\nThe code:\n{code_text}\n"""
-        return final_text
+            
+        return f"""{final_text}
+
+The Files:
+{top_k_text}
+
+The code:
+{code_text}
+"""
     elif "source: python" in text_lower:
+        code_text = python_dict.get("code", "")
         table_names = python_dict.get("table_names", [])
+        
         # Add source information right after the "Source: X" line
         source_index = final_text.lower().find("source:")
         if source_index >= 0:
             end_of_line = final_text.find("\n", source_index)
             if end_of_line < 0:  # If no newline found
                 end_of_line = len(final_text)
+                
             prefix = final_text[:end_of_line]
             suffix = final_text[end_of_line:]
+            
             table_info = f"\nCalculated using: {', '.join(table_names)}" if table_names else ""
+            
             final_text = prefix + table_info + suffix
-        # Uncomment the following lines to display the code in the answer output:
-        # code_text = python_dict.get("code", "")
-        # return f"""{final_text}\n\nThe code:\n{code_text}\n"""
-        return final_text
+        
+        return f"""{final_text}
+
+The code:
+{code_text}
+"""
     elif "source: index" in text_lower:
+        top_k_text = index_dict.get("top_k", "No information")
         file_names = index_dict.get("file_names", [])
+        
         # Add source information right after the "Source: X" line
         source_index = final_text.lower().find("source:")
         if source_index >= 0:
             end_of_line = final_text.find("\n", source_index)
             if end_of_line < 0:  # If no newline found
                 end_of_line = len(final_text)
+                
             prefix = final_text[:end_of_line]
             suffix = final_text[end_of_line:]
+            
             file_info = f"\nReferenced: {', '.join(file_names)}" if file_names else ""
+            
             final_text = prefix + file_info + suffix
-        # Uncomment the following lines to display the retrieved top_k in the answer output:
-        # top_k_text = index_dict.get("top_k", "No information")
-        # return f"""{final_text}\n\nThe Files:\n{top_k_text}\n"""
-        return final_text
+        
+        return f"""{final_text}
+
+The Files:
+{top_k_text}
+"""
     else:
         return final_text
 
@@ -1060,7 +1073,7 @@ def Log_Interaction(
 #######################################################################################
 #                         GREETING HANDLING + AGENT ANSWER
 #######################################################################################
-def agent_answer(user_question, user_tier=1, recent_history=None):
+def agent_answer(user_question, user_tier=1):
     if not user_question.strip():
         return
 
@@ -1099,7 +1112,7 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     python_dict = {"result": "No information", "code": ""}
 
     if needs_tabular_data:
-        python_dict = tool_2_code_run(user_question, user_tier=user_tier, recent_history=recent_history)
+        python_dict = tool_2_code_run(user_question, user_tier=user_tier)
 
     index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
 
@@ -1208,7 +1221,7 @@ def Ask_Question(question, user_id="anonymous"):
 
         answer_collected = ""
         try:
-            for token in agent_answer(question, user_tier=user_tier, recent_history=recent_history):
+            for token in agent_answer(question, user_tier=user_tier):
                 yield token
                 answer_collected += token
         except Exception as e:
