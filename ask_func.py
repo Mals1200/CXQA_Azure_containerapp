@@ -1,4 +1,7 @@
-# version 20b commented
+# version 20c 
+# Handles trailing commas, missing closing braces, and code block markers (like ```json ... ```) in the LLM's output.
+# If the LLM returns slightly malformed JSON, your backend will now repair and parse it, so "source_details" (with file/table names) will be added and shown in Teams.
+
 import os
 import io
 import re
@@ -736,7 +739,7 @@ Important guidelines:
 4. Use "bullet_list" for unordered lists
 5. Use "numbered_list" for ordered/numbered lists
 6. Use "code_block" for any code snippets
-7. Make sure the JSON is valid and properly escaped, pure and not wraped in quotations
+7. Make sure the JSON is valid and properly escaped
 8. Every section must have a "type" and appropriate content fields
 9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
 10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
@@ -815,11 +818,33 @@ Chat_history:
 #######################################################################################
 #                          POST-PROCESS SOURCE
 #######################################################################################
+def repair_json_str(s):
+    """
+    Attempts to repair common JSON issues:
+    - Removes trailing commas before closing brackets/braces
+    - Adds missing closing brace if needed
+    - Strips code block markers (```json ... ```)
+    - Strips leading/trailing whitespace
+    """
+    import re
+    s = s.strip()
+    # Remove code block markers
+    s = re.sub(r'^```json', '', s, flags=re.IGNORECASE).strip()
+    s = re.sub(r'^```', '', s).strip()
+    s = re.sub(r'```$', '', s).strip()
+    # Remove trailing commas before } or ]
+    s = re.sub(r',\s*([}\]])', r'\1', s)
+    # Add missing closing brace if it looks like a dict and is missing
+    if s.count('{') > s.count('}'):
+        s += '}'
+    return s
+
 def post_process_source(final_text, index_dict, python_dict):
     # Try to parse as JSON first
     try:
         import json
-        response_json = json.loads(final_text)
+        json_str = repair_json_str(final_text)
+        response_json = json.loads(json_str)
         
         # If it's our expected format with "content" and "source"
         if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
