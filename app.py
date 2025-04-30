@@ -1,4 +1,4 @@
-# Version 10
+# Version 10:
 import os
 import asyncio
 from threading import Lock
@@ -223,13 +223,14 @@ async def _bot_logic(turn_context: TurnContext):
                     # Use file_names and table_names if they exist
                     file_names = source_details.get("file_names", [])
                     table_names = source_details.get("table_names", [])
+                    file_links = source_details.get("file_links", [])
                     
                     # For Index sources, show file names if available
                     if source == "Index" and file_names:
                         # Ensure no duplicates and limit to 3
                         unique_files = []
-                        for fname in file_names:
-                            if fname not in unique_files:
+                        for i, fname in enumerate(file_names):
+                            if fname not in [f for f in unique_files]:
                                 unique_files.append(fname)
                         
                         if len(unique_files) > 3:
@@ -295,26 +296,21 @@ async def _bot_logic(turn_context: TurnContext):
                             "spacing": "Small",
                             "color": "Good"
                         })
-                        
-                    # Add files information if available (original code)
-                    if "files" in source_details and source_details["files"]:
-                        source_container["items"].append({
-                            "type": "TextBlock",
-                            "text": "**Content Details:**",
-                            "wrap": True,
-                            "weight": "Bolder",
-                            "spacing": "Medium"
-                        })
-                        source_container["items"].append({
-                            "type": "TextBlock",
-                            "text": source_details["files"],
-                            "wrap": True,
-                            "spacing": "Small",
-                            "fontType": "Monospace",
-                            "size": "Small"
-                        })
                     
-                    # Add code information if available (original code)
+                    # Add clickable links to files if available
+                    if "file_links" in source_details and source_details["file_links"]:
+                        file_links = source_details["file_links"]
+                        link_text = "**Referenced Files:**\n" + "\n".join(file_links)
+                        source_container["items"].append({
+                            "type": "TextBlock",
+                            "text": link_text,
+                            "wrap": True,
+                            "spacing": "Medium",
+                            "isSubtle": False,
+                            "weight": "Bolder"
+                        })
+                        
+                    # Add code information if available (keep this part)
                     if "code" in source_details and source_details["code"]:
                         source_container["items"].append({
                             "type": "TextBlock",
@@ -404,9 +400,30 @@ async def _bot_logic(turn_context: TurnContext):
             source_line = match.group(2).strip()
             appended_details = match.group(3) if match.group(3) else ""
         else:
-            main_answer = answer_text
+            # If we failed to find a Source: line with regex, try to identify source from text
+            lines = answer_text.split('\n')
+            source_found = False
+            main_answer_lines = []
             source_line = ""
             appended_details = ""
+            
+            for line in lines:
+                if line.startswith("Source:") and not source_found:
+                    source_line = line.strip()
+                    source_found = True
+                elif source_found and not appended_details:
+                    if line.strip().startswith("Referenced:") or line.strip().startswith("Calculated using:"):
+                        appended_details += line + "\n"
+                    else:
+                        appended_details += line + "\n"
+                elif not source_found:
+                    main_answer_lines.append(line)
+            
+            if source_found:
+                main_answer = "\n".join(main_answer_lines).strip()
+            else:
+                main_answer = answer_text
+                source_line = ""
 
         if source_line:
             # Create simple text blocks without complex formatting
@@ -439,94 +456,15 @@ async def _bot_logic(turn_context: TurnContext):
                     ]
                 }
                 
-                # Check if this is a combined source (Index & Python)
-                combined_source = "Index & Python" in source_line
-                
-                # Extract file names and table names if they appear in the text
-                referenced_pattern = r"Referenced\s+([^:\n]+)"
-                calculated_pattern = r"Calculated using\s+([^:\n]+)"
-                
-                referenced_match = re.search(referenced_pattern, main_answer + source_line, re.IGNORECASE)
-                calculated_match = re.search(calculated_pattern, main_answer + source_line, re.IGNORECASE)
-                
-                file_info = referenced_match.group(1).strip() if referenced_match else ""
-                table_info = calculated_match.group(1).strip() if calculated_match else ""
-                
-                # Add file/table attribution
-                if file_info:
+                # Add source details if it exists
+                if appended_details:
                     source_container["items"].append({
                         "type": "TextBlock",
-                        "text": f"Referenced: {file_info}",
+                        "text": appended_details.strip(),
                         "wrap": True,
-                        "weight": "Bolder",
-                        "spacing": "Small",
-                        "color": "Good"
+                        "spacing": "Small"
                     })
                     
-                if table_info:
-                    source_container["items"].append({
-                        "type": "TextBlock",
-                        "text": f"Calculated using: {table_info}",
-                        "wrap": True,
-                        "weight": "Bolder",
-                        "spacing": "Small",
-                        "color": "Good"
-                    })
-                
-                # Parse the appended details more carefully
-                if appended_details:
-                    # Extract content details and code separately if this is a combined source
-                    if combined_source and "---SOURCE_DETAILS---" in appended_details:
-                        content_pattern = r"Content Details:\s*(.*?)(?:Code:|$)"
-                        code_pattern = r"Code:\s*(.*?)$"
-                        
-                        content_match = re.search(content_pattern, appended_details, re.DOTALL)
-                        code_match = re.search(code_pattern, appended_details, re.DOTALL)
-                        
-                        if content_match:
-                            content_text = content_match.group(1).strip()
-                            source_container["items"].append({
-                                "type": "TextBlock",
-                                "text": "**Content Details:**",
-                                "wrap": True,
-                                "weight": "Bolder",
-                                "spacing": "Medium"
-                            })
-                            source_container["items"].append({
-                                "type": "TextBlock",
-                                "text": content_text,
-                                "wrap": True,
-                                "spacing": "Small",
-                                "fontType": "Monospace",
-                                "size": "Small"
-                            })
-                        
-                        if code_match:
-                            code_text = code_match.group(1).strip()
-                            source_container["items"].append({
-                                "type": "TextBlock",
-                                "text": "**Code:**",
-                                "wrap": True,
-                                "weight": "Bolder",
-                                "spacing": "Medium"
-                            })
-                            source_container["items"].append({
-                                "type": "TextBlock",
-                                "text": f"```\n{code_text}\n```",
-                                "wrap": True,
-                                "spacing": "Small",
-                                "fontType": "Monospace",
-                                "size": "Small"
-                            })
-                    else:
-                        # For older format or non-combined sources
-                        source_container["items"].append({
-                            "type": "TextBlock",
-                            "text": appended_details.strip(),
-                            "wrap": True,
-                            "spacing": "Small"
-                        })
-                
                 body_blocks.append(source_container)
                 
                 body_blocks.append({
