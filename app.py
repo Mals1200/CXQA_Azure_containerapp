@@ -1,4 +1,6 @@
-# Version 10:
+# Version 8  Takes Json format
+# Recieves the answer as JSON Format from ask_func.py version 19. now it can handle the json as the main display method on teams.
+
 import os
 import asyncio
 from threading import Lock
@@ -217,100 +219,25 @@ async def _bot_logic(turn_context: TurnContext):
                 if "source_details" in response_json:
                     source_details = response_json["source_details"]
                     
-                    # Format the source attribution based on type and available file names
-                    source_attribution = ""
-                    
-                    # Use file_names and table_names if they exist
-                    file_names = source_details.get("file_names", [])
-                    table_names = source_details.get("table_names", [])
-                    file_links = source_details.get("file_links", [])
-                    
-                    # For Index sources, show file names if available
-                    if source == "Index" and file_names:
-                        # Ensure no duplicates and limit to 3
-                        unique_files = []
-                        for i, fname in enumerate(file_names):
-                            if fname not in [f for f in unique_files]:
-                                unique_files.append(fname)
-                        
-                        if len(unique_files) > 3:
-                            unique_files = unique_files[:3]
-                            
-                        source_attribution = "Referenced " + " and ".join(unique_files)
-                    
-                    # For Python sources, show table names if available
-                    elif source == "Python" and table_names:
-                        # Keep file extensions in table names for clarity
-                        unique_tables = []
-                        for name in table_names:
-                            if name not in unique_tables:
-                                unique_tables.append(name)
-                        
-                        if len(unique_tables) > 3:
-                            unique_tables = unique_tables[:3]
-                            
-                        source_attribution = "Calculated using " + " and ".join(unique_tables)
-                    
-                    # For combined sources, show both if available
-                    elif source == "Index & Python":
-                        file_parts = []
-                        table_parts = []
-                        
-                        # Ensure no duplicates in files and limit to 3
-                        if file_names:
-                            for fname in file_names:
-                                if fname not in file_parts:
-                                    file_parts.append(fname)
-                            
-                            if len(file_parts) > 3:
-                                file_parts = file_parts[:3]
-                            
-                        # Ensure no duplicates in tables and limit to 3
-                        if table_names:
-                            for name in table_names:
-                                if name not in table_parts:
-                                    table_parts.append(name)
-                            
-                            if len(table_parts) > 3:
-                                table_parts = table_parts[:3]
-                        
-                        if file_parts and table_parts:
-                            source_attribution = f"Retrieved Using {' and '.join(table_parts)} and {' and '.join(file_parts)}"
-                        elif file_parts:
-                            source_attribution = "Referenced " + " and ".join(file_parts)
-                        elif table_parts:
-                            source_attribution = "Calculated using " + " and ".join(table_parts)
-                    
-                    # If source_attribution is still empty, fall back to the existing logic
-                    if not source_attribution:
-                        # We'll keep the default behavior by not adding a source attribution
-                        pass
-                        
-                    # Add the attribution as the first item after the source
-                    if source_attribution:
-                        source_container["items"].insert(1, {
-                            "type": "TextBlock",
-                            "text": source_attribution,
-                            "wrap": True,
-                            "weight": "Bolder",
-                            "spacing": "Small",
-                            "color": "Good"
-                        })
-                    
-                    # Add clickable links to files if available
-                    if "file_links" in source_details and source_details["file_links"]:
-                        file_links = source_details["file_links"]
-                        link_text = "**Referenced Files:**\n" + "\n".join(file_links)
+                    # Add files information if available
+                    if "files" in source_details and source_details["files"]:
                         source_container["items"].append({
                             "type": "TextBlock",
-                            "text": link_text,
+                            "text": "**Files:**",
                             "wrap": True,
-                            "spacing": "Medium",
-                            "isSubtle": False,
-                            "weight": "Bolder"
+                            "weight": "Bolder",
+                            "spacing": "Medium"
                         })
-                        
-                    # Add code information if available (keep this part)
+                        source_container["items"].append({
+                            "type": "TextBlock",
+                            "text": source_details["files"],
+                            "wrap": True,
+                            "spacing": "Small",
+                            "fontType": "Monospace",
+                            "size": "Small"
+                        })
+                    
+                    # Add code information if available
                     if "code" in source_details and source_details["code"]:
                         source_container["items"].append({
                             "type": "TextBlock",
@@ -400,30 +327,9 @@ async def _bot_logic(turn_context: TurnContext):
             source_line = match.group(2).strip()
             appended_details = match.group(3) if match.group(3) else ""
         else:
-            # If we failed to find a Source: line with regex, try to identify source from text
-            lines = answer_text.split('\n')
-            source_found = False
-            main_answer_lines = []
+            main_answer = answer_text
             source_line = ""
             appended_details = ""
-            
-            for line in lines:
-                if line.startswith("Source:") and not source_found:
-                    source_line = line.strip()
-                    source_found = True
-                elif source_found and not appended_details:
-                    if line.strip().startswith("Referenced:") or line.strip().startswith("Calculated using:"):
-                        appended_details += line + "\n"
-                    else:
-                        appended_details += line + "\n"
-                elif not source_found:
-                    main_answer_lines.append(line)
-            
-            if source_found:
-                main_answer = "\n".join(main_answer_lines).strip()
-            else:
-                main_answer = answer_text
-                source_line = ""
 
         if source_line:
             # Create simple text blocks without complex formatting
