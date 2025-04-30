@@ -1,5 +1,12 @@
-# Version 8  Takes Json format
-# Recieves the answer as JSON Format from ask_func.py version 19. now it can handle the json as the main display method on teams.
+# Version 8:
+# Remove code block markers (like ```json ... ```) from the LLM output before parsing as JSON.
+# Display file names and/or table names (from source_details) at the top of the source section in the Teams adaptive card, above the "Source: ..." line.
+# How it works:
+# If the JSON contains source_details.file_names or source_details.table_names, they are shown as a comma-separated list at the top of the source section.
+# The "Source: Index", "Source: Python", or "Source: Index & Python" line is always shown below the file/table names.
+# If the LLM output is wrapped in code block markers, they are stripped before parsing.
+# No other logic is changed.
+# This ensures your users always see which files/tables were referenced, in a clear and prominent way.
 
 import os
 import asyncio
@@ -132,21 +139,25 @@ async def _bot_logic(turn_context: TurnContext):
 
         # Try to parse the response as JSON first
         try:
-            response_json = json.loads(answer_text)
-            
+            # Remove code block markers if present
+            cleaned_answer_text = answer_text.strip()
+            if cleaned_answer_text.startswith('```json'):
+                cleaned_answer_text = cleaned_answer_text[7:].strip()
+            if cleaned_answer_text.startswith('```'):
+                cleaned_answer_text = cleaned_answer_text[3:].strip()
+            if cleaned_answer_text.endswith('```'):
+                cleaned_answer_text = cleaned_answer_text[:-3].strip()
+            response_json = json.loads(cleaned_answer_text)
             # Check if this is our expected JSON format with content and source
             if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
                 # We have a structured JSON response!
                 content_items = response_json["content"]
                 source = response_json["source"]
-                
                 # Build the adaptive card body
                 body_blocks = []
-                
                 # Process each content item based on its type
                 for item in content_items:
                     item_type = item.get("type", "")
-                    
                     if item_type == "heading":
                         body_blocks.append({
                             "type": "TextBlock",
@@ -156,7 +167,6 @@ async def _bot_logic(turn_context: TurnContext):
                             "size": "Large",
                             "spacing": "Medium"
                         })
-                    
                     elif item_type == "paragraph":
                         body_blocks.append({
                             "type": "TextBlock",
@@ -164,7 +174,6 @@ async def _bot_logic(turn_context: TurnContext):
                             "wrap": True,
                             "spacing": "Small"
                         })
-                    
                     elif item_type == "bullet_list":
                         items = item.get("items", [])
                         for list_item in items:
@@ -174,7 +183,6 @@ async def _bot_logic(turn_context: TurnContext):
                                 "wrap": True,
                                 "spacing": "Small"
                             })
-                    
                     elif item_type == "numbered_list":
                         items = item.get("items", [])
                         for i, list_item in enumerate(items, 1):
@@ -184,7 +192,6 @@ async def _bot_logic(turn_context: TurnContext):
                                 "wrap": True,
                                 "spacing": "Small"
                             })
-                    
                     elif item_type == "code_block":
                         body_blocks.append({
                             "type": "TextBlock",
@@ -193,7 +200,6 @@ async def _bot_logic(turn_context: TurnContext):
                             "fontType": "Monospace",
                             "spacing": "Medium"
                         })
-                
                 # Create the source section
                 source_container = {
                     "type": "Container",
@@ -203,23 +209,28 @@ async def _bot_logic(turn_context: TurnContext):
                     "bleed": True,
                     "maxHeight": "500px",
                     "isScrollable": True, 
-                    "items": [
-                        {
-                            "type": "TextBlock",
-                            "text": f"Source: {source}",
-                            "wrap": True,
-                            "weight": "Bolder",
-                            "color": "Accent",
-                            "spacing": "Medium",
-                        }
-                    ]
+                    "items": []
                 }
-                
-                # Add source details if they exist
+                # Add file_names/table_names on top if available
                 if "source_details" in response_json:
                     source_details = response_json["source_details"]
-                    
-                    # Add files information if available
+                    file_names = source_details.get("file_names", [])
+                    table_names = source_details.get("table_names", [])
+                    display_names = []
+                    if file_names:
+                        display_names.extend(file_names)
+                    if table_names:
+                        display_names.extend(table_names)
+                    if display_names:
+                        source_container["items"].append({
+                            "type": "TextBlock",
+                            "text": "Files: " + ", ".join(display_names),
+                            "wrap": True,
+                            "weight": "Bolder",
+                            "color": "Good",
+                            "spacing": "Medium"
+                        })
+                    # Add files/code blocks as before
                     if "files" in source_details and source_details["files"]:
                         source_container["items"].append({
                             "type": "TextBlock",
@@ -236,8 +247,6 @@ async def _bot_logic(turn_context: TurnContext):
                             "fontType": "Monospace",
                             "size": "Small"
                         })
-                    
-                    # Add code information if available
                     if "code" in source_details and source_details["code"]:
                         source_container["items"].append({
                             "type": "TextBlock",
@@ -254,9 +263,16 @@ async def _bot_logic(turn_context: TurnContext):
                             "fontType": "Monospace",
                             "size": "Small"
                         })
-                
+                # Always add the source line at the bottom of the container
+                source_container["items"].append({
+                    "type": "TextBlock",
+                    "text": f"Source: {source}",
+                    "wrap": True,
+                    "weight": "Bolder",
+                    "color": "Accent",
+                    "spacing": "Medium",
+                })
                 body_blocks.append(source_container)
-                
                 # Add the show/hide source buttons
                 body_blocks.append({
                     "type": "ColumnSet",
@@ -296,7 +312,6 @@ async def _bot_logic(turn_context: TurnContext):
                         }
                     ]
                 })
-                
                 # Create and send the adaptive card
                 adaptive_card = {
                     "type": "AdaptiveCard",
@@ -304,7 +319,6 @@ async def _bot_logic(turn_context: TurnContext):
                     "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                     "version": "1.5"
                 }
-                
                 message = Activity(
                     type="message",
                     attachments=[{
@@ -313,7 +327,6 @@ async def _bot_logic(turn_context: TurnContext):
                     }]
                 )
                 await turn_context.send_activity(message)
-                
                 # Successfully processed JSON, so return early
                 return
                 
