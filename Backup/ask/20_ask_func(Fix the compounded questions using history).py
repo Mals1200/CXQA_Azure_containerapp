@@ -1,4 +1,19 @@
-# Version 19b (attempt to fix the file name):
+# version 20:
+ # ___________(Problem)___________
+ # Previously, when asked a compunded question with chat history present, the Python path (Tool2) can use the history to imbed it to the code, thus resulting into:
+ #  1) Wrong Source. "Source: Python" instead of "Source: Index & Python".
+ #  2) Wrong answers, the agent sees different outputs,
+ #  3) Increased Token consumption, using more words to process.
+ # ___________(Fix)___________
+ # Tool 2 (Python) Prompt:
+ #   The LLM is now explicitly instructed: "8. Do not use Chat_history embed Information or Answers in the code. "
+ # Robust Post-Processing: 
+ #   Now checks if the there was relevance in both tools, Prints "Index 7 Python" regardless where the answer was retrieved from
+ # 
+ # This gives you both a strong prompt and a foolproof, future-proof guarantee of correct source attribution.
+ #
+ # Other changes:
+ #   - Made tool_2_code_run see recent history instead of full. to reduce token consumption.
 
 import os
 import io
