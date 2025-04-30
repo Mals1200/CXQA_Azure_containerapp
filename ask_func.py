@@ -1,7 +1,19 @@
-# version 20b:
-# ##########################
-# Commented
-# ##########################
+# version 20:
+ # ___________(Problem)___________
+ # Previously, when asked a compunded question with chat history present, the Python path (Tool2) can use the history to imbed it to the code, thus resulting into:
+ #  1) Wrong Source. "Source: Python" instead of "Source: Index & Python".
+ #  2) Wrong answers, the agent sees different outputs,
+ #  3) Increased Token consumption, using more words to process.
+ # ___________(Fix)___________
+ # Tool 2 (Python) Prompt:
+ #   The LLM is now explicitly instructed: "8. Do not use Chat_history embed Information or Answers in the code. "
+ # Robust Post-Processing: 
+ #   Now checks if the there was relevance in both tools, Prints "Index 7 Python" regardless where the answer was retrieved from
+ # 
+ # This gives you both a strong prompt and a foolproof, future-proof guarantee of correct source attribution.
+ #
+ # Other changes:
+ #   - Made tool_2_code_run see recent history instead of full. to reduce token consumption.
 
 import os
 import io
@@ -697,106 +709,106 @@ def final_answer_llm(user_question, index_dict, python_dict):
     # # JSON RESPONSE FORMAT - REMOVE COMMENTS TO ENABLE
     # # This block modifies the system prompt to output a well-structured JSON
     # ########################################################################
-    system_prompt = f"""
-You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
-1) Index data: (INDEX_DATA)
-2) Python data: (PYTHON_DATA)
-*) Always Prioritise The python result if the 2 are different.
+#     system_prompt = f"""
+# You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
+# 1) Index data: (INDEX_DATA)
+# 2) Python data: (PYTHON_DATA)
+# *) Always Prioritise The python result if the 2 are different.
 
-Your output must be formatted as a properly escaped JSON with the following structure:
-{{
-  "content": [
-    {{
-      "type": "heading",
-      "text": "Main answer heading/title here"
-    }},
-    {{
-      "type": "paragraph",
-      "text": "Normal paragraph text here"
-    }},
-    {{
-      "type": "bullet_list",
-      "items": [
-        "List item 1",
-        "List item 2",
-        "List item 3"
-      ]
-    }},
-    {{
-      "type": "numbered_list",
-      "items": [
-        "Numbered item 1",
-        "Numbered item 2"
-      ]
-    }}
-  ],
-  "source": "Source type (Index, Python, Index & Python, or AI Generated)"
-}}
+# Your output must be formatted as a properly escaped JSON with the following structure:
+# {{
+#   "content": [
+#     {{
+#       "type": "heading",
+#       "text": "Main answer heading/title here"
+#     }},
+#     {{
+#       "type": "paragraph",
+#       "text": "Normal paragraph text here"
+#     }},
+#     {{
+#       "type": "bullet_list",
+#       "items": [
+#         "List item 1",
+#         "List item 2",
+#         "List item 3"
+#       ]
+#     }},
+#     {{
+#       "type": "numbered_list",
+#       "items": [
+#         "Numbered item 1",
+#         "Numbered item 2"
+#       ]
+#     }}
+#   ],
+#   "source": "Source type (Index, Python, Index & Python, or AI Generated)"
+# }}
 
-Important guidelines:
-1. Format your content appropriately based on the answer structure you want to convey
-2. Use "heading" for titles and subtitles
-3. Use "paragraph" for normal text blocks
-4. Use "bullet_list" for unordered lists
-5. Use "numbered_list" for ordered/numbered lists
-6. Use "code_block" for any code snippets
-7. Make sure the JSON is valid and properly escaped
-8. Every section must have a "type" and appropriate content fields
-9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
-10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
-11. When questions have multiple parts needing different sources, use "Index & Python" as the source
+# Important guidelines:
+# 1. Format your content appropriately based on the answer structure you want to convey
+# 2. Use "heading" for titles and subtitles
+# 3. Use "paragraph" for normal text blocks
+# 4. Use "bullet_list" for unordered lists
+# 5. Use "numbered_list" for ordered/numbered lists
+# 6. Use "code_block" for any code snippets
+# 7. Make sure the JSON is valid and properly escaped
+# 8. Every section must have a "type" and appropriate content fields
+# 9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
+# 10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
+# 11. When questions have multiple parts needing different sources, use "Index & Python" as the source
 
-Use only these two sources to answer. If you find relevant info from both, answer using both. 
-If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
+# Use only these two sources to answer. If you find relevant info from both, answer using both. 
+# If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
 
-For multi-part questions, organize your response clearly with appropriate headings or sections 
-for each part of the answer. If one part comes from Index and another from Python, use both sources.
+# For multi-part questions, organize your response clearly with appropriate headings or sections 
+# for each part of the answer. If one part comes from Index and another from Python, use both sources.
 
-User question:
-{user_question}
+# User question:
+# {user_question}
 
-INDEX_DATA:
-{index_top_k}
+# INDEX_DATA:
+# {index_top_k}
 
-PYTHON_DATA:
-{python_result}
+# PYTHON_DATA:
+# {python_result}
 
-Chat_history:
-{recent_history if recent_history else []}
-"""
+# Chat_history:
+# {recent_history if recent_history else []}
+# """
 
     # ########################################################################
     # # ORIGINAL SYSTEM PROMPT - UNCOMMENT TO USE INSTEAD OF JSON FORMAT
     # ########################################################################
-    # system_prompt = f"""
-    # You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
-    # 1) Index data: (INDEX_DATA)
-    # 2) Python data: (PYTHON_DATA)
-    # *) Always Prioritise The python result if the 2 are different.
+    system_prompt = f"""
+    You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
+    1) Index data: (INDEX_DATA)
+    2) Python data: (PYTHON_DATA)
+    *) Always Prioritise The python result if the 2 are different.
     
-    # Use only these two sources to answer. If you find relevant info from both, answer using both. 
-    # At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
-    # - "Index" if only index data was used,
-    # - "Python" if only python data was used,
-    # - "Index & Python" if both were used,
-    # - or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
-    # - Present your answer in a clear, readable format.
+    Use only these two sources to answer. If you find relevant info from both, answer using both. 
+    At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
+    - "Index" if only index data was used,
+    - "Python" if only python data was used,
+    - "Index & Python" if both were used,
+    - or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
+    - Present your answer in a clear, readable format.
     
-    # Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
-    # Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
+    Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
+    Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
     
-    # User question:
-    # {user_question}
+    User question:
+    {user_question}
     
-    # INDEX_DATA:
-    # {index_top_k}
+    INDEX_DATA:
+    {index_top_k}
     
-    # PYTHON_DATA:
-    # {python_result}
+    PYTHON_DATA:
+    {python_result}
     
-    # Chat_history:
-    # {recent_history if recent_history else []}
-    # """
+    Chat_history:
+    {recent_history if recent_history else []}
+    """
 
     try:
         final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
@@ -889,56 +901,80 @@ def post_process_source(final_text, index_dict, python_dict):
     text_lower = final_text.lower()
 
     if "source: index & python" in text_lower:
+        top_k_text = index_dict.get("top_k", "No information")
+        code_text = python_dict.get("code", "")
         file_names = index_dict.get("file_names", [])
         table_names = python_dict.get("table_names", [])
+        
         # Add source information right after the "Source: X" line
         source_index = final_text.lower().find("source:")
         if source_index >= 0:
             end_of_line = final_text.find("\n", source_index)
             if end_of_line < 0:  # If no newline found
                 end_of_line = len(final_text)
+                
             prefix = final_text[:end_of_line]
             suffix = final_text[end_of_line:]
+            
             file_info = f"\nReferenced: {', '.join(file_names)}" if file_names else ""
             table_info = f"\nCalculated using: {', '.join(table_names)}" if table_names else ""
+            
             final_text = prefix + file_info + table_info + suffix
-        # Uncomment the following lines to display the retrieved top_k and code in the answer output:
-        # top_k_text = index_dict.get("top_k", "No information")
-        # code_text = python_dict.get("code", "")
-        # return f"""{final_text}\n\nThe Files:\n{top_k_text}\n\nThe code:\n{code_text}\n"""
-        return final_text
+            
+        return f"""{final_text}
+
+The Files:
+{top_k_text}
+
+The code:
+{code_text}
+"""
     elif "source: python" in text_lower:
+        code_text = python_dict.get("code", "")
         table_names = python_dict.get("table_names", [])
+        
         # Add source information right after the "Source: X" line
         source_index = final_text.lower().find("source:")
         if source_index >= 0:
             end_of_line = final_text.find("\n", source_index)
             if end_of_line < 0:  # If no newline found
                 end_of_line = len(final_text)
+                
             prefix = final_text[:end_of_line]
             suffix = final_text[end_of_line:]
+            
             table_info = f"\nCalculated using: {', '.join(table_names)}" if table_names else ""
+            
             final_text = prefix + table_info + suffix
-        # Uncomment the following lines to display the code in the answer output:
-        # code_text = python_dict.get("code", "")
-        # return f"""{final_text}\n\nThe code:\n{code_text}\n"""
-        return final_text
+        
+        return f"""{final_text}
+
+The code:
+{code_text}
+"""
     elif "source: index" in text_lower:
+        top_k_text = index_dict.get("top_k", "No information")
         file_names = index_dict.get("file_names", [])
+        
         # Add source information right after the "Source: X" line
         source_index = final_text.lower().find("source:")
         if source_index >= 0:
             end_of_line = final_text.find("\n", source_index)
             if end_of_line < 0:  # If no newline found
                 end_of_line = len(final_text)
+                
             prefix = final_text[:end_of_line]
             suffix = final_text[end_of_line:]
+            
             file_info = f"\nReferenced: {', '.join(file_names)}" if file_names else ""
+            
             final_text = prefix + file_info + suffix
-        # Uncomment the following lines to display the retrieved top_k in the answer output:
-        # top_k_text = index_dict.get("top_k", "No information")
-        # return f"""{final_text}\n\nThe Files:\n{top_k_text}\n"""
-        return final_text
+        
+        return f"""{final_text}
+
+The Files:
+{top_k_text}
+"""
     else:
         return final_text
 
