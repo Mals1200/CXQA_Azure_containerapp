@@ -39,27 +39,38 @@ import time
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
 #######################################################################################
+#######################################################################################
+#                               GLOBAL CONFIG / CONSTANTS
+#######################################################################################
 CONFIG = {
-    "LLM_ENDPOINT": (
-        "https://cxqaazureaihub2358016269.openai.azure.com/"
-        "openai/deployments/gpt-4o-3/chat/completions?api-version=2025-01-01-preview"
-    ),
-    "LLM_API_KEY": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor",
+    # ── MAIN, high-capacity model (Tool-1 Index, Tool-2 Python, Tool-3 Fallback) ──
+    "LLM_ENDPOINT"     : "https://cxqaazureaihub2358016269.openai.azure.com/"
+                         "openai/deployments/gpt-4o-3/chat/completions?api-version=2025-01-01-preview",
+
+    # same key used for both deployments
+    "LLM_API_KEY"      : "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor",
+
+    # ── AUXILIARY model (classifiers, splitters, etc.) ────────────────────────────
+    "LLM_ENDPOINT_AUX" : "https://cxqaazureaihub2358016269.openai.azure.com/"
+                         "openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview",
+
+    # (unchanged settings below) ───────────────────────────────────────────────────
     "SEARCH_SERVICE_NAME": "cxqa-azureai-search",
-    "SEARCH_ENDPOINT": "https://cxqa-azureai-search.search.windows.net",
-    "ADMIN_API_KEY": "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv",
-    "INDEX_NAME": "vector-1741865904949",
+    "SEARCH_ENDPOINT"    : "https://cxqa-azureai-search.search.windows.net",
+    "ADMIN_API_KEY"      : "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv",
+    "INDEX_NAME"         : "vector-1741865904949",
     "SEMANTIC_CONFIG_NAME": "vector-1741865904949-semantic-configuration",
-    "CONTENT_FIELD": "chunk",
-    "ACCOUNT_URL": "https://cxqaazureaihub8779474245.blob.core.windows.net",
-    "SAS_TOKEN": (
+    "CONTENT_FIELD"      : "chunk",
+    "ACCOUNT_URL"        : "https://cxqaazureaihub8779474245.blob.core.windows.net",
+    "SAS_TOKEN"          : (
         "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
         "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
         "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
     ),
-    "CONTAINER_NAME": "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore",
+    "CONTAINER_NAME"    : "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore",
     "TARGET_FOLDER_PATH": "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
 }
+
 
 # Global objects with better initialization
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
@@ -288,6 +299,55 @@ def call_llm(system_prompt, user_prompt, max_tokens=500, temperature=0.0):
         return err_msg
 
 #######################################################################################
+#                                 auxiliary caller
+#######################################################################################
+def call_llm_aux(system_prompt, user_prompt, max_tokens=300, temperature=0.0):
+    """
+    Lightweight LLM caller that targets the GPT-4o auxiliary deployment.
+    Used for classifiers, question splitters, etc. — NOT for Tool-1/2/3.
+    """
+    import requests, time, logging, json
+
+    headers = {
+        "Content-Type": "application/json",
+        "api-key": CONFIG["LLM_API_KEY"]
+    }
+    payload = {
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_prompt}
+        ],
+        "max_tokens": max_tokens,
+        "temperature": temperature
+    }
+
+    for attempt in range(3):
+        try:
+            r = requests.post(CONFIG["LLM_ENDPOINT_AUX"], headers=headers, json=payload, timeout=30)
+            if r.status_code == 429:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            r.raise_for_status()
+            data = r.json()
+            return (
+                data.get("choices", [{}])[0]
+                    .get("message", {})
+                    .get("content", "")
+                    .strip()
+                or "No content from LLM."
+            )
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 429:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            raise
+        except Exception as e:
+            logging.error(f"AUX LLM error: {e}")
+            return f"LLM Error: {e}"
+    return "LLM Error: exceeded aux model rate limit"
+
+
+#######################################################################################
 #                   COMBINED TEXT CLEANING (Point #2 Optimization)
 #######################################################################################
 def clean_text(text: str) -> str:
@@ -362,7 +422,7 @@ def split_question_into_subquestions(user_question, use_semantic_parsing=True):
             f"If not applicable, just return it as is."
         )
 
-        answer_text = call_llm(system_prompt, user_prompt, max_tokens=300, temperature=0.0)
+        answer_text = call_llm_aux(system_prompt, user_prompt, max_tokens=300, temperature=0.0)
         lines = [
             line.lstrip("•-0123456789). ").strip()
             for line in answer_text.split("\n")
@@ -404,7 +464,7 @@ def references_tabular_data(question, tables_text):
 
     Final instruction: Reply ONLY with 'YES' or 'NO'.
     """
-    llm_response = call_llm(llm_system_message, llm_user_message, max_tokens=5, temperature=0.0)
+    llm_response = call_llm_aux(llm_system_message, llm_user_message, max_tokens=5, temperature=0.0)
     clean_response = llm_response.strip().upper()
     return "YES" in clean_response
 
@@ -419,98 +479,101 @@ def is_text_relevant(question, snippet):
     )
     user_prompt = f"Question: {question}\nSnippet: {snippet}\nRelevant? Return 'YES' or 'NO' only."
 
-    content = call_llm(system_prompt, user_prompt, max_tokens=10, temperature=0.0)
+    content = call_llm_aux(system_prompt, user_prompt, max_tokens=10, temperature=0.0)
     return content.strip().upper().startswith("YES")
 
 #######################################################################################
-#                              TOOL #1 – Index Search  (FULL REPLACEMENT)
+#                              TOOL #1 - Index Search
 #######################################################################################
 @azure_retry()
 def tool_1_index_search(user_question, top_k=5, user_tier=1):
     """
-    Searches the Azure AI Search index for each sub-question, keeps only documents
-    the user is authorized to see, and returns the combined snippets plus up to
-    three unique file names.
+    Modified version: uses split_question_into_subquestions to handle multi-part queries.
+    Then filters out docs the user has no access to, before final top_k selection.
     """
-    SEARCH_SERVICE_NAME   = CONFIG["SEARCH_SERVICE_NAME"]
-    SEARCH_ENDPOINT       = CONFIG["SEARCH_ENDPOINT"]
-    ADMIN_API_KEY         = CONFIG["ADMIN_API_KEY"]
-    INDEX_NAME            = CONFIG["INDEX_NAME"]
-    SEMANTIC_CONFIG_NAME  = CONFIG["SEMANTIC_CONFIG_NAME"]
-    CONTENT_FIELD         = CONFIG["CONTENT_FIELD"]
+    SEARCH_SERVICE_NAME = CONFIG["SEARCH_SERVICE_NAME"]
+    SEARCH_ENDPOINT = CONFIG["SEARCH_ENDPOINT"]
+    ADMIN_API_KEY = CONFIG["ADMIN_API_KEY"]
+    INDEX_NAME = CONFIG["INDEX_NAME"]
+    SEMANTIC_CONFIG_NAME = CONFIG["SEMANTIC_CONFIG_NAME"]
+    CONTENT_FIELD = CONFIG["CONTENT_FIELD"]
 
-    subquestions = split_question_into_subquestions(
-        user_question, use_semantic_parsing=True
-    ) or [user_question]
+    subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
+    if not subquestions:
+        subquestions = [user_question]
 
     try:
         search_client = SearchClient(
-            endpoint   = SEARCH_ENDPOINT,
-            index_name = INDEX_NAME,
-            credential = AzureKeyCredential(ADMIN_API_KEY)
+            endpoint=SEARCH_ENDPOINT,
+            index_name=INDEX_NAME,
+            credential=AzureKeyCredential(ADMIN_API_KEY)
         )
 
         merged_docs = []
         for subq in subquestions:
             logging.info(f"🔍 Searching in Index for subquestion: {subq}")
             results = search_client.search(
-                search_text                 = subq,
-                query_type                  = "semantic",
-                semantic_configuration_name = SEMANTIC_CONFIG_NAME,
-                top                         = top_k,
-                select                      = ["title", CONTENT_FIELD],
-                include_total_count         = False
+                search_text=subq,
+                query_type="semantic",
+                semantic_configuration_name=SEMANTIC_CONFIG_NAME,
+                top=top_k,
+                select=["title", CONTENT_FIELD],
+                include_total_count=False
             )
+
             for r in results:
                 snippet = r.get(CONTENT_FIELD, "").strip()
-                title   = r.get("title", "").strip()
+                title = r.get("title", "").strip()
                 if snippet:
                     merged_docs.append({"title": title, "snippet": snippet})
 
         if not merged_docs:
             return {"top_k": "No information", "file_names": []}
 
-        # ---------------- Filter by access + relevance ----------------
+        # Filter by access + relevance
         relevant_docs = []
         for doc in merged_docs:
-            if user_tier >= get_file_tier(doc["title"]) and \
-               is_text_relevant(user_question, doc["snippet"]):
-                relevant_docs.append(doc)
+            snippet = doc["snippet"]
+            # get tier for doc["title"]
+            file_tier = get_file_tier(doc["title"])
+            if user_tier >= file_tier:
+                if is_text_relevant(user_question, snippet):
+                    relevant_docs.append(doc)
 
         if not relevant_docs:
             return {"top_k": "No information", "file_names": []}
 
-        # ---------------- Weight policies / reports higher ------------
+        # Weighted scoring
         for doc in relevant_docs:
             ttl = doc["title"].lower()
             score = 0
-            if "policy" in ttl: score += 10
-            if "report" in ttl: score += 5
-            if "sop"    in ttl: score += 3
+            if "policy" in ttl:
+                score += 10
+            if "report" in ttl:
+                score += 5
+            if "sop" in ttl:
+                score += 3
             doc["weight_score"] = score
 
-        relevant_docs.sort(key=lambda d: d["weight_score"], reverse=True)
-
-        # ---------------- Collect unique file names -------------------
+        docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
+        docs_top_k = docs_sorted[:top_k]
+        
+        # Extract file names and texts separately - ensure no duplicates
         file_names = []
-        for doc in relevant_docs:
-            t = doc["title"].strip()
-            if t and t not in file_names:
-                file_names.append(t)
-        file_names = file_names[:3]                     # keep only 3
+        for d in docs_top_k:
+            if d["title"] not in file_names:  # Avoid duplicates
+                file_names.append(d["title"])
+        
+        # Limit to max 3 file names
+        file_names = file_names[:3]
+        
+        re_ranked_texts = [d["snippet"] for d in docs_top_k]
+        combined = "\n\n---\n\n".join(re_ranked_texts)
 
-        # ---------------- Build combined answer text ------------------
-        combined_snippets = "\n\n---\n\n".join(
-            d["snippet"] for d in relevant_docs[:top_k]
-        )
-
-        return {
-            "top_k":      combined_snippets or "No information",
-            "file_names": file_names
-        }
+        return {"top_k": combined, "file_names": file_names}
 
     except Exception as e:
-        logging.error(f"⚠️ Error in tool_1_index_search: {e}")
+        logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}")
         return {"top_k": "No information", "file_names": []}
 
 #######################################################################################
@@ -537,17 +600,14 @@ def reference_table_data(code_str, user_tier):
     return None  # all good
 
 #######################################################################################
-#                              TOOL #2 – Code Run  (FULL REPLACEMENT)
+#                              TOOL #2 - Code Run
 #######################################################################################
 @azure_retry()
 def tool_2_code_run(user_question, user_tier=1, recent_history=None):
-    """
-    Generates Python code to answer tabular questions, executes it,
-    and returns the printed result plus up to three table names.
-    """
     if not references_tabular_data(user_question, TABLES):
         return {"result": "No information", "code": "", "table_names": []}
 
+    # Centralize fallback logic for chat history
     rhistory = recent_history if recent_history else []
 
     system_prompt = f"""
@@ -576,45 +636,88 @@ Chat_history:
 {rhistory}
 """
 
-    code_str = call_llm(system_prompt, user_question,
-                        max_tokens=1200, temperature=0.7)
+    code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.7)
 
-    if not code_str or code_str.strip() == "404":
+    if not code_str or code_str == "404":
         return {"result": "No information", "code": "", "table_names": []}
 
-    # ---------- Authorisation check ----------
+    # Check references vs. user tier
     access_issue = reference_table_data(code_str, user_tier)
     if access_issue:
+        # Return a short "no access" style message
         return {"result": access_issue, "code": "", "table_names": []}
-
-    # ---------- Extract table names ----------
+    
+    # Extract table names from the code - check both patterns
     table_names = []
-
-    # pattern 1: dataframes.get("filename")
-    table_names += re.findall(
-        r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)', code_str
-    )
-
-    # pattern 2: pd.read_excel/read_csv("filename")
-    table_names += re.findall(
-        r'pd\.read_(?:excel|csv)\(\s*[\'"]([^\'"]+)[\'"]\s*\)', code_str
-    )
-
-    # -------------- extra fallback ---------------
-    if not table_names:
-        extra = re.findall(r'[\w\-\s]+\.(?:xlsx|csv)', code_str, flags=re.I)
-        table_names.extend(extra)
-
-    # deduplicate & limit
-    table_names = list(dict.fromkeys(table_names))[:3]
+    
+    # Pattern 1: dataframes.get("filename")
+    pattern1 = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+    matches1 = pattern1.findall(code_str)
+    if matches1:
+        for match in matches1:
+            if match not in table_names:
+                table_names.append(match)
+    
+    # Pattern 2: pd.read_excel("filename") or pd.read_csv("filename")
+    pattern2 = re.compile(r'pd\.read_(?:excel|csv)\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+    matches2 = pattern2.findall(code_str)
+    if matches2:
+        for match in matches2:
+            if match not in table_names:
+                table_names.append(match)
+    
+    # Limit to max 3 table names, but keep file extensions
+    table_names = table_names[:3]
 
     execution_result = execute_generated_code(code_str)
+    return {"result": execution_result, "code": code_str, "table_names": table_names}
 
-    return {
-        "result":      execution_result,
-        "code":        code_str,
-        "table_names": table_names
-    }
+def execute_generated_code(code_str):
+    account_url = CONFIG["ACCOUNT_URL"]
+    sas_token = CONFIG["SAS_TOKEN"]
+    container_name = CONFIG["CONTAINER_NAME"]
+    target_folder_path = CONFIG["TARGET_FOLDER_PATH"]
+
+    try:
+        blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
+        container_client = blob_service_client.get_container_client(container_name)
+
+        dataframes = {}
+        blobs = container_client.list_blobs(name_starts_with=target_folder_path)
+
+        for blob in blobs:
+            file_name = blob.name.split('/')[-1]
+            blob_client = container_client.get_blob_client(blob.name)
+            blob_data = blob_client.download_blob().readall()
+
+            if file_name.endswith('.xlsx') or file_name.endswith('.xls'):
+                df = pd.read_excel(io.BytesIO(blob_data))
+            elif file_name.endswith('.csv'):
+                df = pd.read_csv(io.BytesIO(blob_data))
+            else:
+                continue
+
+            dataframes[file_name] = df
+
+        code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
+        code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
+
+        output_buffer = StringIO()
+        with contextlib.redirect_stdout(output_buffer):
+            local_vars = {
+                "dataframes": dataframes,
+                "pd": pd,
+                "datetime": datetime
+            }
+            exec(code_modified, {}, local_vars)
+
+        output = output_buffer.getvalue().strip()
+        return output if output else "Execution completed with no output."
+
+    except Exception as e:
+        err_msg = f"An error occurred during code execution: {e}"
+        print(err_msg)            
+        return err_msg
 
 #######################################################################################
 #                              TOOL #3 - LLM Fallback
@@ -786,65 +889,144 @@ Chat_history:
         yield fallback_text
 
 #######################################################################################
-#                   POST-PROCESS SOURCE  (FULL REPLACEMENT)
+#                          POST-PROCESS SOURCE  (adds file / table refs)
 #######################################################################################
 def post_process_source(final_text, index_dict, python_dict):
     """
-    Adds file/table names to both JSON (Teams) and plain-text (Notebook) answers
-    without disturbing existing formatting.
+    • If the answer is valid JSON, inject file/table info into BOTH
+        – response_json["source_details"]   (for your UI)
+        – response_json["content"]          (visible paragraphs)
+    • Otherwise fall back to the legacy plain-text logic.
     """
-    file_names  = index_dict.get("file_names",  [])
-    table_names = python_dict.get("table_names", [])
+    import json, re
 
-    # ---------------- JSON branch ----------------
+    # ---------- helper to append visible reference paragraphs ----------
+    def _inject_refs(resp, files=None, tables=None):
+        if not isinstance(resp.get("content"), list):
+            resp["content"] = []
+        if files:
+            resp["content"].append({
+                "type": "paragraph",
+                "text": f"Referenced: {', '.join(files)}"
+            })
+        if tables:
+            resp["content"].append({
+                "type": "paragraph",
+                "text": f"Calculated using: {', '.join(tables)}"
+            })
+
+    # ---------- strip code-fence wrappers before JSON parse ----------
+    cleaned = final_text.strip()
+    cleaned = re.sub(r"^```[a-zA-Z]*\s*", "", cleaned)   # remove ```json or ```
+    cleaned = re.sub(r"^'''[a-zA-Z]*\s*", "", cleaned)   # remove '''json or '''
+    cleaned = re.sub(r"\s*```$", "", cleaned)            # closing ```
+    cleaned = re.sub(r"\s*'''$", "", cleaned)            # closing '''
+
+    # ---------- attempt JSON branch ----------
     try:
-        import json
-        resp = json.loads(final_text)
+        response_json = json.loads(cleaned)
+    except Exception:
+        response_json = None
 
-        if isinstance(resp, dict) and "content" in resp and "source" in resp:
-            # Build a compact bullet list with all details
-            details = []
-            if file_names:
-                details.extend([f"Referenced file: {fn}"   for fn in file_names])
-            if table_names:
-                details.extend([f"Calculated from: {tn}"   for tn in table_names])
+    if (
+        isinstance(response_json, dict)
+        and "content" in response_json
+        and "source"  in response_json
+    ):
+        # ---- normalise / override "source" field ----
+        idx_has  = index_dict .get("top_k" , "").strip().lower() not in ["", "no information"]
+        py_has   = python_dict.get("result", "").strip().lower() not in ["", "no information"]
 
-            if details:
-                resp["content"].append({
-                    "type":  "bullet_list",
-                    "items": details
-                })
+        src = response_json["source"].strip()
+        if src == "Python" and idx_has:
+            src = "Index & Python"
+        elif src == "Index" and py_has:
+            src = "Index & Python"
+        response_json["source"] = src
 
-            # Optional raw metadata
-            resp["source_details"] = {
-                "file_names":  file_names,
-                "table_names": table_names
+        # ---- attach source_details & visible refs ----
+        if src == "Index & Python":
+            files  = index_dict .get("file_names", [])
+            tables = python_dict.get("table_names", [])
+            response_json["source_details"] = {
+                "files"       : index_dict.get("top_k", "No information"),
+                "code"        : python_dict.get("code", ""),
+                "file_names"  : files,
+                "table_names" : tables
             }
+            _inject_refs(response_json, files, tables)
 
-            return json.dumps(resp)
-    except Exception as e:
-        logging.warning(f"post_process_source JSON path failed: {e}")
+        elif src == "Index":
+            files = index_dict.get("file_names", [])
+            response_json["source_details"] = {
+                "files"      : index_dict.get("top_k", "No information"),
+                "file_names" : files
+            }
+            _inject_refs(response_json, files=files)
 
-    # ---------------- Plain-text branch ----------------
-    def _inject(extra_text):
-        idx = final_text.lower().find("source:")
-        if idx < 0:
-            return final_text + "\n" + extra_text
-        eol = final_text.find("\n", idx)
-        eol = len(final_text) if eol < 0 else eol
-        return final_text[:eol] + extra_text + final_text[eol:]
+        elif src == "Python":
+            # fallback extraction if table_names list is empty
+            if not python_dict.get("table_names"):
+                python_dict["table_names"] = re.findall(
+                    r'["\']([^"\']+\.(?:xlsx|xls|csv))["\']',
+                    python_dict.get("code", ""),
+                    flags=re.I
+                )
+            tables = python_dict.get("table_names", [])
+            response_json["source_details"] = {
+                "code"        : python_dict.get("code", ""),
+                "table_names" : tables
+            }
+            _inject_refs(response_json, tables=tables)
 
-    extras = []
-    if file_names:
-        extras.append("Referenced: "      + ", ".join(file_names))
-    if table_names:
-        extras.append("Calculated from: " + ", ".join(table_names))
+        # AI Generated or anything else → leave unchanged
+        return json.dumps(response_json)
 
-    if extras:
-        return _inject("\n" + "\n".join(extras))
+    # ---------- legacy plain-text branch (unchanged) ----------
+    text_lower = final_text.lower()
+
+    if "source: index & python" in text_lower:
+        top_k_text  = index_dict .get("top_k" , "No information")
+        code_text   = python_dict.get("code"  , "")
+        file_names  = index_dict .get("file_names" , [])
+        table_names = python_dict.get("table_names", [])
+
+        src_idx = final_text.lower().find("source:")
+        if src_idx >= 0:
+            eol = final_text.find("\n", src_idx)
+            if eol < 0: eol = len(final_text)
+            prefix, suffix = final_text[:eol], final_text[eol:]
+            file_info  = f"\nReferenced: {', '.join(file_names)}"  if file_names  else ""
+            table_info = f"\nCalculated using: {', '.join(table_names)}" if table_names else ""
+            final_text = prefix + file_info + table_info + suffix
+
+        return f"{final_text}\n\nThe Files:\n{top_k_text}\n\nThe code:\n{code_text}"
+
+    elif "source: python" in text_lower:
+        code_text   = python_dict.get("code", "")
+        table_names = python_dict.get("table_names", [])
+        src_idx = final_text.lower().find("source:")
+        if src_idx >= 0:
+            eol = final_text.find("\n", src_idx)
+            if eol < 0: eol = len(final_text)
+            prefix, suffix = final_text[:eol], final_text[eol:]
+            table_info = f"\nCalculated using: {', '.join(table_names)}" if table_names else ""
+            final_text = prefix + table_info + suffix
+        return f"{final_text}\n\nThe code:\n{code_text}"
+
+    elif "source: index" in text_lower:
+        top_k_text = index_dict.get("top_k", "No information")
+        file_names = index_dict.get("file_names", [])
+        src_idx = final_text.lower().find("source:")
+        if src_idx >= 0:
+            eol = final_text.find("\n", src_idx)
+            if eol < 0: eol = len(final_text)
+            prefix, suffix = final_text[:eol], final_text[eol:]
+            file_info = f"\nReferenced: {', '.join(file_names)}" if file_names else ""
+            final_text = prefix + file_info + suffix
+        return f"{final_text}\n\nThe Files:\n{top_k_text}"
 
     return final_text
-
 
 
 #######################################################################################
@@ -866,7 +1048,7 @@ def classify_topic(question, answer, recent_history):
     Return only one topic from [Policy, SOP, Report, Analysis, Exporting_file, Other].
     """
 
-    choice_text = call_llm(system_prompt, user_prompt, max_tokens=20, temperature=0)
+    choice_text = call_llm_aux(system_prompt, user_prompt, max_tokens=20, temperature=0)
     allowed_topics = ["Policy", "SOP", "Report", "Analysis", "Exporting_file", "Other"]
     return choice_text if choice_text in allowed_topics else "Other"
 
