@@ -1,19 +1,40 @@
-# version 20:
- # ___________(Problem)___________
- # Previously, when asked a compunded question with chat history present, the Python path (Tool2) can use the history to imbed it to the code, thus resulting into:
- #  1) Wrong Source. "Source: Python" instead of "Source: Index & Python".
- #  2) Wrong answers, the agent sees different outputs,
- #  3) Increased Token consumption, using more words to process.
- # ___________(Fix)___________
- # Tool 2 (Python) Prompt:
- #   The LLM is now explicitly instructed: "8. Do not use Chat_history embed Information or Answers in the code. "
- # Robust Post-Processing: 
- #   Now checks if the there was relevance in both tools, Prints "Index 7 Python" regardless where the answer was retrieved from
- # 
- # This gives you both a strong prompt and a foolproof, future-proof guarantee of correct source attribution.
- #
- # Other changes:
- #   - Made tool_2_code_run see recent history instead of full. to reduce token consumption.
+# version 21b
+# 1.  Teams-friendly bullet lists in *plain-text* responses
+#     -----------------------------------------------------
+#     •  Old behaviour:
+#          "Referenced: file1.pdf, file2.pdf"
+#          "Calculated using: table1.xlsx, table2.csv"
+#
+#     •  New behaviour (better line-breaks in Microsoft Teams):
+#          Referenced:
+#          - file1.pdf
+#          - file2.pdf
+#
+#          Calculated using:
+#          - table1.xlsx
+#          - table2.csv
+#
+#     •  Where changed:
+#          ─ post_process_source()  → three legacy branches:
+#              a) "source: index & python"
+#              b) "source: python"
+#              c) "source: index"
+#          ─ Each branch now builds *file_info* / *table_info* using:
+#                "\nReferenced:\n- "       + "\n- ".join(file_names)
+#                "\nCalculated using:\n- " + "\n- ".join(table_names)
+#
+# 2.  JSON path remains untouched
+#     -----------------------------------------------------
+#     •  The helper _inject_refs() already produced paragraph blocks.
+#       No modification was required there, except identical bullet-list
+#       formatting for consistency.
+#
+# 3.  No logic or variable names were altered elsewhere
+#     -----------------------------------------------------
+#     •  Only string-building lines were replaced; all surrounding control
+#       flow, error-handling, and logging remain identical to v20.
+###############################################################################
+
 
 import os
 import io
@@ -902,17 +923,25 @@ def post_process_source(final_text, index_dict, python_dict):
 
     # ---------- helper to append visible reference paragraphs ----------
     def _inject_refs(resp, files=None, tables=None):
+        """
+        Adds Teams-friendly bullet lists under 'Referenced:' and
+        'Calculated using:' paragraphs inside the JSON response.
+        """
         if not isinstance(resp.get("content"), list):
             resp["content"] = []
+    
         if files:
+            bullet_block = "Referenced:\n- " + "\n- ".join(files)
             resp["content"].append({
                 "type": "paragraph",
-                "text": f"Referenced: {', '.join(files)}"
+                "text": bullet_block
             })
+    
         if tables:
+            bullet_block = "Calculated using:\n- " + "\n- ".join(tables)
             resp["content"].append({
                 "type": "paragraph",
-                "text": f"Calculated using: {', '.join(tables)}"
+                "text": bullet_block
             })
 
     # ---------- strip code-fence wrappers before JSON parse ----------
@@ -996,8 +1025,8 @@ def post_process_source(final_text, index_dict, python_dict):
             eol = final_text.find("\n", src_idx)
             if eol < 0: eol = len(final_text)
             prefix, suffix = final_text[:eol], final_text[eol:]
-            file_info  = f"\nReferenced: {', '.join(file_names)}"  if file_names  else ""
-            table_info = f"\nCalculated using: {', '.join(table_names)}" if table_names else ""
+            file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
+            table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
             final_text = prefix + file_info + table_info + suffix
 
         return f"{final_text}\n\nThe Files:\n{top_k_text}\n\nThe code:\n{code_text}"
@@ -1010,7 +1039,7 @@ def post_process_source(final_text, index_dict, python_dict):
             eol = final_text.find("\n", src_idx)
             if eol < 0: eol = len(final_text)
             prefix, suffix = final_text[:eol], final_text[eol:]
-            table_info = f"\nCalculated using: {', '.join(table_names)}" if table_names else ""
+            table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
             final_text = prefix + table_info + suffix
         return f"{final_text}\n\nThe code:\n{code_text}"
 
@@ -1022,7 +1051,7 @@ def post_process_source(final_text, index_dict, python_dict):
             eol = final_text.find("\n", src_idx)
             if eol < 0: eol = len(final_text)
             prefix, suffix = final_text[:eol], final_text[eol:]
-            file_info = f"\nReferenced: {', '.join(file_names)}" if file_names else ""
+            file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
             final_text = prefix + file_info + suffix
         return f"{final_text}\n\nThe Files:\n{top_k_text}"
 
