@@ -459,24 +459,26 @@ def split_question_into_subquestions(user_question, use_semantic_parsing=True):
 #                 REFERENCES CHECK & RELEVANCE CHECK  (Points #3 + #1 synergy)
 #######################################################################################
 def references_tabular_data(question, tables_text):
+    """
+    Decide if the user’s question needs the tabular datasets.
+    Returns True / False.
+    """
     llm_system_message = (
-        "You are a strict YES/NO classifier. Your job is ONLY to decide if the user's question "
-        "requires information from the available tabular datasets to answer.\n"
-        "You must respond with EXACTLY one word: 'YES' or 'NO'.\n"
-        "Do NOT add explanations or uncertainty. Be strict and consistent."
+        "You are a strict YES/NO classifier. Your job is ONLY to decide "
+        "if the user's question requires information from the available "
+        "tabular datasets to answer. Respond with EXACTLY one word: YES or NO."
     )
+
+    # 💡  chat_history was the reason for false negatives – it’s gone.
     llm_user_message = f"""
     User Question:
     {question}
-
-    chat_history
-    {recent_history}
     
     Available Tables:
     {tables_text}
 
     Decision Rules:
-    1. Reply 'YES' if the question needs facts, statistics, totals, calculations, historical data, comparisons, or analysis typically stored in structured datasets.
+    1. Reply 'YES' if the question needs facts, statistics, totals, calculations, comparisons, or analysis typically stored in structured datasets.
     2. Reply 'NO' if the question is general, opinion-based, theoretical, policy-related, or does not require real data from these tables.
     3. Completely ignore the sample rows of the tables. Assume full datasets exist beyond the samples.
     4. Be STRICT: only reply 'NO' if you are CERTAIN the tables are not needed.
@@ -485,23 +487,10 @@ def references_tabular_data(question, tables_text):
 
     Final instruction: Reply ONLY with 'YES' or 'NO'.
     """
-    llm_response = call_llm_aux(llm_system_message, llm_user_message, max_tokens=5, temperature=0.0)
-    clean_response = llm_response.strip().upper()
-    return "YES" in clean_response
 
-def is_text_relevant(question, snippet):
-    if not snippet.strip():
-        return False
-
-    system_prompt = (
-        "You are a classifier. We have a user question and a snippet of text. "
-        "Decide if the snippet is truly relevant to answering the question. "
-        "Return ONLY 'YES' or 'NO'."
-    )
-    user_prompt = f"Question: {question}\nSnippet: {snippet}\nRelevant? Return 'YES' or 'NO' only."
-
-    content = call_llm_aux(system_prompt, user_prompt, max_tokens=10, temperature=0.0)
-    return content.strip().upper().startswith("YES")
+    ans = call_llm_aux(llm_system_message, llm_user_message,
+                       max_tokens=5, temperature=0)
+    return ans.strip().upper().startswith("YES")
 
 #######################################################################################
 #                              TOOL #1 - Index Search
@@ -1179,59 +1168,93 @@ def Log_Interaction(
 #######################################################################################
 #                         GREETING HANDLING + AGENT ANSWER
 #######################################################################################
-def agent_answer(user_question, user_tier=1, recent_history=None):
-    if not user_question.strip():
+def agent_answer(user_question, user_tier: int = 1, recent_history: list | None = None):
+    """
+    Orchestrates which tools to call (index search, python runner, or neither),
+    merges their outputs through the LLM, post-processes the answer, then
+    streams the final result back to the caller.
+
+    Key logic changes (May 2025 patch):
+      • The references_tabular_data() classifier no longer receives chat_history
+        noise (see its own patch).
+      • We now run the Python tool whenever EITHER:
+          ─ references_tabular_data() → YES
+          ─ OR the index search returns "No information".
+    """
+    # -------------------------------------------------------------------------
+    # Quick sanity check
+    # -------------------------------------------------------------------------
+    if not user_question or not user_question.strip():
         return
 
-    def is_entirely_greeting_or_punc(phrase):
+    # -------------------------------------------------------------------------
+    # 1) greet-only handling  (same logic as before)
+    # -------------------------------------------------------------------------
+    def _is_entirely_greeting_or_punc(phrase: str) -> bool:
         greet_words = {
-            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "Good morning", "goodevening", "good evening",
-            "assalam", "hayo", "hola", "salam", "alsalam", "alsalamualaikum", "alsalam", "salam", "al salam", "assalamualaikum",
-            "greetings", "howdy", "what's up", "yo", "sup", "namaste", "shalom", "bonjour", "ciao", "konichiwa",
-            "ni hao", "marhaba", "ahlan", "sawubona", "hallo", "salut", "hola amigo", "hey there", "good day"
+            "hello", "hi", "hey", "morning", "evening", "goodmorning",
+            "good morning", "good evening", "assalam", "hola", "salam",
+            "alsalamualaikum", "greetings", "howdy", "yo", "sup", "namaste",
+            "shalom", "bonjour", "ciao", "konichiwa", "ni hao", "marhaba",
+            "ahlan", "sawubona", "salut", "hey there", "good day"
         }
         tokens = re.findall(r"[A-Za-z]+", phrase.lower())
-        if not tokens:
-            return False
-        for t in tokens:
-            if t not in greet_words:
-                return False
-        return True
+        return bool(tokens) and all(tok in greet_words for tok in tokens)
 
-    user_question_stripped = user_question.strip()
-    if is_entirely_greeting_or_punc(user_question_stripped):
+    stripped_q = user_question.strip()
+    if _is_entirely_greeting_or_punc(stripped_q):
         if len(chat_history) < 4:
-            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+            yield ("Hello! I'm the CXQA AI Assistant. How can I help you today?\n"
+                   "- Type **restart chat** to reset the conversation.\n"
+                   "- Type **export …** to generate slides, charts or documents.")
         else:
-            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+            yield ("Hello again! What can I do for you?\n"
+                   "- **restart chat** resets the conversation.\n"
+                   "- **export …** generates slides, charts or docs.")
         return
 
-    # Check cache
-    cache_key = user_question_stripped.lower()
+    # -------------------------------------------------------------------------
+    # 2) cache check
+    # -------------------------------------------------------------------------
+    cache_key = stripped_q.lower()
     if cache_key in tool_cache:
         _, _, cached_answer = tool_cache[cache_key]
         yield cached_answer
         return
 
-    needs_tabular_data = references_tabular_data(user_question, TABLES)
-    index_dict = {"top_k": "No information"}
-    python_dict = {"result": "No information", "code": ""}
+    # -------------------------------------------------------------------------
+    # 3) decide which tools to run
+    # -------------------------------------------------------------------------
+    needs_tabular = references_tabular_data(user_question, TABLES)   # YES/NO
 
-    if needs_tabular_data:
-        python_dict = tool_2_code_run(user_question, user_tier=user_tier, recent_history=recent_history)
+    # Run index search first – it’s cheap/fast
+    index_dict = tool_1_index_search(user_question, top_k=5,
+                                     user_tier=user_tier)
 
-    index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
+    # Default (no python yet)
+    python_dict = {"result": "No information", "code": "", "table_names": []}
 
+    # Run Python if classifier said YES  **or**  index found nothing useful
+    if needs_tabular or index_dict["top_k"].strip().lower() == "no information":
+        python_dict = tool_2_code_run(user_question,
+                                      user_tier=user_tier,
+                                      recent_history=recent_history)
+
+    # -------------------------------------------------------------------------
+    # 4) merge answers via LLM
+    # -------------------------------------------------------------------------
     raw_answer = ""
     for token in final_answer_llm(user_question, index_dict, python_dict):
         raw_answer += token
 
-    # Now unify repeated text cleaning
+    # -------------------------------------------------------------------------
+    # 5) clean, post-process, cache & return
+    # -------------------------------------------------------------------------
     raw_answer = clean_text(raw_answer)
+    final_answer = post_process_source(raw_answer, index_dict, python_dict)
 
-    final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict)
-    tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
-    yield final_answer_with_source
+    tool_cache[cache_key] = (index_dict, python_dict, final_answer)
+    yield final_answer
 
 #######################################################################################
 #                            get user tier
