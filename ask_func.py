@@ -1,40 +1,4 @@
-# version 21b
-# 1.  Teams-friendly bullet lists in *plain-text* responses
-#     -----------------------------------------------------
-#     •  Old behaviour:
-#          "Referenced: file1.pdf, file2.pdf"
-#          "Calculated using: table1.xlsx, table2.csv"
-#
-#     •  New behaviour (better line-breaks in Microsoft Teams):
-#          Referenced:
-#          - file1.pdf
-#          - file2.pdf
-#
-#          Calculated using:
-#          - table1.xlsx
-#          - table2.csv
-#
-#     •  Where changed:
-#          ─ post_process_source()  → three legacy branches:
-#              a) "source: index & python"
-#              b) "source: python"
-#              c) "source: index"
-#          ─ Each branch now builds *file_info* / *table_info* using:
-#                "\nReferenced:\n- "       + "\n- ".join(file_names)
-#                "\nCalculated using:\n- " + "\n- ".join(table_names)
-#
-# 2.  JSON path remains untouched
-#     -----------------------------------------------------
-#     •  The helper _inject_refs() already produced paragraph blocks.
-#       No modification was required there, except identical bullet-list
-#       formatting for consistency.
-#
-# 3.  No logic or variable names were altered elsewhere
-#     -----------------------------------------------------
-#     •  Only string-building lines were replaced; all surrounding control
-#       flow, error-handling, and logging remain identical to v20.
-###############################################################################
-
+# version copound display on teams
 
 import os
 import io
@@ -924,25 +888,11 @@ def post_process_source(final_text, index_dict, python_dict):
     # ---------- helper to append visible reference paragraphs ----------
     def _inject_refs(resp, files=None, tables=None):
         """
-        Adds Teams-friendly bullet lists under 'Referenced:' and
+        (Disabled) Adds Teams-friendly bullet lists under 'Referenced:' and
         'Calculated using:' paragraphs inside the JSON response.
+        Now: No longer injects visible paragraphs
         """
-        if not isinstance(resp.get("content"), list):
-            resp["content"] = []
-    
-        if files:
-            bullet_block = "Referenced:\n- " + "\n- ".join(files)
-            resp["content"].append({
-                "type": "paragraph",
-                "text": bullet_block
-            })
-    
-        if tables:
-            bullet_block = "Calculated using:\n- " + "\n- ".join(tables)
-            resp["content"].append({
-                "type": "paragraph",
-                "text": bullet_block
-            })
+        pass  # No longer injects visible paragraphs
 
     # ---------- strip code-fence wrappers before JSON parse ----------
     cleaned = final_text.strip()
