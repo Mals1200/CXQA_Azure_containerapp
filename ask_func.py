@@ -1,21 +1,12 @@
-# version v21c  (Fixed the python path to answer questions with the chat history occupied)
-# ---------------------------------------------------------------------------
-# 1) Cleaner tabular-data classifier
-#    • Removed chat_history from the prompt ➜ fewer false "NO" decisions.
-#
-# 2) More robust Python-tool trigger
-#    • Run Python whenever:
-#        a) references_tabular_data() == YES
-#        b) OR index search returns "No information".
-#
-# 3) Teams-friendly bullet lists in plain-text mode
-#    • Legacy branches of post_process_source()
-#      now build:
-#          "\nReferenced:\n- " + "\n- ".join(file_names)
-#          "\nCalculated using:\n- " + "\n- ".join(table_names)
-#
-# 4) No changes to JSON path, RBAC, caching, or logging logic.
-# ─────────────────────────────────────────────────────────────────────────────
+# version v21c  (Fixed the COMPOUNDED QUESTION TO INCLUDE TITLE IN THE JSON)
+# =========================
+# VERSION CHANGE SUMMARY
+# =========================
+# - Added a post-processing step in post_process_source to guarantee the user's question is always present as the first heading (or paragraph) in the answer JSON, even if the LLM omits it.
+# - This ensures the question always appears in Teams and other UIs that consume the answer JSON.
+# - No other logic, robustness, or features were changed or removed.
+# - This is a safe, targeted improvement for user experience and answer consistency.
+# =========================
 
 import os
 import io
