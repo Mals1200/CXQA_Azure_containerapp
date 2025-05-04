@@ -1,6 +1,4 @@
-# version 21e:
-# changed the json to not produce a title unless the question is multi-part
-# =========================
+# version test top k and code removal and file name replacments
 
 import os
 import io
@@ -932,8 +930,6 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
             files  = index_dict .get("file_names", [])
             tables = python_dict.get("table_names", [])
             response_json["source_details"] = {
-                "files"       : index_dict.get("top_k", "No information"),
-                "code"        : python_dict.get("code", ""),
                 "file_names"  : files,
                 "table_names" : tables
             }
@@ -941,7 +937,6 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
         elif src == "Index":
             files = index_dict.get("file_names", [])
             response_json["source_details"] = {
-                "files"      : index_dict.get("top_k", "No information"),
                 "file_names" : files
             }
             _inject_refs(response_json, files=files)
@@ -954,7 +949,6 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
                 )
             tables = python_dict.get("table_names", [])
             response_json["source_details"] = {
-                "code"        : python_dict.get("code", ""),
                 "table_names" : tables
             }
             _inject_refs(response_json, tables=tables)
@@ -987,11 +981,8 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
     text_lower = final_text.lower()
 
     if "source: index & python" in text_lower:
-        top_k_text  = index_dict .get("top_k" , "No information")
-        code_text   = python_dict.get("code"  , "")
         file_names  = index_dict .get("file_names" , [])
         table_names = python_dict.get("table_names", [])
-
         src_idx = final_text.lower().find("source:")
         if src_idx >= 0:
             eol = final_text.find("\n", src_idx)
@@ -1000,11 +991,9 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
             file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
             table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
             final_text = prefix + file_info + table_info + suffix
-
-        return f"{final_text}\n\nThe Files:\n{top_k_text}\n\nThe code:\n{code_text}"
+        return final_text
 
     elif "source: python" in text_lower:
-        code_text   = python_dict.get("code", "")
         table_names = python_dict.get("table_names", [])
         src_idx = final_text.lower().find("source:")
         if src_idx >= 0:
@@ -1013,10 +1002,9 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
             prefix, suffix = final_text[:eol], final_text[eol:]
             table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
             final_text = prefix + table_info + suffix
-        return f"{final_text}\n\nThe code:\n{code_text}"
+        return final_text
 
     elif "source: index" in text_lower:
-        top_k_text = index_dict.get("top_k", "No information")
         file_names = index_dict.get("file_names", [])
         src_idx = final_text.lower().find("source:")
         if src_idx >= 0:
@@ -1025,7 +1013,7 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
             prefix, suffix = final_text[:eol], final_text[eol:]
             file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
             final_text = prefix + file_info + suffix
-        return f"{final_text}\n\nThe Files:\n{top_k_text}"
+        return final_text
 
     return final_text
 
