@@ -1,12 +1,4 @@
-# Version 8:
-# Remove code block markers (like ```json ... ```) from the LLM output before parsing as JSON.
-# Display file names and/or table names (from source_details) at the top of the source section in the Teams adaptive card, above the "Source: ..." line.
-# How it works:
-# If the JSON contains source_details.file_names or source_details.table_names, they are shown as a comma-separated list at the top of the source section.
-# The "Source: Index", "Source: Python", or "Source: Index & Python" line is always shown below the file/table names.
-# If the LLM output is wrapped in code block markers, they are stripped before parsing.
-# No other logic is changed.
-# This ensures your users always see which files/tables were referenced, in a clear and prominent way.
+# version compound Qs display on teams (attempt fix)
 
 import os
 import asyncio
@@ -147,6 +139,9 @@ async def _bot_logic(turn_context: TurnContext):
                 cleaned_answer_text = cleaned_answer_text[3:].strip()
             if cleaned_answer_text.endswith('```'):
                 cleaned_answer_text = cleaned_answer_text[:-3].strip()
+            # Fix: Replace real newlines with escaped newlines to allow JSON parsing
+            # This is necessary because the LLM may output real newlines inside string values, which is invalid in JSON
+            cleaned_answer_text = cleaned_answer_text.replace('\n', '\\n')
             response_json = json.loads(cleaned_answer_text)
             # Check if this is our expected JSON format with content and source
             if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
