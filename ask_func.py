@@ -794,7 +794,7 @@ Your output must be formatted as a properly escaped JSON with the following stru
 
 Important guidelines:
 1. Format your content appropriately based on the answer structure you want to convey
-2. Use "heading" for titles and subtitles not the question repeated
+2. Use "heading" for titles and subtitles
 3. Use "paragraph" for normal text blocks
 4. Use "bullet_list" for unordered lists
 5. Use "numbered_list" for ordered/numbered lists
