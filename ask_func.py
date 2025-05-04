@@ -1,4 +1,6 @@
-# test to remove topk and code
+# version 21e:
+# changed the json to not produce a title unless the question is multi-part
+# =========================
 
 import os
 import io
@@ -762,7 +764,7 @@ Your output must be formatted as a properly escaped JSON with the following stru
   "content": [
     {{
       "type": "heading",
-      "text": "Main answer heading/title here"
+      "text": "If needed Main answer heading/title here (Not the user_question repeated)"
     }},
     {{
       "type": "paragraph",
@@ -789,7 +791,7 @@ Your output must be formatted as a properly escaped JSON with the following stru
 
 Important guidelines:
 1. Format your content appropriately based on the answer structure you want to convey
-2. Use "heading" for titles and subtitles
+2. Use "heading" for titles and subtitles not user question
 3. Use "paragraph" for normal text blocks
 4. Use "bullet_list" for unordered lists
 5. Use "numbered_list" for ordered/numbered lists
@@ -799,7 +801,7 @@ Important guidelines:
 9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
 10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
 11. When questions have multiple parts needing different sources, use "Index & Python" as the source
-12. **Always include the user's question as the first heading or paragraph in the content array.**
+12. **Unless its a (multi-part Question) Never include the user's question as the first heading or paragraph in the content array.**
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
@@ -876,11 +878,29 @@ Chat_history:
 #######################################################################################
 def post_process_source(final_text, index_dict, python_dict, user_question=None):
     """
-    • If the answer is valid JSON, inject only file/table NAMES (not content or code) into response_json["source_details"] for your UI.
-    • Do NOT inject the actual top_k (index snippets) or code (Python code) into the answer.
+    • If the answer is valid JSON, inject file/table info into BOTH
+        – response_json["source_details"]   (for your UI)
+        – response_json["content"]          (visible paragraphs)
+    • Otherwise fall back to the legacy plain-text logic.
     • Optionally, always ensure the user's question is present as the first heading or paragraph.
     """
     import json, re
+
+    def _inject_refs(resp, files=None, tables=None):
+        if not isinstance(resp.get("content"), list):
+            resp["content"] = []
+        if files:
+            bullet_block = "Referenced:\n- " + "\n- ".join(files)
+            resp["content"].append({
+                "type": "paragraph",
+                "text": bullet_block
+            })
+        if tables:
+            bullet_block = "Calculated using:\n- " + "\n- ".join(tables)
+            resp["content"].append({
+                "type": "paragraph",
+                "text": bullet_block
+            })
 
     # ---------- strip code-fence wrappers before JSON parse ----------
     cleaned = final_text.strip()
@@ -912,14 +932,19 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
             files  = index_dict .get("file_names", [])
             tables = python_dict.get("table_names", [])
             response_json["source_details"] = {
+                "files"       : index_dict.get("top_k", "No information"),
+                "code"        : python_dict.get("code", ""),
                 "file_names"  : files,
                 "table_names" : tables
             }
+            _inject_refs(response_json, files, tables)
         elif src == "Index":
             files = index_dict.get("file_names", [])
             response_json["source_details"] = {
+                "files"      : index_dict.get("top_k", "No information"),
                 "file_names" : files
             }
+            _inject_refs(response_json, files=files)
         elif src == "Python":
             if not python_dict.get("table_names"):
                 python_dict["table_names"] = re.findall(
@@ -929,8 +954,10 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
                 )
             tables = python_dict.get("table_names", [])
             response_json["source_details"] = {
+                "code"        : python_dict.get("code", ""),
                 "table_names" : tables
             }
+            _inject_refs(response_json, tables=tables)
         # --- Ensure the user's question is present as first heading or paragraph ---
         if user_question:
             import difflib
@@ -956,12 +983,15 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
                 response_json["content"].insert(0, {"type": "heading", "text": user_question})
         return json.dumps(response_json)
 
-    # ---------- legacy plain-text branch (unchanged except for removal of top_k/code) ----------
+    # ---------- legacy plain-text branch (unchanged) ----------
     text_lower = final_text.lower()
 
     if "source: index & python" in text_lower:
+        top_k_text  = index_dict .get("top_k" , "No information")
+        code_text   = python_dict.get("code"  , "")
         file_names  = index_dict .get("file_names" , [])
         table_names = python_dict.get("table_names", [])
+
         src_idx = final_text.lower().find("source:")
         if src_idx >= 0:
             eol = final_text.find("\n", src_idx)
@@ -970,9 +1000,11 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
             file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
             table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
             final_text = prefix + file_info + table_info + suffix
-        return final_text
+
+        return f"{final_text}\n\nThe Files:\n{top_k_text}\n\nThe code:\n{code_text}"
 
     elif "source: python" in text_lower:
+        code_text   = python_dict.get("code", "")
         table_names = python_dict.get("table_names", [])
         src_idx = final_text.lower().find("source:")
         if src_idx >= 0:
@@ -981,9 +1013,10 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
             prefix, suffix = final_text[:eol], final_text[eol:]
             table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
             final_text = prefix + table_info + suffix
-        return final_text
+        return f"{final_text}\n\nThe code:\n{code_text}"
 
     elif "source: index" in text_lower:
+        top_k_text = index_dict.get("top_k", "No information")
         file_names = index_dict.get("file_names", [])
         src_idx = final_text.lower().find("source:")
         if src_idx >= 0:
@@ -992,7 +1025,7 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
             prefix, suffix = final_text[:eol], final_text[eol:]
             file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
             final_text = prefix + file_info + suffix
-        return final_text
+        return f"{final_text}\n\nThe Files:\n{top_k_text}"
 
     return final_text
 
