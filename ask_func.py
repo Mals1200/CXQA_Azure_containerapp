@@ -1,4 +1,39 @@
-# version 21c: (Attempt)
+# version 21b
+# 1.  Teams-friendly bullet lists in *plain-text* responses
+#     -----------------------------------------------------
+#     •  Old behaviour:
+#          "Referenced: file1.pdf, file2.pdf"
+#          "Calculated using: table1.xlsx, table2.csv"
+#
+#     •  New behaviour (better line-breaks in Microsoft Teams):
+#          Referenced:
+#          - file1.pdf
+#          - file2.pdf
+#
+#          Calculated using:
+#          - table1.xlsx
+#          - table2.csv
+#
+#     •  Where changed:
+#          ─ post_process_source()  → three legacy branches:
+#              a) "source: index & python"
+#              b) "source: python"
+#              c) "source: index"
+#          ─ Each branch now builds *file_info* / *table_info* using:
+#                "\nReferenced:\n- "       + "\n- ".join(file_names)
+#                "\nCalculated using:\n- " + "\n- ".join(table_names)
+#
+# 2.  JSON path remains untouched
+#     -----------------------------------------------------
+#     •  The helper _inject_refs() already produced paragraph blocks.
+#       No modification was required there, except identical bullet-list
+#       formatting for consistency.
+#
+# 3.  No logic or variable names were altered elsewhere
+#     -----------------------------------------------------
+#     •  Only string-building lines were replaced; all surrounding control
+#       flow, error-handling, and logging remain identical to v20.
+###############################################################################
 
 
 import os
@@ -22,6 +57,9 @@ from collections import OrderedDict
 import difflib
 import time
 
+#######################################################################################
+#                               GLOBAL CONFIG / CONSTANTS
+#######################################################################################
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
 #######################################################################################
@@ -582,21 +620,6 @@ def reference_table_data(code_str, user_tier):
 
     return None  # all good
 
-# ──────────────────────────────────────────────────────────────────────────────
-# helper: keep only relevant, short user history
-# ──────────────────────────────────────────────────────────────────────────────
-def _condense_history(history, max_chars: int = 400) -> str:
-    """
-    Return at most the last `max_chars` of *user* turns only.
-    That is enough for follow-up questions like “how about the 13th?”
-    but removes huge JSON answers that were confusing the model.
-    """
-    if not history:
-        return ""
-    user_only = [line for line in history if line.lstrip().lower().startswith("user:")]
-    condensed = "\n".join(user_only)[-max_chars:]
-    return condensed
-
 #######################################################################################
 #                              TOOL #2 - Code Run
 #######################################################################################
@@ -606,14 +629,13 @@ def tool_2_code_run(user_question, user_tier=1, recent_history=None):
         return {"result": "No information", "code": "", "table_names": []}
 
     # Centralize fallback logic for chat history
-    rhistory_str = _condense_history(recent_history) if recent_history else ""
+    rhistory = recent_history if recent_history else []
 
     system_prompt = f"""
 You are a python expert. Use the user Question along with the Chat_history to make the python code that will get the answer from dataframes schemas and samples. 
 Only provide the python code and nothing else, strip the code from any quotation marks.
 Take aggregation/analysis step by step and always double check that you captured the correct columns/values. 
 Don't give examples, only provide the actual code. If you can't provide the code, say "404" and make sure it's a string.
-Ignore Chat History unless it is clearly needed (e.g. the user says “and for the 13th?”). Never embed Chat History text in the code.
 
 **Rules**:
 1. Only use columns that actually exist. Do NOT invent columns or table names.
@@ -632,7 +654,7 @@ Dataframes schemas and sample:
 {SCHEMA_TEXT}
 
 Chat_history:
-{rhistory_str}
+{rhistory}
 """
 
     code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.7)
