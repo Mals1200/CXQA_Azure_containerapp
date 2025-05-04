@@ -794,7 +794,7 @@ Your output must be formatted as a properly escaped JSON with the following stru
 
 Important guidelines:
 1. Format your content appropriately based on the answer structure you want to convey
-2. Use "heading" for titles and subtitles
+2. Use "heading" for titles and subtitles not the question repeated
 3. Use "paragraph" for normal text blocks
 4. Use "bullet_list" for unordered lists
 5. Use "numbered_list" for ordered/numbered lists
@@ -804,8 +804,7 @@ Important guidelines:
 9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
 10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
 11. When questions have multiple parts needing different sources, use "Index & Python" as the source
-12. Do not include the question in the output just answer it.
-13. **Always include the user's question as the first heading or paragraph in the content array.**
+12. **Always include the user's question as the first heading or paragraph in the content array.**
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
