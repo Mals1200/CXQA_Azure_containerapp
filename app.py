@@ -1,4 +1,5 @@
-# version compound Qs display on teams (attempt fix)
+# version 10
+# Made it read the answers from the compounded questions.
 
 import os
 import asyncio
