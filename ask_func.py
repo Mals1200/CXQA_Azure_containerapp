@@ -1,12 +1,12 @@
 # version v21c  (Fixed the python path to answer questions with the chat history occupied)
 # ---------------------------------------------------------------------------
 # 1) Cleaner tabular-data classifier
-#    • Removed chat_history from the prompt ➜ fewer false “NO” decisions.
+#    • Removed chat_history from the prompt ➜ fewer false "NO" decisions.
 #
 # 2) More robust Python-tool trigger
 #    • Run Python whenever:
 #        a) references_tabular_data() == YES
-#        b) OR index search returns “No information”.
+#        b) OR index search returns "No information".
 #
 # 3) Teams-friendly bullet lists in plain-text mode
 #    • Legacy branches of post_process_source()
@@ -819,6 +819,7 @@ Important guidelines:
 9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
 10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
 11. When questions have multiple parts needing different sources, use "Index & Python" as the source
+12. **Always include the user's question as the first heading or paragraph in the content array.**
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
@@ -893,31 +894,25 @@ Chat_history:
 #######################################################################################
 #                          POST-PROCESS SOURCE  (adds file / table refs)
 #######################################################################################
-def post_process_source(final_text, index_dict, python_dict):
+def post_process_source(final_text, index_dict, python_dict, user_question=None):
     """
     • If the answer is valid JSON, inject file/table info into BOTH
         – response_json["source_details"]   (for your UI)
         – response_json["content"]          (visible paragraphs)
     • Otherwise fall back to the legacy plain-text logic.
+    • Optionally, always ensure the user's question is present as the first heading or paragraph.
     """
     import json, re
 
-    # ---------- helper to append visible reference paragraphs ----------
     def _inject_refs(resp, files=None, tables=None):
-        """
-        Adds Teams-friendly bullet lists under 'Referenced:' and
-        'Calculated using:' paragraphs inside the JSON response.
-        """
         if not isinstance(resp.get("content"), list):
             resp["content"] = []
-    
         if files:
             bullet_block = "Referenced:\n- " + "\n- ".join(files)
             resp["content"].append({
                 "type": "paragraph",
                 "text": bullet_block
             })
-    
         if tables:
             bullet_block = "Calculated using:\n- " + "\n- ".join(tables)
             resp["content"].append({
@@ -943,18 +938,14 @@ def post_process_source(final_text, index_dict, python_dict):
         and "content" in response_json
         and "source"  in response_json
     ):
-        # ---- normalise / override "source" field ----
         idx_has  = index_dict .get("top_k" , "").strip().lower() not in ["", "no information"]
         py_has   = python_dict.get("result", "").strip().lower() not in ["", "no information"]
-
         src = response_json["source"].strip()
         if src == "Python" and idx_has:
             src = "Index & Python"
         elif src == "Index" and py_has:
             src = "Index & Python"
         response_json["source"] = src
-
-        # ---- attach source_details & visible refs ----
         if src == "Index & Python":
             files  = index_dict .get("file_names", [])
             tables = python_dict.get("table_names", [])
@@ -965,7 +956,6 @@ def post_process_source(final_text, index_dict, python_dict):
                 "table_names" : tables
             }
             _inject_refs(response_json, files, tables)
-
         elif src == "Index":
             files = index_dict.get("file_names", [])
             response_json["source_details"] = {
@@ -973,9 +963,7 @@ def post_process_source(final_text, index_dict, python_dict):
                 "file_names" : files
             }
             _inject_refs(response_json, files=files)
-
         elif src == "Python":
-            # fallback extraction if table_names list is empty
             if not python_dict.get("table_names"):
                 python_dict["table_names"] = re.findall(
                     r'["\']([^"\']+\.(?:xlsx|xls|csv))["\']',
@@ -988,8 +976,20 @@ def post_process_source(final_text, index_dict, python_dict):
                 "table_names" : tables
             }
             _inject_refs(response_json, tables=tables)
-
-        # AI Generated or anything else → leave unchanged
+        # --- Ensure the user's question is present as first heading or paragraph ---
+        if user_question:
+            uq_norm = user_question.strip().lower()
+            found = False
+            for i, block in enumerate(response_json["content"]):
+                if block.get("type") in ("heading", "paragraph"):
+                    block_text = block.get("text", "").strip().lower()
+                    # Allow partial match for long questions
+                    if uq_norm and (uq_norm in block_text or block_text in uq_norm):
+                        found = True
+                        break
+            if not found:
+                # Insert as heading at the start
+                response_json["content"].insert(0, {"type": "heading", "text": user_question})
         return json.dumps(response_json)
 
     # ---------- legacy plain-text branch (unchanged) ----------
@@ -1210,7 +1210,7 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     # Now unify repeated text cleaning
     raw_answer = clean_text(raw_answer)
 
-    final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict)
+    final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict, user_question=user_question)
     tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
     yield final_answer_with_source
 
