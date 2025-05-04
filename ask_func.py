@@ -1,9 +1,4 @@
-# version 21d:
-# - Added a post-processing step in post_process_source to guarantee the user's question is always present as the first heading (or paragraph) in the answer JSON, even if the LLM omits it.
-# - This ensures the question always appears in Teams and other UIs that consume the answer JSON.
-# - No other logic, robustness, or features were changed or removed.
-# - This is a safe, targeted improvement for user experience and answer consistency.
-# =========================
+# testing the title in answer issue
 
 import os
 import io
@@ -968,8 +963,9 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
             for i, block in enumerate(response_json["content"]):
                 if block.get("type") in ("heading", "paragraph"):
                     block_text = block.get("text", "").strip().lower()
-                    # Allow partial match for long questions
-                    if uq_norm and (uq_norm in block_text or block_text in uq_norm):
+                    # Use similarity check
+                    similarity = difflib.SequenceMatcher(None, uq_norm, block_text).ratio()
+                    if similarity > 0.85:
                         found = True
                         break
             if not found:
