@@ -1,4 +1,5 @@
-# Brahims UW version 22
+# Brahims UW version 23 purge
+
 import os
 import io
 import re
@@ -546,20 +547,25 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1):
         #print(f"DEBUG: [Tool 1] Filtering {len(merged_docs)} merged docs by RBAC + Relevance...")
         for i, doc in enumerate(merged_docs):
             snippet = doc["snippet"]
-            title   = doc["title"]
-
-            # 1️⃣ RBAC gate
-            file_tier = get_file_tier(title)
-            if user_tier < file_tier:
-                continue                      # user cannot access → skip
-
-            # 2️⃣ Relevance gate
-            if not is_text_relevant(user_question, snippet):
-                continue                      # LLM said “NO” → skip
-
-            # 3️⃣ Passed both checks → keep
-            relevant_docs.append(doc)
-
+            title = doc["title"]
+             # --- Added Log ---
+            #print(f"DEBUG: [Tool 1]  Filtering doc {i+1}/{len(merged_docs)}: Title='{title}'")
+            file_tier = get_file_tier(doc["title"])
+            rbac_pass = user_tier >= file_tier
+            # --- Added Log ---
+            #print(f"DEBUG: [Tool 1]   RBAC Check: UserTier={user_tier}, FileTier={file_tier}, Pass={rbac_pass}")
+            if rbac_pass:
+                # --- Log relevance check ---
+                #print(f"DEBUG: [Tool 1]   Checking relevance for snippet: '{snippet[:60]}...'")
+                is_relevant = is_text_relevant(user_question, snippet) # Call relevance check
+                # --- Added Log ---
+                #print(f"DEBUG: [Tool 1]   Relevance Check Result: {is_relevant}")
+                # --- End log relevance check ---
+                relevant_docs.append(doc)
+                #print(f"DEBUG: [Tool 1]   >>> Doc {i+1} passed RBAC, ADDED to relevant_docs (Relevance ignored).")
+            #else:
+                 # --- Added Log ---
+                 #print(f"DEBUG: [Tool 1]   --- Doc {i+1} failed RBAC check.")
 
         if not relevant_docs:
              # --- Added Log ---
@@ -915,7 +921,7 @@ Important guidelines:
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
 
-Only For multi-part questions, organize your response clearly with appropriate headings or sections 
+For multi-part questions, organize your response clearly with appropriate headings or sections 
 for each part of the answer. If one part comes from Index and another from Python, use both sources.
 
 User question:
@@ -1046,7 +1052,7 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
                 "file_names"  : files,
                 "table_names" : tables
             }
-            #_inject_refs(response_json, files, tables)
+            _inject_refs(response_json, files, tables)
         elif src == "Index":
             files = index_dict.get("file_names", [])
             response_json["source_details"] = {
@@ -1066,7 +1072,7 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
                 "code"        : "",
                 "table_names" : tables
             }
-            #_inject_refs(response_json, tables=tables)
+            _inject_refs(response_json, tables=tables)
         else:
             response_json["source_details"] = {}
                 
@@ -1459,89 +1465,3 @@ def Ask_Question(question, user_id="anonymous"):
         yield error_msg
         logging.error(error_msg)
         yield error_msg
-
-# ─────────────────── ASK QUESTIONS & EXPORT ANSWERS WITH SOURCE ──────────────────────────
-import time
-import csv
-import os
-# ─────────────────── Wait before the start ──────────────────────────────────────────────────────────────
-# start_wait = 60
-# print(f"Starting...\n Waiting {start_wait} Seconds")
-# time.sleep(start_wait)
-
-# ─────────────────── HELPER ──────────────────────────────────────────────────────────────
-def _parse_answer(full_answer: str):
-    """
-    Split the model’s full answer into:
-      • clean answer  (everything before 'Source:')
-      • source_type   (first line after 'Source:')
-      • source_material (any remaining lines after that)
-    """
-    if "Source:" in full_answer:
-        answer_part, src_part = full_answer.split("Source:", 1)
-        answer_part = answer_part.strip()
-        src_part    = src_part.strip()
-        src_lines        = src_part.splitlines()
-        source_type      = src_lines[0].strip()
-        source_material  = "\n".join(src_lines[1:]).strip()
-    else:
-        # Fallback if no explicit source tag
-        answer_part     = full_answer.strip()
-        source_type     = "Unknown"
-        source_material = ""
-    return answer_part, source_type, source_material
-
-# ─────────────────── MAIN ────────────────────────────────────────────────────────────────
-def main():
-    USER_EMAIL = "nramesh@diriyah.sa"
-
-    QUESTIONS = [
-        "what is the visits in al bujairy on the 12th oct 2024?", # P1
-        "What to do if there was a fire?", # I2
-        "restart chat",
-        "What to do if there was a fire?", # I1
-        "what is the visits in al bujairy on the 12th oct 2024?", # P2
-        "restart chat",
-        "what is the visitation in alturaif on the 1st of jan 2024, and what to do if there was a lost child?", # C1
-        "restart chat",  
-        "What to do if there was a fire?",
-        "what is the visitation in alturaif on the 1st of jan 2024, and what to do if there was a lost child?", # C2, 
-      
-        # "How about on the 13th?",
-        # "what is the visits in al bujairy on the 12th oct 2024 and What to do if there was a fire?",
-        # "What to do if there was a lost child and if there was a fire?"
-    ]
-    # CSV destination on Desktop
-    desktop_path = r"C:\Users\malsabhan\OneDrive - Diriyah Gate Company Limited\Desktop"
-    csv_file     = os.path.join(desktop_path, "questions_and_answers.csv")
-    Wait_time = 120
-    with open(csv_file, mode="w", newline="", encoding="utf-8") as fout:
-        writer = csv.writer(fout)
-        writer.writerow(["question", "answer", "source_type", "source_material"])
-
-        for idx, question in enumerate(QUESTIONS, start=1):
-            print(f"\n🗨️  Q{idx}: {question}")
-            try:
-                # Ask the question and stream tokens to console
-                answer_tokens = Ask_Question(question, USER_EMAIL)
-                collected     = []
-                for tok in answer_tokens:
-                    print(tok, end='', flush=True)
-                    collected.append(tok)
-                full_answer = "".join(collected)
-                # Parse and record
-                answer, src_type, src_material = _parse_answer(full_answer)
-            except Exception as err:
-                print(f"\n❌ Error on question {idx}: {err}")
-                answer, src_type, src_material = "", "Error", str(err)
-            writer.writerow([question, answer, src_type, src_material])
-            print("\n")  # neat spacing in console
-            # Wait 60 s between questions (respect rate limits, etc.)
-            sep = 80
-            if idx < len(QUESTIONS):
-                print("⏳ Waiting ", Wait_time, " seconds …\n", ("=" * sep + "=\n")*10)
-                time.sleep(Wait_time)
-
-print("(Staring)\n")                
-if __name__ == "__main__":
-    main()
