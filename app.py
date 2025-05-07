@@ -1,4 +1,5 @@
-# version 11 purg
+# version 10
+# Made it read the answers from the compounded questions.
 
 import os
 import asyncio
@@ -216,15 +217,15 @@ async def _bot_logic(turn_context: TurnContext):
                         display_names.extend(file_names)
                     if table_names:
                         display_names.extend(table_names)
-                    # if display_names:
-                    #     source_container["items"].append({
-                    #         "type": "TextBlock",
-                    #         "text": "Files: " + ", ".join(display_names),
-                    #         "wrap": True,
-                    #         "weight": "Bolder",
-                    #         "color": "Good",
-                    #         "spacing": "Medium"
-                    #     })
+                    if display_names:
+                        source_container["items"].append({
+                            "type": "TextBlock",
+                            "text": "Files: " + ", ".join(display_names),
+                            "wrap": True,
+                            "weight": "Bolder",
+                            "color": "Good",
+                            "spacing": "Medium"
+                        })
                     # Add files/code blocks as before
                     if "files" in source_details and source_details["files"]:
                         source_container["items"].append({
