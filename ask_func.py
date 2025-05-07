@@ -546,25 +546,20 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1):
         #print(f"DEBUG: [Tool 1] Filtering {len(merged_docs)} merged docs by RBAC + Relevance...")
         for i, doc in enumerate(merged_docs):
             snippet = doc["snippet"]
-            title = doc["title"]
-             # --- Added Log ---
-            #print(f"DEBUG: [Tool 1]  Filtering doc {i+1}/{len(merged_docs)}: Title='{title}'")
-            file_tier = get_file_tier(doc["title"])
-            rbac_pass = user_tier >= file_tier
-            # --- Added Log ---
-            #print(f"DEBUG: [Tool 1]   RBAC Check: UserTier={user_tier}, FileTier={file_tier}, Pass={rbac_pass}")
-            if rbac_pass:
-                # --- Log relevance check ---
-                #print(f"DEBUG: [Tool 1]   Checking relevance for snippet: '{snippet[:60]}...'")
-                is_relevant = is_text_relevant(user_question, snippet) # Call relevance check
-                # --- Added Log ---
-                #print(f"DEBUG: [Tool 1]   Relevance Check Result: {is_relevant}")
-                # --- End log relevance check ---
-                relevant_docs.append(doc)
-                #print(f"DEBUG: [Tool 1]   >>> Doc {i+1} passed RBAC, ADDED to relevant_docs (Relevance ignored).")
-            #else:
-                 # --- Added Log ---
-                 #print(f"DEBUG: [Tool 1]   --- Doc {i+1} failed RBAC check.")
+            title   = doc["title"]
+
+            # 1️⃣ RBAC gate
+            file_tier = get_file_tier(title)
+            if user_tier < file_tier:
+                continue                      # user cannot access → skip
+
+            # 2️⃣ Relevance gate
+            if not is_text_relevant(user_question, snippet):
+                continue                      # LLM said “NO” → skip
+
+            # 3️⃣ Passed both checks → keep
+            relevant_docs.append(doc)
+
 
         if not relevant_docs:
              # --- Added Log ---
@@ -872,47 +867,56 @@ def final_answer_llm(user_question, index_dict, python_dict):
 You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
 1) Index data: (INDEX_DATA)
 2) Python data: (PYTHON_DATA)
+*) Always Prioritise The python result if the 2 are different.
 
-Your output must be a valid JSON object with the following structure:
-{
+Your output must be formatted as a properly escaped JSON with the following structure:
+{{
   "content": [
-    {
+    {{
       "type": "heading",
-      "text": "Main answer heading/title here",
-      "source": "Python" // or "Index", "Index & Python", etc.
-    },
-    {
+      "text": "Main answer heading/title here"
+    }},
+    {{
       "type": "paragraph",
-      "text": "Normal paragraph text here",
-      "source": "Python"
-    },
-    {
+      "text": "Normal paragraph text here"
+    }},
+    {{
       "type": "bullet_list",
       "items": [
         "List item 1",
-        "List item 2"
-      ],
-      "source": "Index"
-    },
-    {
+        "List item 2",
+        "List item 3"
+      ]
+    }},
+    {{
       "type": "numbered_list",
       "items": [
         "Numbered item 1",
         "Numbered item 2"
-      ],
-      "source": "Index & Python"
-    }
+      ]
+    }}
   ],
-  "overall_source": "Python" // or "Index", "Index & Python", "AI Generated"
-}
+  "source": "Source type (Index, Python, Index & Python, or AI Generated)"
+}}
 
-Guidelines:
-1. For each content block, set the 'source' field to the source(s) that actually provided the information in that block. Use only: "Index", "Python", "Index & Python", or "AI Generated".
-2. Set 'overall_source' to the main source(s) used for the answer as a whole.
-3. If a question has multiple parts, break the answer into multiple content blocks, each with its own 'source'.
-4. If neither source is relevant, set 'overall_source' to "AI Generated" and explain in the first paragraph.
-5. Do not include any information from a source unless it adds real value to the answer.
-6. Make sure the JSON is valid and properly escaped.
+Important guidelines:
+1. Format your content appropriately based on the answer structure you want to convey
+2. Use "heading" for titles and subtitles
+3. Use "paragraph" for normal text blocks
+4. Use "bullet_list" for unordered lists
+5. Use "numbered_list" for ordered/numbered lists
+6. Use "code_block" for any code snippets
+7. Make sure the JSON is valid and properly escaped
+8. Every section must have a "type" and appropriate content fields
+9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
+10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
+11. When questions have multiple parts needing different sources, use "Index & Python" as the source
+
+Use only these two sources to answer. If you find relevant info from both, answer using both. 
+If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
+
+Only For multi-part questions, organize your response clearly with appropriate headings or sections 
+for each part of the answer. If one part comes from Index and another from Python, use both sources.
 
 User question:
 {user_question}
@@ -1468,7 +1472,7 @@ import os
 # ─────────────────── HELPER ──────────────────────────────────────────────────────────────
 def _parse_answer(full_answer: str):
     """
-    Split the model's full answer into:
+    Split the model’s full answer into:
       • clean answer  (everything before 'Source:')
       • source_type   (first line after 'Source:')
       • source_material (any remaining lines after that)
@@ -1532,7 +1536,7 @@ def main():
                 answer, src_type, src_material = "", "Error", str(err)
             writer.writerow([question, answer, src_type, src_material])
             print("\n")  # neat spacing in console
-            # Wait 60 s between questions (respect rate limits, etc.)
+            # Wait 60 s between questions (respect rate limits, etc.)
             sep = 80
             if idx < len(QUESTIONS):
                 print("⏳ Waiting ", Wait_time, " seconds …\n", ("=" * sep + "=\n")*10)
