@@ -873,55 +873,46 @@ You are a helpful assistant. The user asked a (possibly multi-part) question, an
 1) Index data: (INDEX_DATA)
 2) Python data: (PYTHON_DATA)
 
-Your output must be formatted as a properly escaped JSON with the following structure:
-{{
+Your output must be a valid JSON object with the following structure:
+{
   "content": [
-    {{
+    {
       "type": "heading",
-      "text": "Main answer heading/title here"
-    }},
-    {{
+      "text": "Main answer heading/title here",
+      "source": "Python" // or "Index", "Index & Python", etc.
+    },
+    {
       "type": "paragraph",
-      "text": "Normal paragraph text here"
-    }},
-    {{
+      "text": "Normal paragraph text here",
+      "source": "Python"
+    },
+    {
       "type": "bullet_list",
       "items": [
         "List item 1",
-        "List item 2",
-        "List item 3"
-      ]
-    }},
-    {{
+        "List item 2"
+      ],
+      "source": "Index"
+    },
+    {
       "type": "numbered_list",
       "items": [
         "Numbered item 1",
         "Numbered item 2"
-      ]
-    }}
+      ],
+      "source": "Index & Python"
+    }
   ],
-  "source": "Source type (Index, Python, Index & Python, or AI Generated)"
-}}
+  "overall_source": "Python" // or "Index", "Index & Python", "AI Generated"
+}
 
-Important guidelines:
-1. Format your content appropriately based on the answer structure you want to convey
-2. Use "heading" for titles and subtitles
-3. Use "paragraph" for normal text blocks
-4. Use "bullet_list" for unordered lists
-5. Use "numbered_list" for ordered/numbered lists
-6. Use "code_block" for any code snippets
-7. Make sure the JSON is valid and properly escaped
-8. Every section must have a "type" and appropriate content fields
-9. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
-10. Source selection rules:
-    - If Python data provides a complete answer, use "Python" as the source
-    - Only use "Index & Python" if the Index data adds significant new information not covered by Python
-    - Use "Index" only if there is no Python data available
-    - Use "AI Generated" if neither source has relevant information
-11. For multi-part questions:
-    - If one part is answered by Python and another by Index, use "Index & Python"
-    - If Python answers all parts, use "Python" even if Index has some related info
-    - Only include Index information if it adds substantial value to the answer
+Guidelines:
+1. For each content block, set the 'source' field to the source(s) that actually provided the information in that block. Use only: "Index", "Python", "Index & Python", or "AI Generated".
+2. Set 'overall_source' to the main source(s) used for the answer as a whole.
+3. If a question has multiple parts, break the answer into multiple content blocks, each with its own 'source'.
+4. If neither source is relevant, set 'overall_source' to "AI Generated" and explain in the first paragraph.
+5. Do not include any information from a source unless it adds real value to the answer.
+6. Make sure the JSON is valid and properly escaped.
 
 User question:
 {user_question}
