@@ -918,11 +918,12 @@ Important guidelines:
 9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
 10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
 11. When questions have multiple parts needing different sources, use "Index & Python" as the source
+12. Never cite a source just because it exists—cite it only when its unique content appears in the final answer, and actually the answer of the question.
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
 
-For multi-part questions, organize your response clearly with appropriate headings or sections 
+Only for multi-part questions, organize your response clearly with appropriate headings or sections 
 for each part of the answer. If one part comes from Index and another from Python, use both sources.
 
 User question:
