@@ -1,6 +1,4 @@
-# Version 22
-
-
+# Brahims UW version 22
 import os
 import io
 import re
@@ -874,7 +872,6 @@ def final_answer_llm(user_question, index_dict, python_dict):
 You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
 1) Index data: (INDEX_DATA)
 2) Python data: (PYTHON_DATA)
-*) Always Prioritise The python result if the 2 are different.
 
 Your output must be formatted as a properly escaped JSON with the following structure:
 {{
@@ -915,22 +912,16 @@ Important guidelines:
 6. Use "code_block" for any code snippets
 7. Make sure the JSON is valid and properly escaped
 8. Every section must have a "type" and appropriate content fields
-9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
-10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
-11. When questions have multiple parts needing different sources, use "Index & Python" as the source
-12. **Use a source only if it contributes unique, material information.**
-    • First compose the answer from higher‑priority Python data.  
-    • Before adding anything from Index data, compare it to the current answer:  
-      – If the Index snippet merely repeats the same fact/idea already covered, ignore it and keep "source" as "Python".  
-      – If the Index data adds substantive new facts, figures, or context, integrate those specifics and switch "source" to "Index & Python".  
-    • Conversely, if Python adds nothing beyond what a good Index answer already provides, omit Python content and set "source" to "Index".  
-    • Never cite a source just because it exists—cite it only when its unique content appears in the final answer.
-
-Use only these two sources to answer. If you find relevant info from both, answer using both. 
-If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
-
-Only for multi-part questions, organize your response clearly with appropriate headings or sections 
-for each part of the answer. If one part comes from Index and another from Python, use both sources.
+9. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
+10. Source selection rules:
+    - If Python data provides a complete answer, use "Python" as the source
+    - Only use "Index & Python" if the Index data adds significant new information not covered by Python
+    - Use "Index" only if there is no Python data available
+    - Use "AI Generated" if neither source has relevant information
+11. For multi-part questions:
+    - If one part is answered by Python and another by Index, use "Index & Python"
+    - If Python answers all parts, use "Python" even if Index has some related info
+    - Only include Index information if it adds substantial value to the answer
 
 User question:
 {user_question}
@@ -1473,3 +1464,89 @@ def Ask_Question(question, user_id="anonymous"):
         yield error_msg
         logging.error(error_msg)
         yield error_msg
+
+# ─────────────────── ASK QUESTIONS & EXPORT ANSWERS WITH SOURCE ──────────────────────────
+import time
+import csv
+import os
+# ─────────────────── Wait before the start ──────────────────────────────────────────────────────────────
+# start_wait = 60
+# print(f"Starting...\n Waiting {start_wait} Seconds")
+# time.sleep(start_wait)
+
+# ─────────────────── HELPER ──────────────────────────────────────────────────────────────
+def _parse_answer(full_answer: str):
+    """
+    Split the model's full answer into:
+      • clean answer  (everything before 'Source:')
+      • source_type   (first line after 'Source:')
+      • source_material (any remaining lines after that)
+    """
+    if "Source:" in full_answer:
+        answer_part, src_part = full_answer.split("Source:", 1)
+        answer_part = answer_part.strip()
+        src_part    = src_part.strip()
+        src_lines        = src_part.splitlines()
+        source_type      = src_lines[0].strip()
+        source_material  = "\n".join(src_lines[1:]).strip()
+    else:
+        # Fallback if no explicit source tag
+        answer_part     = full_answer.strip()
+        source_type     = "Unknown"
+        source_material = ""
+    return answer_part, source_type, source_material
+
+# ─────────────────── MAIN ────────────────────────────────────────────────────────────────
+def main():
+    USER_EMAIL = "nramesh@diriyah.sa"
+
+    QUESTIONS = [
+        "what is the visits in al bujairy on the 12th oct 2024?", # P1
+        "What to do if there was a fire?", # I2
+        "restart chat",
+        "What to do if there was a fire?", # I1
+        "what is the visits in al bujairy on the 12th oct 2024?", # P2
+        "restart chat",
+        "what is the visitation in alturaif on the 1st of jan 2024, and what to do if there was a lost child?", # C1
+        "restart chat",  
+        "What to do if there was a fire?",
+        "what is the visitation in alturaif on the 1st of jan 2024, and what to do if there was a lost child?", # C2, 
+      
+        # "How about on the 13th?",
+        # "what is the visits in al bujairy on the 12th oct 2024 and What to do if there was a fire?",
+        # "What to do if there was a lost child and if there was a fire?"
+    ]
+    # CSV destination on Desktop
+    desktop_path = r"C:\Users\malsabhan\OneDrive - Diriyah Gate Company Limited\Desktop"
+    csv_file     = os.path.join(desktop_path, "questions_and_answers.csv")
+    Wait_time = 120
+    with open(csv_file, mode="w", newline="", encoding="utf-8") as fout:
+        writer = csv.writer(fout)
+        writer.writerow(["question", "answer", "source_type", "source_material"])
+
+        for idx, question in enumerate(QUESTIONS, start=1):
+            print(f"\n🗨️  Q{idx}: {question}")
+            try:
+                # Ask the question and stream tokens to console
+                answer_tokens = Ask_Question(question, USER_EMAIL)
+                collected     = []
+                for tok in answer_tokens:
+                    print(tok, end='', flush=True)
+                    collected.append(tok)
+                full_answer = "".join(collected)
+                # Parse and record
+                answer, src_type, src_material = _parse_answer(full_answer)
+            except Exception as err:
+                print(f"\n❌ Error on question {idx}: {err}")
+                answer, src_type, src_material = "", "Error", str(err)
+            writer.writerow([question, answer, src_type, src_material])
+            print("\n")  # neat spacing in console
+            # Wait 60 s between questions (respect rate limits, etc.)
+            sep = 80
+            if idx < len(QUESTIONS):
+                print("⏳ Waiting ", Wait_time, " seconds …\n", ("=" * sep + "=\n")*10)
+                time.sleep(Wait_time)
+
+print("(Staring)\n")                
+if __name__ == "__main__":
+    main()
