@@ -918,7 +918,13 @@ Important guidelines:
 9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
 10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
 11. When questions have multiple parts needing different sources, use "Index & Python" as the source
-12. Never cite a source just because it exists—cite it only when its unique content appears in the final answer, and actually the answer of the question.
+12. **Use a source only if it contributes unique, material information.**
+    • First compose the answer from higher‑priority Python data.  
+    • Before adding anything from Index data, compare it to the current answer:  
+      – If the Index snippet merely repeats the same fact/idea already covered, ignore it and keep "source" as "Python".  
+      – If the Index data adds substantive new facts, figures, or context, integrate those specifics and switch "source" to "Index & Python".  
+    • Conversely, if Python adds nothing beyond what a good Index answer already provides, omit Python content and set "source" to "Index".  
+    • Never cite a source just because it exists—cite it only when its unique content appears in the final answer.
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
