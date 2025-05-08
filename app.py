@@ -10,7 +10,6 @@ import asyncio
 from threading import Lock
 import re
 import json
-import urllib.parse
 
 from flask import Flask, request, jsonify, Response
 from botbuilder.core import (
@@ -231,38 +230,12 @@ async def _bot_logic(turn_context: TurnContext):
                     if item.get("type", "") == "paragraph":
                         text = item.get("text", "")
                         if text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:"):
-                            lines = text.split("\n")
-                            # Add the heading ("Referenced:" or "Calculated using:")
-                            if lines:
-                                source_container["items"].append({
-                                    "type": "TextBlock",
-                                    "text": lines[0],
-                                    "wrap": True,
-                                    "spacing": "Small",
-                                    "weight": "Bolder"
-                                })
-                            # For each file/table, add a markdown link as a TextBlock
-                            for line in lines[1:]:
-                                if line.strip().startswith("-"):
-                                    fname = line.strip()[1:].strip()
-                                    if fname:
-                                        sharepoint_base = "https://dgda.sharepoint.com/:x:/r/sites/CXQAData/_layouts/15/Doc.aspx?sourcedoc=%7B9B3CA3CD-5044-45C7-8A82-0604A1675F46%7D&file={}&action=default&mobileredirect=true"
-                                        url = sharepoint_base.format(urllib.parse.quote(fname))
-                                        print(f"DEBUG: Adding file link: {fname} -> {url}")
-                                        source_container["items"].append({
-                                            "type": "TextBlock",
-                                            "text": f"[{fname}]({url})",
-                                            "wrap": True,
-                                            "spacing": "Small"
-                                        })
-                                else:
-                                    # If not a file line, just add as text
-                                    source_container["items"].append({
-                                        "type": "TextBlock",
-                                        "text": line,
-                                        "wrap": True,
-                                        "spacing": "Small"
-                                    })
+                            source_container["items"].append({
+                                "type": "TextBlock",
+                                "text": text,
+                                "wrap": True,
+                                "spacing": "Small"
+                            })
                 # Remove file_names/table_names and code/file blocks from the collapsible section
                 # Always add the source line at the bottom of the container
                 source_container["items"].append({
