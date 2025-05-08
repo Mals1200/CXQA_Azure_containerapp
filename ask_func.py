@@ -1,84 +1,9 @@
-# Brahims UW version 23 purge
-
-#
-# 1. Dual-deployment LLM architecture
-#    • CONFIG now contains two endpoints:
-#        - LLM_ENDPOINT      → gpt-4o-3  (heavy-duty: Tool-1 Index, Tool-2 Python, Tool-3 Fallback)
-#        - LLM_ENDPOINT_AUX  → gpt-4o    (lightweight: classifiers, splitters, misc.)
-#    • New helper  call_llm_aux()  with built-in 429 back-off / retry.
-#
-# 2. Aux-model wiring (token & rate-limit relief)
-#    The following helpers now call the AUX model instead of the main model:
-#      - split_question_into_subquestions()
-#      - references_tabular_data()
-#      - is_text_relevant()
-#      - classify_topic()
-#    ▶  Typically saves 60-70 % tokens on meta prompts and reduces throttling.
-#
-# 3. Tool-2 prompt hardening
-#    • Rule #8 explicitly forbids embedding chat_history in generated code.
-#    • tool_2_code_run now receives  recent_history  (≤4 turns) instead of full history.
-#
-# 4. post_process_source() overhaul
-#    • Strips ```json / ``` / '''json fences before attempting JSON parse.
-#    • Auto-fixes “source” field:
-#          "Python"  + index data → "Index & Python"
-#          "Index"   + python data → "Index & Python"
-#    • Injects reference paragraphs directly into response_json["content"]:
-#          – “Referenced: …”   (file names)
-#          – “Calculated using: …” (table names)
-#    • Populates response_json["source_details"] for UI use (files, code, etc.).
-#
-# 5. Fallback improvements
-#    • When python_dict["table_names"] is empty we now regex-extract *.xlsx/ *.csv
-#      from the code block to keep the UI consistent.
-#
-# 6. Robust rate-limit handling
-#    • call_llm_aux(): 3 attempts, incremental sleep after every HTTP 429.
-#    • Main call_llm() path unchanged (still wrapped by azure_retry() where used).
-#
-# 7. No RBAC / storage / search logic changed
-#    All access-control and Azure-Blob interactions remain exactly as in v20.
-#
-# ─────────────────────────────────────────────────────────────────────────────
-
-# (and)
-
-# 1.  Teams-friendly bullet lists in *plain-text* responses
-#     -----------------------------------------------------
-#     •  Old behaviour:
-#          "Referenced: file1.pdf, file2.pdf"
-#          "Calculated using: table1.xlsx, table2.csv"
-#
-#     •  New behaviour (better line-breaks in Microsoft Teams):
-#          Referenced:
-#          - file1.pdf
-#          - file2.pdf
-#
-#          Calculated using:
-#          - table1.xlsx
-#          - table2.csv
-#
-#     •  Where changed:
-#          ─ post_process_source()  → three legacy branches:
-#              a) "source: index & python"
-#              b) "source: python"
-#              c) "source: index"
-#          ─ Each branch now builds *file_info* / *table_info* using:
-#                "\nReferenced:\n- "       + "\n- ".join(file_names)
-#                "\nCalculated using:\n- " + "\n- ".join(table_names)
-#
-# 2.  JSON path remains untouched
-#     -----------------------------------------------------
-#     •  The helper _inject_refs() already produced paragraph blocks.
-#       No modification was required there, except identical bullet-list
-#       formatting for consistency.
-#
-# 3.  No logic or variable names were altered elsewhere
-#     -----------------------------------------------------
-#     •  Only string-building lines were replaced; all surrounding control
-#       flow, error-handling, and logging remain identical to v20.
-###############################################################################
+# version 22
+# Brahims UW version 23.
+# fixed display of all agents
+# Optimised:
+# (put optimizations here)
+# works with app.py version #??
 
 
 import os
