@@ -1,13 +1,15 @@
-# version 11
+# version 11b 
+# ((Hyperlink file names))
 # Made it display the files sources for the compounded questions:
-    # Referenced: <Files>     
-    # Calculated using: <Tables>
+    # Referenced: <Files>                <-------Hyperlink to sharepoint
+    # Calculated using: <Tables>         <-------Hyperlink to sharepoint
 
 import os
 import asyncio
 from threading import Lock
 import re
 import json
+import urllib.parse
 
 from flask import Flask, request, jsonify, Response
 from botbuilder.core import (
@@ -228,9 +230,23 @@ async def _bot_logic(turn_context: TurnContext):
                     if item.get("type", "") == "paragraph":
                         text = item.get("text", "")
                         if text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:"):
+                            # Replace file names with markdown links
+                            lines = text.split("\n")
+                            new_lines = []
+                            for line in lines:
+                                if line.strip().startswith("-"):
+                                    fname = line.strip()[1:].strip()
+                                    if fname:
+                                        url = f"https://dgda.sharepoint.com/:x:/r/sites/CXQAData/_layouts/15/Doc.aspx?sourcedoc=%7B9B3CA3CD-5044-45C7-8A82-0604A1675F46%7D&file={urllib.parse.quote(fname)}&action=default&mobileredirect=true"
+                                        new_lines.append(f"- [{fname}]({url})")
+                                    else:
+                                        new_lines.append(line)
+                                else:
+                                    new_lines.append(line)
+                            new_text = "\n".join(new_lines)
                             source_container["items"].append({
                                 "type": "TextBlock",
-                                "text": text,
+                                "text": new_text,
                                 "wrap": True,
                                 "spacing": "Small"
                             })
