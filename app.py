@@ -1,7 +1,9 @@
-# version 11
+# version 11b 
+# ((Hyperlink file names))
 # Made it display the files sources for the compounded questions:
-    # Referenced: <Files>     
-    # Calculated using: <Tables>
+    # Referenced: <Files>                <-------Hyperlink to sharepoint
+    # Calculated using: <Tables>         <-------Hyperlink to sharepoint
+
 
 import os
 import asyncio
@@ -230,48 +232,28 @@ async def _bot_logic(turn_context: TurnContext):
                         text = item.get("text", "")
                         if text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:"):
                             lines = text.split("\n")
-                            # Add the header ("Referenced:" or "Calculated using:")
+                            # Add the heading ("Referenced:" or "Calculated using:")
                             if lines:
                                 source_container["items"].append({
                                     "type": "TextBlock",
                                     "text": lines[0],
                                     "wrap": True,
-                                    "spacing": "Small"
+                                    "spacing": "Small",
+                                    "weight": "Bolder"
                                 })
-                            # For each file/table, add a row with file name and a tight 🔗 button
+                            # For each file/table, add a markdown link as a TextBlock
                             for line in lines[1:]:
                                 if line.strip().startswith("-"):
                                     fname = line.strip()[1:].strip()
                                     if fname:
+                                        sharepoint_base = "https://dgda.sharepoint.com/:x:/r/sites/CXQAData/_layouts/15/Doc.aspx?sourcedoc=%7B9B3CA3CD-5044-45C7-8A82-0604A1675F46%7D&file={}&action=default&mobileredirect=true"
                                         url = sharepoint_base.format(urllib.parse.quote(fname))
+                                        print(f"DEBUG: Adding file link: {fname} -> {url}")
                                         source_container["items"].append({
-                                            "type": "ColumnSet",
-                                            "spacing": "None",
-                                            "columns": [
-                                                {
-                                                    "type": "Column",
-                                                    "width": "stretch",
-                                                    "items": [
-                                                        {"type": "TextBlock", "text": fname, "wrap": True, "spacing": "None"}
-                                                    ]
-                                                },
-                                                {
-                                                    "type": "Column",
-                                                    "width": "auto",
-                                                    "items": [
-                                                        {
-                                                            "type": "ActionSet",
-                                                            "actions": [
-                                                                {
-                                                                    "type": "Action.OpenUrl",
-                                                                    "title": "🔗",
-                                                                    "url": url
-                                                                }
-                                                            ]
-                                                        }
-                                                    ]
-                                                }
-                                            ]
+                                            "type": "TextBlock",
+                                            "text": f"[{fname}]({url})",
+                                            "wrap": True,
+                                            "spacing": "Small"
                                         })
                                 else:
                                     # If not a file line, just add as text
