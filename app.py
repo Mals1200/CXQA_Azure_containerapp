@@ -240,17 +240,41 @@ async def _bot_logic(turn_context: TurnContext):
                                     "spacing": "Small",
                                     "weight": "Bolder"
                                 })
-                            # For each file/table, add a markdown link as a TextBlock
+                            # For each file/table, add a row with file name and a tight button
                             for line in lines[1:]:
                                 if line.strip().startswith("-"):
                                     fname = line.strip()[1:].strip()
                                     if fname:
-                                        url = sharepoint_base.format(urllib.parse.quote(fname))
+                                        url = urllib.parse.quote(fname)
                                         source_container["items"].append({
-                                            "type": "TextBlock",
-                                            "text": f"[{fname}]({url})",
-                                            "wrap": True,
-                                            "spacing": "Small"
+                                            "type": "ColumnSet",
+                                            "spacing": "None",
+                                            "columns": [
+                                                {
+                                                    "type": "Column",
+                                                    "width": "stretch",
+                                                    "items": [
+                                                        {"type": "TextBlock", "text": fname, "wrap": True, "spacing": "None"}
+                                                    ]
+                                                },
+                                                {
+                                                    "type": "Column",
+                                                    "width": "auto",
+                                                    "items": [
+                                                        {
+                                                            "type": "ActionSet",
+                                                            "actions": [
+                                                                {
+                                                                    "type": "Action.OpenUrl",
+                                                                    "title": "🔗",
+                                                                    "url": url
+                                                                }
+                                                            ],
+                                                            "spacing": "None"
+                                                        }
+                                                    ]
+                                                }
+                                            ]
                                         })
                                 else:
                                     # If not a file line, just add as text
