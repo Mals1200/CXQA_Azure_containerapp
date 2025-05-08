@@ -169,19 +169,15 @@ async def _bot_logic(turn_context: TurnContext):
                             "spacing": "Medium"
                         })
                     elif item_type == "paragraph":
-                        # text = item.get("text", "")
-                        # if text.strip().startswith("Referenced:"):
-                        #     referenced_paragraphs.append(text)
-                        # elif text.strip().startswith("Calculated using:"):
-                        #     calculated_paragraphs.append(text)
-                        # else:
-                        #     other_paragraphs.append(text)
-                        body_blocks.append({
-                            "type": "TextBlock",
-                            "text": item.get("text", ""), # This now includes "Referenced:", "Calculated using:"
-                            "wrap": True,
-                            "spacing": "Small"
-                        })    
+                        text = item.get("text", "")
+                        # Only add to main body if not a reference/calculated paragraph
+                        if not (text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:")):
+                            body_blocks.append({
+                                "type": "TextBlock",
+                                "text": text,
+                                "wrap": True,
+                                "spacing": "Small"
+                            })
                     elif item_type == "bullet_list":
                         items = item.get("items", [])
                         for list_item in items:
@@ -228,72 +224,17 @@ async def _bot_logic(turn_context: TurnContext):
                     "items": []
                 }
                 # Add Referenced/Calculated paragraphs to the collapsible section if present
-                # for text in referenced_paragraphs:
-                #     source_container["items"].append({
-                #         "type": "TextBlock",
-                #         "text": text,
-                #         "wrap": True,
-                #         "spacing": "Small"
-                #     })
-                # for text in calculated_paragraphs:
-                #     source_container["items"].append({
-                #         "type": "TextBlock",
-                #         "text": text,
-                #         "wrap": True,
-                #         "spacing": "Small"
-                #     })
-                # Add file_names/table_names on top if available
-                if "source_details" in response_json:
-                    source_details = response_json["source_details"]
-                    file_names = source_details.get("file_names", [])
-                    table_names = source_details.get("table_names", [])
-                    display_names = []
-                    if file_names:
-                        display_names.extend(file_names)
-                    if table_names:
-                        display_names.extend(table_names)
-                    if display_names:
-                        source_container["items"].append({
-                            "type": "TextBlock",
-                            "text": "Files: " + ", ".join(display_names),
-                            "wrap": True,
-                            "weight": "Bolder",
-                            "color": "Good",
-                            "spacing": "Medium"
-                        })
-                    # Add files/code blocks as before
-                    if "files" in source_details and source_details["files"]:
-                        source_container["items"].append({
-                            "type": "TextBlock",
-                            "text": "**Files:**",
-                            "wrap": True,
-                            "weight": "Bolder",
-                            "spacing": "Medium"
-                        })
-                        source_container["items"].append({
-                            "type": "TextBlock",
-                            "text": source_details["files"],
-                            "wrap": True,
-                            "spacing": "Small",
-                            "fontType": "Monospace",
-                            "size": "Small"
-                        })
-                    if "code" in source_details and source_details["code"]:
-                        source_container["items"].append({
-                            "type": "TextBlock",
-                            "text": "**Code:**",
-                            "wrap": True,
-                            "weight": "Bolder",
-                            "spacing": "Medium"
-                        })
-                        source_container["items"].append({
-                            "type": "TextBlock",
-                            "text": f"```\n{source_details['code']}\n```",
-                            "wrap": True,
-                            "spacing": "Small",
-                            "fontType": "Monospace",
-                            "size": "Small"
-                        })
+                for item in content_items:
+                    if item.get("type", "") == "paragraph":
+                        text = item.get("text", "")
+                        if text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:"):
+                            source_container["items"].append({
+                                "type": "TextBlock",
+                                "text": text,
+                                "wrap": True,
+                                "spacing": "Small"
+                            })
+                # Remove file_names/table_names and code/file blocks from the collapsible section
                 # Always add the source line at the bottom of the container
                 source_container["items"].append({
                     "type": "TextBlock",
@@ -484,7 +425,3 @@ async def _bot_logic(turn_context: TurnContext):
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=80)
-
-
-
-
