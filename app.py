@@ -3,7 +3,7 @@
 # Made it display the files sources for the compounded questions:
     # Referenced: <Files>                <-------Hyperlink to sharepoint
     # Calculated using: <Tables>         <-------Hyperlink to sharepoint
-
+# still the url is fixed to one file. (NEEDS WORK!)
 
 import os
 import asyncio
@@ -246,8 +246,8 @@ async def _bot_logic(turn_context: TurnContext):
                                 if line.strip().startswith("-"):
                                     fname = line.strip()[1:].strip()
                                     if fname:
-                                        sharepoint_base = "https://dgda.sharepoint.com/:x:/r/sites/CXQAData/_layouts/15/Doc.aspx?sourcedoc=%7B9B3CA3CD-5044-45C7-8A82-0604A1675F46%7D&file={}&action=default&mobileredirect=true"
-                                        url = sharepoint_base.format(urllib.parse.quote(fname))
+                                        sharepoint_base = "https://dgda.sharepoint.com/sites/CXQAData/Shared%20Documents/Forms/AllItems.aspx"
+                                        url = sharepoint_base
                                         print(f"DEBUG: Adding file link: {fname} -> {url}")
                                         source_container["items"].append({
                                             "type": "TextBlock",
