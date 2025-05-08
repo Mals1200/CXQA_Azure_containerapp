@@ -230,21 +230,20 @@ async def _bot_logic(turn_context: TurnContext):
                         text = item.get("text", "")
                         if text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:"):
                             lines = text.split("\n")
-                            # Add the heading ("Referenced:" or "Calculated using:")
+                            # Add the header ("Referenced:" or "Calculated using:")
                             if lines:
                                 source_container["items"].append({
                                     "type": "TextBlock",
                                     "text": lines[0],
                                     "wrap": True,
-                                    "spacing": "Small",
-                                    "weight": "Bolder"
+                                    "spacing": "Small"
                                 })
-                            # For each file/table, add a row with file name and a tight button
+                            # For each file/table, add a row with file name and a tight 🔗 button
                             for line in lines[1:]:
                                 if line.strip().startswith("-"):
                                     fname = line.strip()[1:].strip()
                                     if fname:
-                                        url = urllib.parse.quote(fname)
+                                        url = sharepoint_base.format(urllib.parse.quote(fname))
                                         source_container["items"].append({
                                             "type": "ColumnSet",
                                             "spacing": "None",
@@ -268,8 +267,7 @@ async def _bot_logic(turn_context: TurnContext):
                                                                     "title": "🔗",
                                                                     "url": url
                                                                 }
-                                                            ],
-                                                            "spacing": "None"
+                                                            ]
                                                         }
                                                     ]
                                                 }
