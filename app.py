@@ -230,26 +230,60 @@ async def _bot_logic(turn_context: TurnContext):
                     if item.get("type", "") == "paragraph":
                         text = item.get("text", "")
                         if text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:"):
-                            # Replace file names with markdown links
                             lines = text.split("\n")
-                            new_lines = []
-                            for line in lines:
+                            # Add the heading ("Referenced:" or "Calculated using:")
+                            if lines:
+                                source_container["items"].append({
+                                    "type": "TextBlock",
+                                    "text": lines[0],
+                                    "wrap": True,
+                                    "spacing": "Small",
+                                    "weight": "Bolder"
+                                })
+                            # For each file/table, add a row with file name and a tight button
+                            for line in lines[1:]:
                                 if line.strip().startswith("-"):
                                     fname = line.strip()[1:].strip()
                                     if fname:
-                                        url = f"https://dgda.sharepoint.com/:x:/r/sites/CXQAData/_layouts/15/Doc.aspx?sourcedoc=%7B9B3CA3CD-5044-45C7-8A82-0604A1675F46%7D&file={urllib.parse.quote(fname)}&action=default&mobileredirect=true"
-                                        new_lines.append(f"- [{fname}]({url})")
-                                    else:
-                                        new_lines.append(line)
+                                        url = urllib.parse.quote(fname)
+                                        source_container["items"].append({
+                                            "type": "ColumnSet",
+                                            "spacing": "None",
+                                            "columns": [
+                                                {
+                                                    "type": "Column",
+                                                    "width": "stretch",
+                                                    "items": [
+                                                        {"type": "TextBlock", "text": fname, "wrap": True, "spacing": "None"}
+                                                    ]
+                                                },
+                                                {
+                                                    "type": "Column",
+                                                    "width": "auto",
+                                                    "items": [
+                                                        {
+                                                            "type": "ActionSet",
+                                                            "actions": [
+                                                                {
+                                                                    "type": "Action.OpenUrl",
+                                                                    "title": "🔗",
+                                                                    "url": url
+                                                                }
+                                                            ],
+                                                            "spacing": "None"
+                                                        }
+                                                    ]
+                                                }
+                                            ]
+                                        })
                                 else:
-                                    new_lines.append(line)
-                            new_text = "\n".join(new_lines)
-                            source_container["items"].append({
-                                "type": "TextBlock",
-                                "text": new_text,
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
+                                    # If not a file line, just add as text
+                                    source_container["items"].append({
+                                        "type": "TextBlock",
+                                        "text": line,
+                                        "wrap": True,
+                                        "spacing": "Small"
+                                    })
                 # Remove file_names/table_names and code/file blocks from the collapsible section
                 # Always add the source line at the bottom of the container
                 source_container["items"].append({
