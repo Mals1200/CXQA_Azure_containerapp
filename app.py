@@ -1,8 +1,7 @@
-# version 11b 
-# ((Hyperlink file names))
+# version 11
 # Made it display the files sources for the compounded questions:
-    # Referenced: <Files>                <-------Hyperlink to sharepoint
-    # Calculated using: <Tables>         <-------Hyperlink to sharepoint
+    # Referenced: <Files>     
+    # Calculated using: <Tables>
 
 import os
 import asyncio
