@@ -247,20 +247,21 @@ async def _bot_logic(turn_context: TurnContext):
                     source_details = response_json["source_details"]
                     file_names = source_details.get("file_names", [])
                     table_names = source_details.get("table_names", [])
-                    display_names = []
-                    if file_names:
-                        display_names.extend(file_names)
-                    if table_names:
-                        display_names.extend(table_names)
-                    if display_names:
-                        source_container["items"].append({
-                            "type": "TextBlock",
-                            "text": "Files: " + ", ".join(display_names),
-                            "wrap": True,
-                            "weight": "Bolder",
-                            "color": "Good",
-                            "spacing": "Medium"
-                        })
+                    # --- REMOVED: Files: ... line ---
+                    # display_names = []
+                    # if file_names:
+                    #     display_names.extend(file_names)
+                    # if table_names:
+                    #     display_names.extend(table_names)
+                    # if display_names:
+                    #     source_container["items"].append({
+                    #         "type": "TextBlock",
+                    #         "text": "Files: " + ", ".join(display_names),
+                    #         "wrap": True,
+                    #         "weight": "Bolder",
+                    #         "color": "Good",
+                    #         "spacing": "Medium"
+                    #     })
                     # Add files/code blocks as before
                     if "files" in source_details and source_details["files"]:
                         source_container["items"].append({
@@ -484,7 +485,6 @@ async def _bot_logic(turn_context: TurnContext):
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=80)
-
 
 
 
