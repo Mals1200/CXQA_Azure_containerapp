@@ -1,10 +1,9 @@
 # version 22
 # Brahims UW version 23.
-# fixed display of all agents
+# fixed display of all agents (still compounded not working) testing 
 # Optimised:
 # (put optimizations here)
-# works with app.py version #??
-
+# works with app.py version #11
 
 import os
 import io
@@ -715,8 +714,25 @@ Chat_history:
     # Check references vs. user tier
     access_issue = reference_table_data(code_str, user_tier)
     if access_issue:
-        # Return a short "no access" style message
-        return {"result": access_issue, "code": "", "table_names": []}
+        # Extract table names from the code even if access is denied
+        table_names = []
+        # Pattern 1: dataframes.get("filename")
+        pattern1 = re.compile(r'dataframes\.get\(\s*[\'\"]([^\'\"]+)[\'\"]\s*\)')
+        matches1 = pattern1.findall(code_str)
+        if matches1:
+            for match in matches1:
+                if match not in table_names:
+                    table_names.append(match)
+        # Pattern 2: pd.read_excel("filename") or pd.read_csv("filename")
+        pattern2 = re.compile(r'pd\.read_(?:excel|csv)\(\s*[\'\"]([^\'\"]+)[\'\"]\s*\)')
+        matches2 = pattern2.findall(code_str)
+        if matches2:
+            for match in matches2:
+                if match not in table_names:
+                    table_names.append(match)
+        # Limit to max 3 table names, but keep file extensions
+        table_names = table_names[:3]
+        return {"result": access_issue, "code": code_str, "table_names": table_names}
     
     # Extract table names from the code - check both patterns
     table_names = []
