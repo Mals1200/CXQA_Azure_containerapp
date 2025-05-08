@@ -208,14 +208,17 @@ async def _bot_logic(turn_context: TurnContext):
                             "fontType": "Monospace",
                             "spacing": "Medium"
                         })
-                # Add all non-source paragraphs to the main body
-                # for text in other_paragraphs:
-                #     body_blocks.append({
-                #         "type": "TextBlock",
-                #         "text": text,
-                #         "wrap": True,
-                #         "spacing": "Small"
-                #     })
+                # Add Referenced/Calculated paragraphs to the collapsible section if present
+                for item in content_items:
+                    if item.get("type") == "paragraph":
+                        text = item.get("text", "")
+                        if text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:"):
+                            source_container["items"].append({
+                                "type": "TextBlock",
+                                "text": text,
+                                "wrap": True,
+                                "spacing": "Small"
+                            })
                 # Create the source section
                 source_container = {
                     "type": "Container",
@@ -227,21 +230,6 @@ async def _bot_logic(turn_context: TurnContext):
                     "isScrollable": True, 
                     "items": []
                 }
-                # Add Referenced/Calculated paragraphs to the collapsible section if present
-                # for text in referenced_paragraphs:
-                #     source_container["items"].append({
-                #         "type": "TextBlock",
-                #         "text": text,
-                #         "wrap": True,
-                #         "spacing": "Small"
-                #     })
-                # for text in calculated_paragraphs:
-                #     source_container["items"].append({
-                #         "type": "TextBlock",
-                #         "text": text,
-                #         "wrap": True,
-                #         "spacing": "Small"
-                #     })
                 # Add file_names/table_names on top if available
                 if "source_details" in response_json:
                     source_details = response_json["source_details"]
