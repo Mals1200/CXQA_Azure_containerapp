@@ -169,19 +169,15 @@ async def _bot_logic(turn_context: TurnContext):
                             "spacing": "Medium"
                         })
                     elif item_type == "paragraph":
-                        # text = item.get("text", "")
-                        # if text.strip().startswith("Referenced:"):
-                        #     referenced_paragraphs.append(text)
-                        # elif text.strip().startswith("Calculated using:"):
-                        #     calculated_paragraphs.append(text)
-                        # else:
-                        #     other_paragraphs.append(text)
-                        body_blocks.append({
-                            "type": "TextBlock",
-                            "text": item.get("text", ""), # This now includes "Referenced:", "Calculated using:"
-                            "wrap": True,
-                            "spacing": "Small"
-                        })    
+                        text = item.get("text", "")
+                        # Only add to main body if not a reference/calculated paragraph
+                        if not (text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:")):
+                            body_blocks.append({
+                                "type": "TextBlock",
+                                "text": text,
+                                "wrap": True,
+                                "spacing": "Small"
+                            })
                     elif item_type == "bullet_list":
                         items = item.get("items", [])
                         for list_item in items:
