@@ -3,7 +3,7 @@
 # Optimised:
 # (put optimizations here)
 # works with app.py version #??
-
+# used new index in the code
 
 
 import os
@@ -30,9 +30,6 @@ import time
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
 #######################################################################################
-#######################################################################################
-#                               GLOBAL CONFIG / CONSTANTS
-#######################################################################################
 CONFIG = {
     # ── MAIN, high-capacity model (Tool-1 Index, Tool-2 Python, Tool-3 Fallback) ──
     "LLM_ENDPOINT"     : "https://cxqaazureaihub2358016269.openai.azure.com/"
@@ -49,8 +46,8 @@ CONFIG = {
     "SEARCH_SERVICE_NAME": "cxqa-azureai-search",
     "SEARCH_ENDPOINT"    : "https://cxqa-azureai-search.search.windows.net",
     "ADMIN_API_KEY"      : "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv",
-    "INDEX_NAME"         : "vector-1741865904949",
-    "SEMANTIC_CONFIG_NAME": "vector-1741865904949-semantic-configuration",
+    "INDEX_NAME"         : "vector-1746718296853-08-05-2025",
+    "SEMANTIC_CONFIG_NAME": "vector-1746718296853-08-05-2025-semantic-configuration",
     "CONTENT_FIELD"      : "chunk",
     "ACCOUNT_URL"        : "https://cxqaazureaihub8779474245.blob.core.windows.net",
     "SAS_TOKEN"          : (
