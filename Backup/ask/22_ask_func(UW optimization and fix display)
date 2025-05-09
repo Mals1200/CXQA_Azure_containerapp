@@ -5,6 +5,7 @@
 # works with app.py version #??
 
 
+
 import os
 import io
 import re
@@ -442,12 +443,13 @@ def references_tabular_data(question, tables_text):
     {tables_text}
 
     Decision Rules:
-    1. Reply 'YES' if the question needs facts, statistics, totals, calculations, historical data, comparisons, or analysis typically stored in structured datasets listed in Available Tables.
-    2. Reply 'NO' if the question is general, opinion-based, theoretical, policy-related, or does not require specific data from these tables.
+    1. Reply 'YES' ONLY if the question explicitly asks for numerical facts, figures, statistics, totals, direct calculations from table columns, or specific record lookups that are clearly obtainable from the structured datasets listed in Available Tables.
+    2. Reply 'NO' if the question is general, opinion-based, theoretical, policy-related, or does not require specific numerical data directly from these tables.
     3. Completely ignore the sample rows of the tables. Assume full datasets exist beyond the samples.
-    4. Be STRICT: only reply 'NO' if you are CERTAIN the tables are not needed.
-    5. Do NOT create or assume data. Only decide if the listed tabular data is NEEDED to answer the User Question.
+    4. Be STRICT: only reply 'NO' if you are CERTAIN the tables are not needed for direct data extraction.
+    5. Do NOT create or assume data. Only decide if the listed tabular data is NEEDED to answer the User Question by directly querying the table.
     6. Base your decision ONLY on the User Question and the list of Available Tables. IGNORE any potential chat history.
+    7. Questions asking for qualitative summaries, opinions, 'areas of improvement', 'key findings', or general topics often found in narrative reports or policy documents should be classified as 'NO', even if they mention dates or entities that might also appear in tables, UNLESS the question specifically asks for quantifiable metrics, counts, or statistics directly from those tables.
 
     Final instruction: Reply ONLY with 'YES' or 'NO'.
     """
@@ -681,20 +683,33 @@ def tool_2_code_run(user_question, user_tier=1, recent_history=None):
     rhistory = recent_history if recent_history else []
 
     system_prompt = f"""
-You are a python expert. Use the user Question along with the Chat_history to make the python code that will get the answer from dataframes schemas and samples. 
-Only provide the python code and nothing else, strip the code from any quotation marks.
-Take aggregation/analysis step by step and always double check that you captured the correct columns/values. 
-Don't give examples, only provide the actual code. If you can't provide the code, say "404" and make sure it's a string.
+You are a python expert. Use the User Question along with the Chat_history to make the python code that will get the answer from the provided Dataframes schemas and samples.
+Only provide the python code and nothing else, without any markdown fences like ```python or ```.
+Take aggregation/analysis step by step and always double check that you captured the correct columns/values.
+Don't give examples, only provide the actual code. If you can't provide the code, say "404" as a string.
 
-**Rules**:
-1. Only use columns that actually exist. Do NOT invent columns or table names.
-2. Don't rely on sample rows; the real dataset can have more data. Just reference the correct columns as shown in the schemas.
-3. Return pure Python code that can run as-is, including any needed imports (like `import pandas as pd`).
-4. The code must produce a final print statement with the answer.
-5. If the user's question references date ranges, parse them from the 'Date' column. If monthly data is requested, group by month or similar.
-6. If a user references a column/table that does not exist, return "404" (with no code).
-7. Use semantic reasoning to handle synonyms or minor typos (e.g., "Al Bujairy," "albujairi," etc.), as long as they reasonably map to the real table names.
-8. Do not use Chat_history embed Information or Answers in the code. 
+**General Rules**:
+1. Only use columns that actually exist as per the schemas. Do NOT invent columns or table names.
+2. Don't rely on sample rows for data content; the real dataset can have more/different data. Always reference columns as shown in the schemas.
+3. Return pure Python code that can run as-is, including necessary imports (like `import pandas as pd`).
+4. The code must produce a final `print()` statement with the answer. If multiple pieces of information are requested, print them clearly labeled.
+5. If a user references a column/table that does not exist in the schemas, return "404".
+6. Use semantic reasoning to handle synonyms or minor typos for table/column names if they reasonably map to the provided schemas.
+7. Do not use Chat_history information directly within the generated code logic or print statements, but use it for context if needed to understand the user's question.
+
+**Data Handling Rules for Pandas Code**:
+A. **Numeric Conversion:** When a column is expected to be numeric for calculations (e.g., for .sum(), .mean(), comparisons):
+   - First, replace common non-numeric placeholders (like '-', 'N/A', or strings containing only spaces) with `pd.NA` or `numpy.nan`. For example: `df['column_name'] = df['column_name'].replace(['-', 'N/A', ' ', '  '], pd.NA)`
+   - Then, explicitly convert the column to a numeric type using `pd.to_numeric(df['column_name'], errors='coerce')`. This will turn any remaining unparseable values into `NaN`.
+B. **Handle NaN Values:** Before performing aggregate functions (like `.sum()`, `.mean()`) or arithmetic operations on numeric columns, ensure `NaN` values are handled, e.g., by using `skipna=True` (which is default for many aggregations like `.sum()`) or by explicitly filling them (e.g., `df['numeric_column'].fillna(0).sum()`).
+C. **Date Columns:** If the question involves dates:
+   - Convert date-like columns to datetime objects using `pd.to_datetime(df['Date_column'], errors='coerce')`.
+   - When comparing or merging data based on dates across multiple dataframes, ensure date columns are of a consistent datetime type and format. Be careful with operations that require aligned date indexes.
+D. **Complex Lookups:** For questions requiring data from multiple tables (e.g., "find X in table A on the date of max Y in table B"):
+   - First, determine the intermediate value (e.g., the date of max Y).
+   - Then, use that value to filter/query the second table.
+   - Ensure data types are compatible for lookups or merges.
+E. **Error Avoidance:** Generate code that is robust. If a filtering step might result in an empty DataFrame or Series, check for this (e.g., `if not df_filtered.empty:`) before trying to access elements by index (e.g., `.iloc[0]`) or perform calculations that would fail on empty data. If data is not found after filtering, print a message like "No data available for the specified criteria." 
 
 User question:
 {user_question}
@@ -1074,6 +1089,7 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
         if src == "Index & Python":
             files  = index_dict .get("file_names", [])
             tables = python_dict.get("table_names", [])
+            print(f"DEBUG: [post_process_source] src='Index & Python'. Files List: {files}, Tables List: {tables}")
             response_json["source_details"] = {
                 "files"       : "", #index_dict.get("top_k", "No information"),
                 "code"        : "", #python_dict.get("code", ""),
@@ -1143,7 +1159,7 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
         code_text   = python_dict.get("code"  , "")
         file_names  = index_dict .get("file_names" , [])
         table_names = python_dict.get("table_names", [])
-
+        
         src_idx = final_text.lower().find("source:")
         if src_idx >= 0:
             eol = final_text.find("\n", src_idx)
