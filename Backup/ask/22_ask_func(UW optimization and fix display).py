@@ -1,12 +1,10 @@
-# version 22 Brahims UW version.
-# fixed display of all agents
+# version 22
+# Brahims UW version 23.
+# fixed display of all agents (still compounded not working) testing 
 # Optimised:
 # (put optimizations here)
-# works with app.py version #??
-# used new index in the code
+# works with app.py version #11
 
-
-# Brahims UW version 22
 import os
 import io
 import re
@@ -28,30 +26,28 @@ from collections import OrderedDict
 import difflib
 import time
 
-#######################################################################################
-#                               GLOBAL CONFIG / CONSTANTS
-#######################################################################################
+
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
 #######################################################################################
 CONFIG = {
     # ── MAIN, high-capacity model (Tool-1 Index, Tool-2 Python, Tool-3 Fallback) ──
-    "LLM_ENDPOINT"     : "https://cxqaazureaihub2358016269.openai.azure.com/"
-                         "openai/deployments/gpt-4o-3/chat/completions?api-version=2025-01-01-preview",
+    "LLM_ENDPOINT"     : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
+                         "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
 
     # same key used for both deployments
-    "LLM_API_KEY"      : "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor",
+    "LLM_API_KEY"      : "5EgVev7KCYaO758NWn5yL7f2iyrS4U3FaSI5lQhTx7RlePQ7QMESJQQJ99AKACHYHv6XJ3w3AAAAACOGoSfb",
 
     # ── AUXILIARY model (classifiers, splitters, etc.) ────────────────────────────
-    "LLM_ENDPOINT_AUX" : "https://cxqaazureaihub2358016269.openai.azure.com/"
+    "LLM_ENDPOINT_AUX" : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
                          "openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview",
 
     # (unchanged settings below) ───────────────────────────────────────────────────
     "SEARCH_SERVICE_NAME": "cxqa-azureai-search",
     "SEARCH_ENDPOINT"    : "https://cxqa-azureai-search.search.windows.net",
     "ADMIN_API_KEY"      : "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv",
-    "INDEX_NAME"         : "vector-1741865904949",
-    "SEMANTIC_CONFIG_NAME": "vector-1741865904949-semantic-configuration",
+    "INDEX_NAME"         : "vector-1746718296853-08-05-2025",  #"vector-1741865904949",
+    "SEMANTIC_CONFIG_NAME": "vector-1746718296853-08-05-2025-semantic-configuration", #"vector-1741865904949-semantic-configuration",
     "CONTENT_FIELD"      : "chunk",
     "ACCOUNT_URL"        : "https://cxqaazureaihub8779474245.blob.core.windows.net",
     "SAS_TOKEN"          : (
@@ -457,24 +453,46 @@ def references_tabular_data(question, tables_text):
     clean_response = llm_response.strip().upper()
     return "YES" in clean_response
 
-def is_text_relevant(question, snippet):
+# In ask_func_client_2.py
+# Replace your existing is_text_relevant function with this:
+def is_text_relevant(question, snippet, question_needs_tables_too: bool): # Added new parameter
     if not snippet or not snippet.strip():
         logging.debug("[Relevance Check] Snippet is empty, returning False.")
         return False
 
+    context_guidance = ""
+    if question_needs_tables_too:
+        context_guidance = (
+            "The User Question is also expected to be answered by data from tables. "
+            "Therefore, this Text Snippet is relevant ONLY IF it provides crucial context, "
+            "definitions, or directly related information that the tables might not offer for this specific question. "
+            "General mentions of the same topics, entities, or dates found in broad reports are LESS LIKELY to be relevant "
+            "if the core answer is expected from a table."
+        )
+    else: # Question does NOT need tables, so index is primary source for it
+        context_guidance = (
+            "The User Question is expected to be answered primarily by text documents like this Snippet. "
+            "Therefore, consider it relevant if it addresses the question's topic, keywords, or provides background."
+        )
+
     system_prompt = (
         "You are an expert relevance classifier. Your goal is to determine if the provided text Snippet "
-        "contains information that could DIRECTLY help answer the User Question or is highly related to the question's topic.\n"
-        "Focus on keywords, topics, entities, and the general subject matter.\n"
-        "Consider the snippet relevant even if it only partially answers the question or provides essential background context.\n"
-        "Be critical, but do not discard potentially useful information too easily, especially if keywords overlap.\n"
+        "contains information that could DIRECTLY help answer the User Question or is highly related.\n"
+        f"{context_guidance}\n"
+        "Focus on keywords, topics, and entities. "
+        "Consider the snippet relevant even if it only partially answers the question or provides essential background context, "
+        "especially if it's from a policy or procedure document for a how-to question.\n"
+        "Be critical for general report snippets if the question is very specific and likely answerable by data tables.\n"
         "Respond ONLY with 'YES' or 'NO'."
     )
-    max_snippet_len = 500
+    max_snippet_len = 500 # Truncate long snippets for the prompt
     snippet_for_prompt = snippet[:max_snippet_len] + "..." if len(snippet) > max_snippet_len else snippet
-    user_prompt = f"User Question:\n{question}\n\nText Snippet:\n{snippet_for_prompt}\n\nIs this snippet relevant to answering the question? Respond YES or NO."
+    
+    user_prompt = f"User Question:\n{question}\n\nText Snippet:\n{snippet_for_prompt}\n\nIs this snippet relevant? Respond YES or NO."
+    
     content = call_llm_aux(system_prompt, user_prompt, max_tokens=10, temperature=0.0)
-    #print(f"DEBUG: [Relevance Check] Q: '{question[:50]}...' Snippet: '{snippet[:60]}...' -> LLM Raw Response: '{content}'")
+    # Keep this one debug line to see the direct output of the relevance check
+    #print(f"DEBUG: [Relevance Check] Q: '{question[:50]}...' NeedsTables: {question_needs_tables_too} -> LLM Raw Response: '{content}'")
     is_relevant_flag = content.strip().upper().startswith("YES")
     return is_relevant_flag
     
@@ -484,7 +502,7 @@ def is_text_relevant(question, snippet):
 #######################################################################################
 # --- Modified tool_1_index_search with detailed logging ---
 @azure_retry()
-def tool_1_index_search(user_question, top_k=5, user_tier=1):
+def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_tabular: bool = False):
     """
     Modified version: uses split_question_into_subquestions to handle multi-part queries.
     Then filters out docs the user has no access to, before final top_k selection.
@@ -557,15 +575,19 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1):
             title = doc["title"]
              # --- Added Log ---
             #print(f"DEBUG: [Tool 1]  Filtering doc {i+1}/{len(merged_docs)}: Title='{title}'")
-            file_tier = get_file_tier(title)        # ‘title’ already defined a few lines up
-            if user_tier < file_tier:
-                continue                            # RBAC failed → skip this doc
-
-            if not is_text_relevant(user_question, snippet):
-                continue                            # LLM judged it irrelevant → skip
-
-            relevant_docs.append(doc)               # Passed both checks → keep
-
+            file_tier = get_file_tier(title)
+            rbac_pass = user_tier >= file_tier
+            # --- Added Log ---
+            #print(f"DEBUG: [Tool 1]   RBAC Check: UserTier={user_tier}, FileTier={file_tier}, Pass={rbac_pass}")
+            if rbac_pass:
+                # --- Log relevance check ---
+                #print(f"DEBUG: [Tool 1]   Checking relevance for snippet: '{snippet[:60]}...'")
+                is_relevant_result = is_text_relevant(user_question, snippet, question_primarily_tabular) # Call relevance check
+                # --- Added Log ---
+                #print(f"DEBUG: [Tool 1]   Relevance Check Result: {is_relevant}")
+                # --- End log relevance check ---
+                if is_relevant_result: # Actually use the result for filtering
+                    relevant_docs.append(doc)
                 #print(f"DEBUG: [Tool 1]   >>> Doc {i+1} passed RBAC, ADDED to relevant_docs (Relevance ignored).")
             #else:
                  # --- Added Log ---
@@ -671,6 +693,7 @@ Don't give examples, only provide the actual code. If you can't provide the code
 6. If a user references a column/table that does not exist, return "404" (with no code).
 7. Use semantic reasoning to handle synonyms or minor typos (e.g., "Al Bujairy," "albujairi," etc.), as long as they reasonably map to the real table names.
 8. Do not use Chat_history embed Information or Answers in the code. 
+9. when working with 2 tables with date/time, Its  Very important TO make them the same format 
 
 User question:
 {user_question}
@@ -690,8 +713,25 @@ Chat_history:
     # Check references vs. user tier
     access_issue = reference_table_data(code_str, user_tier)
     if access_issue:
-        # Return a short "no access" style message
-        return {"result": access_issue, "code": "", "table_names": []}
+        # Extract table names from the code even if access is denied
+        table_names = []
+        # Pattern 1: dataframes.get("filename")
+        pattern1 = re.compile(r'dataframes\.get\(\s*[\'\"]([^\'\"]+)[\'\"]\s*\)')
+        matches1 = pattern1.findall(code_str)
+        if matches1:
+            for match in matches1:
+                if match not in table_names:
+                    table_names.append(match)
+        # Pattern 2: pd.read_excel("filename") or pd.read_csv("filename")
+        pattern2 = re.compile(r'pd\.read_(?:excel|csv)\(\s*[\'\"]([^\'\"]+)[\'\"]\s*\)')
+        matches2 = pattern2.findall(code_str)
+        if matches2:
+            for match in matches2:
+                if match not in table_names:
+                    table_names.append(match)
+        # Limit to max 3 table names, but keep file extensions
+        table_names = table_names[:3]
+        return {"result": access_issue, "code": code_str, "table_names": table_names}
     
     # Extract table names from the code - check both patterns
     table_names = []
@@ -925,7 +965,7 @@ Important guidelines:
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
 
-Only For multi-part questions, organize your response clearly with appropriate headings or sections 
+For multi-part questions, organize your response clearly with appropriate headings or sections 
 for each part of the answer. If one part comes from Index and another from Python, use both sources.
 
 User question:
@@ -1056,7 +1096,7 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
                 "file_names"  : files,
                 "table_names" : tables
             }
-            #_inject_refs(response_json, files, tables)
+            _inject_refs(response_json, files, tables)
         elif src == "Index":
             files = index_dict.get("file_names", [])
             response_json["source_details"] = {
@@ -1076,7 +1116,7 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
                 "code"        : "",
                 "table_names" : tables
             }
-            #_inject_refs(response_json, tables=tables)
+            _inject_refs(response_json, tables=tables)
         else:
             response_json["source_details"] = {}
                 
@@ -1282,6 +1322,7 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     if not user_question.strip():
         return
 
+    # is_entirely_greeting_or_punc definition remains the same
     def is_entirely_greeting_or_punc(phrase):
         greet_words = {
             "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "Good morning", "goodevening", "good evening",
@@ -1299,36 +1340,84 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
 
     user_question_stripped = user_question.strip()
     if is_entirely_greeting_or_punc(user_question_stripped):
-        if len(chat_history) < 4:
+        if len(chat_history) < 4: # Assuming chat_history is a global or properly scoped variable
             yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         else:
             yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         return
 
-    # Check cache
     cache_key = user_question_stripped.lower()
-    if cache_key in tool_cache:
-        _, _, cached_answer = tool_cache[cache_key]
-        yield cached_answer
+    if cache_key in tool_cache: # Assuming tool_cache is a global or properly scoped variable
+        logging.info(f"Cache hit for question: {user_question_stripped}")
+        yield tool_cache[cache_key][2] 
         return
+    logging.info(f"Cache miss for question: {user_question_stripped}")
 
-    needs_tabular_data = references_tabular_data(user_question, TABLES)
-    index_dict = {"top_k": "No information"}
-    python_dict = {"result": "No information", "code": ""}
+    # This flag is now central
+    question_needs_tables = references_tabular_data(user_question, TABLES) # TABLES needs to be defined globally
 
-    if needs_tabular_data:
+    index_dict = {"top_k": "No information", "file_names": []}
+    python_dict = {"result": "No information", "code": "", "table_names": []}
+    run_tool_1 = True # Default to running Tool 1
+
+    if question_needs_tables:
+        logging.info("Question likely needs tabular data. Running Tool 2...")
         python_dict = tool_2_code_run(user_question, user_tier=user_tier, recent_history=recent_history)
 
-    index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
+        question_lower = user_question.lower()
+        calc_keywords = ["calculate", "total", "average", "sum", "count", "how many", "revenue", "volume", "footfall", "what is the visits", "visitation", "sales", "attendance", "utilization", "parking", "tickets"]
+        policy_keywords = ["policy", "procedure", "what to do", "how to", "describe", "sop", "guideline", "rule", "if someone", "in case of", "address"]
+        
+        has_calc_keyword = any(keyword in question_lower for keyword in calc_keywords)
+        has_policy_keyword = any(keyword in question_lower for keyword in policy_keywords)
+        
+        tool_2_succeeded = python_dict.get("result", "").strip().lower() not in ["", "no information"] and \
+                           not python_dict.get("result", "Error").lower().startswith("error") # Check for actual success
+
+        if has_calc_keyword and not has_policy_keyword and tool_2_succeeded:
+            logging.info("Heuristic: Question is computational and Tool 2 succeeded; SKIPPING Tool 1.")
+            run_tool_1 = False
+        else:
+            logging.info("Heuristic: Running Tool 1 for context or due to question type/Tool 2 result.")
+    else:
+        logging.info("Question does not need tabular data. Ensuring Tool 1 runs.")
+        run_tool_1 = True
+
+    if run_tool_1:
+        logging.info("Running Tool 1 (Index Search)...")
+        # Pass the flag to tool_1_index_search
+        index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier, question_primarily_tabular=question_needs_tables)
+    else:
+        logging.info("Tool 1 was skipped.")
+        # index_dict remains as default {"top_k": "No information", "file_names": []}
 
     raw_answer = ""
-    for token in final_answer_llm(user_question, index_dict, python_dict):
-        raw_answer += token
+    try:
+        for token in final_answer_llm(user_question, index_dict, python_dict):
+            raw_answer += token
+    except Exception as final_llm_error:
+         logging.error(f"Error during final_answer_llm generation: {final_llm_error}")
+         error_json = json.dumps({
+             "content": [{"type": "paragraph", "text": "Sorry, an error occurred while generating the final response."}],
+             "source": "Error", "source_details": {"error": str(final_llm_error)}
+         })
+         yield error_json
+         return
 
-    # Now unify repeated text cleaning
-    raw_answer = clean_text(raw_answer)
+    # Consider if clean_text is safe for JSON strings. Usually, it's not.
+    # raw_answer = clean_text(raw_answer) 
 
-    final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict)
+    try:
+        final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict, user_question=user_question)
+    except Exception as post_process_error:
+        logging.error(f"Error during post_process_source: {post_process_error}")
+        error_json = json.dumps({
+             "content": [{"type": "paragraph", "text": "Sorry, an error occurred while processing the response."}],
+             "source": "Error", "source_details": {"error": str(post_process_error), "raw_llm_output": raw_answer}
+         })
+        yield error_json
+        return
+
     tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
     yield final_answer_with_source
 
