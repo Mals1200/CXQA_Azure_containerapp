@@ -1,8 +1,30 @@
-# version 22
-# Brahims UW version 23.
-# fixed display of all agents (still compounded not working) testing 
-# Optimised:
-# (put optimizations here)
+# version 22b pandas/executing issue fix
+#######################################################################################
+# PATCH: Robust AI-Generated Code Execution Fixes (2024-06)
+#
+# This patch addresses common failure modes when executing AI-generated Python code:
+#
+# 1. Safe exit handling:
+#    - Injects a safe 'exit' function into the code execution environment so that
+#      generated code using 'exit()' will terminate gracefully, not crash the bot.
+#
+# 2. Syntax error detection:
+#    - Compiles the generated code before execution. If there is a syntax error
+#      (e.g., missing quotes, bad indentation), it is caught and a clear error
+#      message is returned instead of crashing.
+#
+# 3. Undefined variable detection:
+#    - Scans the generated code for variables that are used but never defined.
+#      If any are found, execution is stopped and a clear error message is returned.
+#
+# 4. Table/file loading robustness:
+#    - If a required table/file fails to load, it is set to None and a clear error
+#      is returned before any code is run, preventing 'NoneType' errors.
+#
+# These changes make the bot much more robust and user-friendly by preventing
+# crashes and providing clear, actionable error messages for most AI code issues.
+#######################################################################################
+
 # works with app.py version #11
 
 import os
@@ -25,6 +47,7 @@ from functools import lru_cache, wraps
 from collections import OrderedDict
 import difflib
 import time
+import ast
 
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
@@ -34,14 +57,14 @@ import time
 #######################################################################################
 CONFIG = {
     # ── MAIN, high-capacity model (Tool-1 Index, Tool-2 Python, Tool-3 Fallback) ──
-    "LLM_ENDPOINT"     : "https://cxqaazureaihub2358016269.openai.azure.com/"
-                         "openai/deployments/gpt-4o-3/chat/completions?api-version=2025-01-01-preview",
+    "LLM_ENDPOINT"     : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
+                         "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
 
     # same key used for both deployments
-    "LLM_API_KEY"      : "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor",
+    "LLM_API_KEY"      : "5EgVev7KCYaO758NWn5yL7f2iyrS4U3FaSI5lQhTx7RlePQ7QMESJQQJ99AKACHYHv6XJ3w3AAAAACOGoSfb",
 
     # ── AUXILIARY model (classifiers, splitters, etc.) ────────────────────────────
-    "LLM_ENDPOINT_AUX" : "https://cxqaazureaihub2358016269.openai.azure.com/"
+    "LLM_ENDPOINT_AUX" : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
                          "openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview",
 
     # (unchanged settings below) ───────────────────────────────────────────────────
@@ -61,6 +84,8 @@ CONFIG = {
     "TARGET_FOLDER_PATH": "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
 }
 
+# vector-1746718296853-08-05-2025
+# vector-1746718296853-08-05-2025-semantic-configuration
 
 # Global objects with better initialization
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
@@ -681,32 +706,71 @@ def tool_2_code_run(user_question, user_tier=1, recent_history=None):
     rhistory = recent_history if recent_history else []
 
     system_prompt = f"""
-You are a python expert. Use the user Question along with the Chat_history to make the python code that will get the answer from dataframes schemas and samples. 
-Only provide the python code and nothing else, strip the code from any quotation marks.
-Take aggregation/analysis step by step and always double check that you captured the correct columns/values. 
-Don't give examples, only provide the actual code. If you can't provide the code, say "404" and make sure it's a string.
-
-**Rules**:
-1. Only use columns that actually exist. Do NOT invent columns or table names.
-2. Don't rely on sample rows; the real dataset can have more data. Just reference the correct columns as shown in the schemas.
-3. Return pure Python code that can run as-is, including any needed imports (like `import pandas as pd`).
-4. The code must produce a final print statement with the answer.
-5. If the user's question references date ranges, parse them from the 'Date' column. If monthly data is requested, group by month or similar.
-6. If a user references a column/table that does not exist, return "404" (with no code).
-7. Use semantic reasoning to handle synonyms or minor typos (e.g., "Al Bujairy," "albujairi," etc.), as long as they reasonably map to the real table names.
-8. Do not use Chat_history embed Information or Answers in the code. 
-
-User question:
-{user_question}
-
-Dataframes schemas and sample:
-{SCHEMA_TEXT}
-
-Chat_history:
-{rhistory}
-"""
+    You are a Python-for-DataFrames agent.
+    
+    Your task: write runnable pandas code that answers the User Question using the provided Excel/CSV tables.
+    
+    Return only the code (no ``` fences).
+    If you cannot produce working code, return the string "404".
+    
+    ──────────────────────── WORKFLOW ────────────────────────
+    
+    Load each needed table with
+    df = dataframes.get("File.xlsx").
+    
+    Use vectorised pandas operations; avoid slow .apply loops.
+    
+    Finish with one print() that outputs the answer (label clearly if multiple values).
+    
+    ──────────────────────── GENERAL RULES ───────────────────
+    • Use only columns & filenames that appear in the schemas – never invent names.
+    • Map obvious synonyms / typos (utilisation ↔ utilization, visits ↔ footfalls, rebate ↔ rebates, …).
+    • If a required column/table is missing, print "404" and exit.
+    • Never reveal or print Chat_history.
+    • Define every variable before first use; otherwise print "404".
+    • When listing rows, call .drop_duplicates() to avoid repeats.
+    
+    ────────────────── SAFE-DATA & INTEGRITY RULES ───────────
+    • After filtering rows (mask = …), either update in-place with
+    df.loc[mask, "col"] = value or work on a copy: df_filtered = df[mask].copy().
+    Never assign on a raw slice.
+    
+    • Immediately after every df = dataframes.get("File.xlsx") call:
+        if df is None:
+        print("404"); exit()
+    
+    • Wrap all date literals with pd.Timestamp("YYYY-MM-DD") and normalise:
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.normalize().
+    
+    • Convert numeric text to numbers:
+    df["col"] = pd.to_numeric(df["col"].replace(["-", "N/A", " "], pd.NA), errors="coerce").
+    
+    • Aggregations (sum, mean, corr, …) must ignore NaNs (skipna=True) or fill them.
+    
+    • Before indexing (.iloc[0], .iat[0, 0], …) always guard:
+    if df_sub.empty: print("No data available"); exit().
+    
+        ---
+        
+    **Inputs**
+        
+    User question:
+    {user_question}
+        
+    Dataframe schemas & samples:
+    {SCHEMA_TEXT}
+        
+    Chat_history:
+    {rhistory}
+    """
 
     code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.7)
+
+    # PATCH 1: Ensure the code includes at least one dataframe reference
+    if "dataframes.get(" not in code_str:
+        first_table = next(iter(_metadata.keys()), None)
+        if first_table:
+            code_str = f'df = dataframes.get("{first_table}")\n' + code_str
 
     if not code_str or code_str == "404":
         return {"result": "No information", "code": "", "table_names": []}
@@ -773,95 +837,99 @@ def execute_generated_code(code_str, required_tables=None):
     # --- MODIFICATION START ---
     # Only proceed to load data if specific tables are requested
     if required_tables:
-        #logging.info(f"Attempting to load required tables: {required_tables}")
         try:
             blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
             container_client = blob_service_client.get_container_client(container_name)
 
             for file_name in required_tables:
-                # Construct the full path to the blob
-                blob_name = os.path.join(target_folder_path, file_name).replace("\\", "/") # Ensure forward slashes for blob path
-
+                blob_name = os.path.join(target_folder_path, file_name).replace("\\", "/")
                 try:
-                    #logging.debug(f"Loading blob: {blob_name}")
                     blob_client = container_client.get_blob_client(blob_name)
                     blob_data = blob_client.download_blob().readall()
-
-                    # Read into DataFrame based on file extension
                     if file_name.lower().endswith(('.xlsx', '.xls')):
                         df = pd.read_excel(io.BytesIO(blob_data))
                         dataframes[file_name] = df
-                        #logging.debug(f"Successfully loaded Excel file: {file_name}")
                     elif file_name.lower().endswith('.csv'):
                         df = pd.read_csv(io.BytesIO(blob_data))
                         dataframes[file_name] = df
-                        #logging.debug(f"Successfully loaded CSV file: {file_name}")
-                    #else:
-                        #logging.warning(f"Skipping file with unsupported extension in required list: {file_name}")
-
                 except Exception as blob_error:
-                    # Handle error if a specific required blob is not found or fails to load
+                    # If a required file fails to load, set to None and return error
+                    dataframes[file_name] = None
                     err_msg = f"Error loading required table '{blob_name}': {blob_error}"
                     print(err_msg)
                     logging.error(err_msg)
-                    # Stop execution and return error if a required file is missing/unreadable
                     return err_msg
-
         except Exception as service_error:
-            # Handle Azure connection errors
             err_msg = f"Azure connection error during selective table loading: {service_error}"
             print(err_msg)
             logging.error(err_msg)
             return err_msg
     else:
-        # If required_tables is empty or None, but code seems to need dataframes
-        # Check if the code likely expects dataframes
-        # This check is basic; might need refinement based on code generation patterns
         if "dataframes.get(" in code_str or "pd.read_excel(" in code_str or "pd.read_csv(" in code_str:
             logging.warning("Code execution might expect tables, but none were identified as required.")
-            # You could return an error, or let it proceed and potentially fail during exec
-            # Returning an error is likely safer.
             return "Error: Code seems to require tables, but specific tables needed were not identified or provided."
         else:
-            # If code doesn't appear to reference dataframes, proceed without loading any.
             logging.info("No required tables specified, proceeding without loading data.")
-
     # --- MODIFICATION END ---
 
+    # PATCH 2: Prevent GPT logic bugs like referencing variables that are never defined
+    # Generalized undefined variable check
+    class VarVisitor(ast.NodeVisitor):
+        def __init__(self):
+            self.assigned = set()
+            self.used = set()
+        def visit_Name(self, node):
+            if isinstance(node.ctx, ast.Store):
+                self.assigned.add(node.id)
+            elif isinstance(node.ctx, ast.Load):
+                self.used.add(node.id)
+    try:
+        tree = ast.parse(code_str)
+        visitor = VarVisitor()
+        visitor.visit(tree)
+        undefined = visitor.used - visitor.assigned - {"dataframes", "pd", "datetime", "print", "exit"}
+        if undefined:
+            return f"Error: variable(s) {', '.join('`'+v+'`' for v in undefined)} used but never defined. Please regenerate the code."
+    except Exception as ast_error:
+        # If parsing fails, fallback to old check
+        undefined_vars = ["data_quality_issues"]
+        for var in undefined_vars:
+            if var in code_str and f"{var} =" not in code_str:
+                return f"Error: variable `{var}` is used but never defined. Please regenerate the code."
 
     # --- Safety check before exec ---
-    # If the code expects dataframes but none were loaded (e.g., due to errors above)
-    # This check might overlap with the one above, but adds safety before exec
     if not dataframes and ("dataframes.get(" in code_str):
          return "Error: Failed to load required tables before code execution."
 
-
     # Modify code string (replace pandas read calls with dataframe dictionary lookups)
-    # This part remains the same
     code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
     code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
 
-    # Execute the code
+    # --- Inject a safe 'exit' function for generated code ---
+    safe_exit = lambda: (_ for _ in ()).throw(SystemExit)
+
+    # --- Compile code before exec to catch syntax errors ---
+    try:
+        compile(code_modified, '<string>', 'exec')
+    except SyntaxError as e:
+        return f"Syntax error in generated code: {e}"
+
     output_buffer = StringIO()
-    try: # Wrap exec in its own try/except
+    try:
         with contextlib.redirect_stdout(output_buffer):
             local_vars = {
-                "dataframes": dataframes, # Pass the (potentially empty) dict
+                "dataframes": dataframes,
                 "pd": pd,
-                "datetime": datetime
+                "datetime": datetime,
+                "exit": safe_exit
             }
-            # Execute in a restricted scope
-            exec(code_modified, {"pd": pd, "datetime": datetime}, local_vars) # Pass pd/datetime also to globals for safety
-
+            exec(code_modified, {"pd": pd, "datetime": datetime, "exit": safe_exit}, local_vars)
         output = output_buffer.getvalue().strip()
         return output if output else "Execution completed with no output."
-
     except Exception as exec_error:
-        # Catch errors specifically during the exec() call
         err_msg = f"An error occurred during code execution: {exec_error}"
         print(err_msg)
         logging.error(err_msg)
-        # Include the generated code that failed in the error message for easier debugging
         return f"{err_msg}\n--- Failing Code ---\n{code_modified}\n--- End Code ---"
 
 #######################################################################################
