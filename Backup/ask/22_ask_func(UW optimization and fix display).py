@@ -6,6 +6,7 @@
 # used new index in the code
 
 
+# Brahims UW version 22
 import os
 import io
 import re
@@ -30,6 +31,9 @@ import time
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
 #######################################################################################
+#######################################################################################
+#                               GLOBAL CONFIG / CONSTANTS
+#######################################################################################
 CONFIG = {
     # ── MAIN, high-capacity model (Tool-1 Index, Tool-2 Python, Tool-3 Fallback) ──
     "LLM_ENDPOINT"     : "https://cxqaazureaihub2358016269.openai.azure.com/"
@@ -46,8 +50,8 @@ CONFIG = {
     "SEARCH_SERVICE_NAME": "cxqa-azureai-search",
     "SEARCH_ENDPOINT"    : "https://cxqa-azureai-search.search.windows.net",
     "ADMIN_API_KEY"      : "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv",
-    "INDEX_NAME"         : "vector-1746718296853-08-05-2025",
-    "SEMANTIC_CONFIG_NAME": "vector-1746718296853-08-05-2025-semantic-configuration",
+    "INDEX_NAME"         : "vector-1741865904949",
+    "SEMANTIC_CONFIG_NAME": "vector-1741865904949-semantic-configuration",
     "CONTENT_FIELD"      : "chunk",
     "ACCOUNT_URL"        : "https://cxqaazureaihub8779474245.blob.core.windows.net",
     "SAS_TOKEN"          : (
@@ -440,13 +444,12 @@ def references_tabular_data(question, tables_text):
     {tables_text}
 
     Decision Rules:
-    1. Reply 'YES' ONLY if the question explicitly asks for numerical facts, figures, statistics, totals, direct calculations from table columns, or specific record lookups that are clearly obtainable from the structured datasets listed in Available Tables.
-    2. Reply 'NO' if the question is general, opinion-based, theoretical, policy-related, or does not require specific numerical data directly from these tables.
+    1. Reply 'YES' if the question needs facts, statistics, totals, calculations, historical data, comparisons, or analysis typically stored in structured datasets listed in Available Tables.
+    2. Reply 'NO' if the question is general, opinion-based, theoretical, policy-related, or does not require specific data from these tables.
     3. Completely ignore the sample rows of the tables. Assume full datasets exist beyond the samples.
-    4. Be STRICT: only reply 'NO' if you are CERTAIN the tables are not needed for direct data extraction.
-    5. Do NOT create or assume data. Only decide if the listed tabular data is NEEDED to answer the User Question by directly querying the table.
+    4. Be STRICT: only reply 'NO' if you are CERTAIN the tables are not needed.
+    5. Do NOT create or assume data. Only decide if the listed tabular data is NEEDED to answer the User Question.
     6. Base your decision ONLY on the User Question and the list of Available Tables. IGNORE any potential chat history.
-    7. Questions asking for qualitative summaries, opinions, 'areas of improvement', 'key findings', or general topics often found in narrative reports or policy documents should be classified as 'NO', even if they mention dates or entities that might also appear in tables, UNLESS the question specifically asks for quantifiable metrics, counts, or statistics directly from those tables.
 
     Final instruction: Reply ONLY with 'YES' or 'NO'.
     """
@@ -454,46 +457,24 @@ def references_tabular_data(question, tables_text):
     clean_response = llm_response.strip().upper()
     return "YES" in clean_response
 
-# In ask_func_client_2.py
-# Replace your existing is_text_relevant function with this:
-def is_text_relevant(question, snippet, question_needs_tables_too: bool): # Added new parameter
+def is_text_relevant(question, snippet):
     if not snippet or not snippet.strip():
         logging.debug("[Relevance Check] Snippet is empty, returning False.")
         return False
 
-    context_guidance = ""
-    if question_needs_tables_too:
-        context_guidance = (
-            "The User Question is also expected to be answered by data from tables. "
-            "Therefore, this Text Snippet is relevant ONLY IF it provides crucial context, "
-            "definitions, or directly related information that the tables might not offer for this specific question. "
-            "General mentions of the same topics, entities, or dates found in broad reports are LESS LIKELY to be relevant "
-            "if the core answer is expected from a table."
-        )
-    else: # Question does NOT need tables, so index is primary source for it
-        context_guidance = (
-            "The User Question is expected to be answered primarily by text documents like this Snippet. "
-            "Therefore, consider it relevant if it addresses the question's topic, keywords, or provides background."
-        )
-
     system_prompt = (
         "You are an expert relevance classifier. Your goal is to determine if the provided text Snippet "
-        "contains information that could DIRECTLY help answer the User Question or is highly related.\n"
-        f"{context_guidance}\n"
-        "Focus on keywords, topics, and entities. "
-        "Consider the snippet relevant even if it only partially answers the question or provides essential background context, "
-        "especially if it's from a policy or procedure document for a how-to question.\n"
-        "Be critical for general report snippets if the question is very specific and likely answerable by data tables.\n"
+        "contains information that could DIRECTLY help answer the User Question or is highly related to the question's topic.\n"
+        "Focus on keywords, topics, entities, and the general subject matter.\n"
+        "Consider the snippet relevant even if it only partially answers the question or provides essential background context.\n"
+        "Be critical, but do not discard potentially useful information too easily, especially if keywords overlap.\n"
         "Respond ONLY with 'YES' or 'NO'."
     )
-    max_snippet_len = 500 # Truncate long snippets for the prompt
+    max_snippet_len = 500
     snippet_for_prompt = snippet[:max_snippet_len] + "..." if len(snippet) > max_snippet_len else snippet
-    
-    user_prompt = f"User Question:\n{question}\n\nText Snippet:\n{snippet_for_prompt}\n\nIs this snippet relevant? Respond YES or NO."
-    
+    user_prompt = f"User Question:\n{question}\n\nText Snippet:\n{snippet_for_prompt}\n\nIs this snippet relevant to answering the question? Respond YES or NO."
     content = call_llm_aux(system_prompt, user_prompt, max_tokens=10, temperature=0.0)
-    # Keep this one debug line to see the direct output of the relevance check
-    #print(f"DEBUG: [Relevance Check] Q: '{question[:50]}...' NeedsTables: {question_needs_tables_too} -> LLM Raw Response: '{content}'")
+    #print(f"DEBUG: [Relevance Check] Q: '{question[:50]}...' Snippet: '{snippet[:60]}...' -> LLM Raw Response: '{content}'")
     is_relevant_flag = content.strip().upper().startswith("YES")
     return is_relevant_flag
     
@@ -503,7 +484,7 @@ def is_text_relevant(question, snippet, question_needs_tables_too: bool): # Adde
 #######################################################################################
 # --- Modified tool_1_index_search with detailed logging ---
 @azure_retry()
-def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_tabular: bool = False):
+def tool_1_index_search(user_question, top_k=5, user_tier=1):
     """
     Modified version: uses split_question_into_subquestions to handle multi-part queries.
     Then filters out docs the user has no access to, before final top_k selection.
@@ -576,19 +557,15 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_
             title = doc["title"]
              # --- Added Log ---
             #print(f"DEBUG: [Tool 1]  Filtering doc {i+1}/{len(merged_docs)}: Title='{title}'")
-            file_tier = get_file_tier(title)
-            rbac_pass = user_tier >= file_tier
-            # --- Added Log ---
-            #print(f"DEBUG: [Tool 1]   RBAC Check: UserTier={user_tier}, FileTier={file_tier}, Pass={rbac_pass}")
-            if rbac_pass:
-                # --- Log relevance check ---
-                #print(f"DEBUG: [Tool 1]   Checking relevance for snippet: '{snippet[:60]}...'")
-                is_relevant_result = is_text_relevant(user_question, snippet, question_primarily_tabular) # Call relevance check
-                # --- Added Log ---
-                #print(f"DEBUG: [Tool 1]   Relevance Check Result: {is_relevant}")
-                # --- End log relevance check ---
-                if is_relevant_result: # Actually use the result for filtering
-                    relevant_docs.append(doc)
+            file_tier = get_file_tier(title)        # ‘title’ already defined a few lines up
+            if user_tier < file_tier:
+                continue                            # RBAC failed → skip this doc
+
+            if not is_text_relevant(user_question, snippet):
+                continue                            # LLM judged it irrelevant → skip
+
+            relevant_docs.append(doc)               # Passed both checks → keep
+
                 #print(f"DEBUG: [Tool 1]   >>> Doc {i+1} passed RBAC, ADDED to relevant_docs (Relevance ignored).")
             #else:
                  # --- Added Log ---
@@ -680,33 +657,20 @@ def tool_2_code_run(user_question, user_tier=1, recent_history=None):
     rhistory = recent_history if recent_history else []
 
     system_prompt = f"""
-You are a python expert. Use the User Question along with the Chat_history to make the python code that will get the answer from the provided Dataframes schemas and samples.
-Only provide the python code and nothing else, without any markdown fences like ```python or ```.
-Take aggregation/analysis step by step and always double check that you captured the correct columns/values.
-Don't give examples, only provide the actual code. If you can't provide the code, say "404" as a string.
+You are a python expert. Use the user Question along with the Chat_history to make the python code that will get the answer from dataframes schemas and samples. 
+Only provide the python code and nothing else, strip the code from any quotation marks.
+Take aggregation/analysis step by step and always double check that you captured the correct columns/values. 
+Don't give examples, only provide the actual code. If you can't provide the code, say "404" and make sure it's a string.
 
-**General Rules**:
-1. Only use columns that actually exist as per the schemas. Do NOT invent columns or table names.
-2. Don't rely on sample rows for data content; the real dataset can have more/different data. Always reference columns as shown in the schemas.
-3. Return pure Python code that can run as-is, including necessary imports (like `import pandas as pd`).
-4. The code must produce a final `print()` statement with the answer. If multiple pieces of information are requested, print them clearly labeled.
-5. If a user references a column/table that does not exist in the schemas, return "404".
-6. Use semantic reasoning to handle synonyms or minor typos for table/column names if they reasonably map to the provided schemas.
-7. Do not use Chat_history information directly within the generated code logic or print statements, but use it for context if needed to understand the user's question.
-
-**Data Handling Rules for Pandas Code**:
-A. **Numeric Conversion:** When a column is expected to be numeric for calculations (e.g., for .sum(), .mean(), comparisons):
-   - First, replace common non-numeric placeholders (like '-', 'N/A', or strings containing only spaces) with `pd.NA` or `numpy.nan`. For example: `df['column_name'] = df['column_name'].replace(['-', 'N/A', ' ', '  '], pd.NA)`
-   - Then, explicitly convert the column to a numeric type using `pd.to_numeric(df['column_name'], errors='coerce')`. This will turn any remaining unparseable values into `NaN`.
-B. **Handle NaN Values:** Before performing aggregate functions (like `.sum()`, `.mean()`) or arithmetic operations on numeric columns, ensure `NaN` values are handled, e.g., by using `skipna=True` (which is default for many aggregations like `.sum()`) or by explicitly filling them (e.g., `df['numeric_column'].fillna(0).sum()`).
-C. **Date Columns:** If the question involves dates:
-   - Convert date-like columns to datetime objects using `pd.to_datetime(df['Date_column'], errors='coerce')`.
-   - When comparing or merging data based on dates across multiple dataframes, ensure date columns are of a consistent datetime type and format. Be careful with operations that require aligned date indexes.
-D. **Complex Lookups:** For questions requiring data from multiple tables (e.g., "find X in table A on the date of max Y in table B"):
-   - First, determine the intermediate value (e.g., the date of max Y).
-   - Then, use that value to filter/query the second table.
-   - Ensure data types are compatible for lookups or merges.
-E. **Error Avoidance:** Generate code that is robust. If a filtering step might result in an empty DataFrame or Series, check for this (e.g., `if not df_filtered.empty:`) before trying to access elements by index (e.g., `.iloc[0]`) or perform calculations that would fail on empty data. If data is not found after filtering, print a message like "No data available for the specified criteria." 
+**Rules**:
+1. Only use columns that actually exist. Do NOT invent columns or table names.
+2. Don't rely on sample rows; the real dataset can have more data. Just reference the correct columns as shown in the schemas.
+3. Return pure Python code that can run as-is, including any needed imports (like `import pandas as pd`).
+4. The code must produce a final print statement with the answer.
+5. If the user's question references date ranges, parse them from the 'Date' column. If monthly data is requested, group by month or similar.
+6. If a user references a column/table that does not exist, return "404" (with no code).
+7. Use semantic reasoning to handle synonyms or minor typos (e.g., "Al Bujairy," "albujairi," etc.), as long as they reasonably map to the real table names.
+8. Do not use Chat_history embed Information or Answers in the code. 
 
 User question:
 {user_question}
@@ -961,7 +925,7 @@ Important guidelines:
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
 
-For multi-part questions, organize your response clearly with appropriate headings or sections 
+Only For multi-part questions, organize your response clearly with appropriate headings or sections 
 for each part of the answer. If one part comes from Index and another from Python, use both sources.
 
 User question:
@@ -1086,14 +1050,13 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
         if src == "Index & Python":
             files  = index_dict .get("file_names", [])
             tables = python_dict.get("table_names", [])
-            print(f"DEBUG: [post_process_source] src='Index & Python'. Files List: {files}, Tables List: {tables}")
             response_json["source_details"] = {
                 "files"       : "", #index_dict.get("top_k", "No information"),
                 "code"        : "", #python_dict.get("code", ""),
                 "file_names"  : files,
                 "table_names" : tables
             }
-            _inject_refs(response_json, files, tables)
+            #_inject_refs(response_json, files, tables)
         elif src == "Index":
             files = index_dict.get("file_names", [])
             response_json["source_details"] = {
@@ -1113,7 +1076,7 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
                 "code"        : "",
                 "table_names" : tables
             }
-            _inject_refs(response_json, tables=tables)
+            #_inject_refs(response_json, tables=tables)
         else:
             response_json["source_details"] = {}
                 
@@ -1156,7 +1119,7 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
         code_text   = python_dict.get("code"  , "")
         file_names  = index_dict .get("file_names" , [])
         table_names = python_dict.get("table_names", [])
-        
+
         src_idx = final_text.lower().find("source:")
         if src_idx >= 0:
             eol = final_text.find("\n", src_idx)
@@ -1319,7 +1282,6 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     if not user_question.strip():
         return
 
-    # is_entirely_greeting_or_punc definition remains the same
     def is_entirely_greeting_or_punc(phrase):
         greet_words = {
             "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "Good morning", "goodevening", "good evening",
@@ -1337,84 +1299,36 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
 
     user_question_stripped = user_question.strip()
     if is_entirely_greeting_or_punc(user_question_stripped):
-        if len(chat_history) < 4: # Assuming chat_history is a global or properly scoped variable
+        if len(chat_history) < 4:
             yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         else:
             yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         return
 
+    # Check cache
     cache_key = user_question_stripped.lower()
-    if cache_key in tool_cache: # Assuming tool_cache is a global or properly scoped variable
-        logging.info(f"Cache hit for question: {user_question_stripped}")
-        yield tool_cache[cache_key][2] 
+    if cache_key in tool_cache:
+        _, _, cached_answer = tool_cache[cache_key]
+        yield cached_answer
         return
-    logging.info(f"Cache miss for question: {user_question_stripped}")
 
-    # This flag is now central
-    question_needs_tables = references_tabular_data(user_question, TABLES) # TABLES needs to be defined globally
+    needs_tabular_data = references_tabular_data(user_question, TABLES)
+    index_dict = {"top_k": "No information"}
+    python_dict = {"result": "No information", "code": ""}
 
-    index_dict = {"top_k": "No information", "file_names": []}
-    python_dict = {"result": "No information", "code": "", "table_names": []}
-    run_tool_1 = True # Default to running Tool 1
-
-    if question_needs_tables:
-        logging.info("Question likely needs tabular data. Running Tool 2...")
+    if needs_tabular_data:
         python_dict = tool_2_code_run(user_question, user_tier=user_tier, recent_history=recent_history)
 
-        question_lower = user_question.lower()
-        calc_keywords = ["calculate", "total", "average", "sum", "count", "how many", "revenue", "volume", "footfall", "what is the visits", "visitation", "sales", "attendance", "utilization", "parking", "tickets"]
-        policy_keywords = ["policy", "procedure", "what to do", "how to", "describe", "sop", "guideline", "rule", "if someone", "in case of", "address"]
-        
-        has_calc_keyword = any(keyword in question_lower for keyword in calc_keywords)
-        has_policy_keyword = any(keyword in question_lower for keyword in policy_keywords)
-        
-        tool_2_succeeded = python_dict.get("result", "").strip().lower() not in ["", "no information"] and \
-                           not python_dict.get("result", "Error").lower().startswith("error") # Check for actual success
-
-        if has_calc_keyword and not has_policy_keyword and tool_2_succeeded:
-            logging.info("Heuristic: Question is computational and Tool 2 succeeded; SKIPPING Tool 1.")
-            run_tool_1 = False
-        else:
-            logging.info("Heuristic: Running Tool 1 for context or due to question type/Tool 2 result.")
-    else:
-        logging.info("Question does not need tabular data. Ensuring Tool 1 runs.")
-        run_tool_1 = True
-
-    if run_tool_1:
-        logging.info("Running Tool 1 (Index Search)...")
-        # Pass the flag to tool_1_index_search
-        index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier, question_primarily_tabular=question_needs_tables)
-    else:
-        logging.info("Tool 1 was skipped.")
-        # index_dict remains as default {"top_k": "No information", "file_names": []}
+    index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
 
     raw_answer = ""
-    try:
-        for token in final_answer_llm(user_question, index_dict, python_dict):
-            raw_answer += token
-    except Exception as final_llm_error:
-         logging.error(f"Error during final_answer_llm generation: {final_llm_error}")
-         error_json = json.dumps({
-             "content": [{"type": "paragraph", "text": "Sorry, an error occurred while generating the final response."}],
-             "source": "Error", "source_details": {"error": str(final_llm_error)}
-         })
-         yield error_json
-         return
+    for token in final_answer_llm(user_question, index_dict, python_dict):
+        raw_answer += token
 
-    # Consider if clean_text is safe for JSON strings. Usually, it's not.
-    # raw_answer = clean_text(raw_answer) 
+    # Now unify repeated text cleaning
+    raw_answer = clean_text(raw_answer)
 
-    try:
-        final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict, user_question=user_question)
-    except Exception as post_process_error:
-        logging.error(f"Error during post_process_source: {post_process_error}")
-        error_json = json.dumps({
-             "content": [{"type": "paragraph", "text": "Sorry, an error occurred while processing the response."}],
-             "source": "Error", "source_details": {"error": str(post_process_error), "raw_llm_output": raw_answer}
-         })
-        yield error_json
-        return
-
+    final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict)
     tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
     yield final_answer_with_source
 
