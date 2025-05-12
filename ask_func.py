@@ -1,32 +1,3 @@
-# version 22b pandas/executing issue fix
-#######################################################################################
-# PATCH: Robust AI-Generated Code Execution Fixes (2024-06)
-#
-# This patch addresses common failure modes when executing AI-generated Python code:
-#
-# 1. Safe exit handling:
-#    - Injects a safe 'exit' function into the code execution environment so that
-#      generated code using 'exit()' will terminate gracefully, not crash the bot.
-#
-# 2. Syntax error detection:
-#    - Compiles the generated code before execution. If there is a syntax error
-#      (e.g., missing quotes, bad indentation), it is caught and a clear error
-#      message is returned instead of crashing.
-#
-# 3. Undefined variable detection:
-#    - Scans the generated code for variables that are used but never defined.
-#      If any are found, execution is stopped and a clear error message is returned.
-#
-# 4. Table/file loading robustness:
-#    - If a required table/file fails to load, it is set to None and a clear error
-#      is returned before any code is run, preventing 'NoneType' errors.
-#
-# These changes make the bot much more robust and user-friendly by preventing
-# crashes and providing clear, actionable error messages for most AI code issues.
-#######################################################################################
-
-# works with app.py version #11
-
 import os
 import io
 import re
@@ -47,7 +18,6 @@ from functools import lru_cache, wraps
 from collections import OrderedDict
 import difflib
 import time
-import ast
 
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
@@ -84,8 +54,6 @@ CONFIG = {
     "TARGET_FOLDER_PATH": "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
 }
 
-# vector-1746718296853-08-05-2025
-# vector-1746718296853-08-05-2025-semantic-configuration
 
 # Global objects with better initialization
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
@@ -467,12 +435,13 @@ def references_tabular_data(question, tables_text):
     {tables_text}
 
     Decision Rules:
-    1. Reply 'YES' if the question needs facts, statistics, totals, calculations, historical data, comparisons, or analysis typically stored in structured datasets listed in Available Tables.
-    2. Reply 'NO' if the question is general, opinion-based, theoretical, policy-related, or does not require specific data from these tables.
+    1. Reply 'YES' ONLY if the question explicitly asks for numerical facts, figures, statistics, totals, direct calculations from table columns, or specific record lookups that are clearly obtainable from the structured datasets listed in Available Tables.
+    2. Reply 'NO' if the question is general, opinion-based, theoretical, policy-related, or does not require specific numerical data directly from these tables.
     3. Completely ignore the sample rows of the tables. Assume full datasets exist beyond the samples.
-    4. Be STRICT: only reply 'NO' if you are CERTAIN the tables are not needed.
-    5. Do NOT create or assume data. Only decide if the listed tabular data is NEEDED to answer the User Question.
+    4. Be STRICT: only reply 'NO' if you are CERTAIN the tables are not needed for direct data extraction.
+    5. Do NOT create or assume data. Only decide if the listed tabular data is NEEDED to answer the User Question by directly querying the table.
     6. Base your decision ONLY on the User Question and the list of Available Tables. IGNORE any potential chat history.
+    7. Questions asking for qualitative summaries, opinions, 'areas of improvement', 'key findings', or general topics often found in narrative reports or policy documents should be classified as 'NO', even if they mention dates or entities that might also appear in tables, UNLESS the question specifically asks for quantifiable metrics, counts, or statistics directly from those tables.
 
     Final instruction: Reply ONLY with 'YES' or 'NO'.
     """
@@ -706,71 +675,45 @@ def tool_2_code_run(user_question, user_tier=1, recent_history=None):
     rhistory = recent_history if recent_history else []
 
     system_prompt = f"""
-    You are a Python-for-DataFrames agent.
-    
-    Your task: write runnable pandas code that answers the User Question using the provided Excel/CSV tables.
-    
-    Return only the code (no ``` fences).
-    If you cannot produce working code, return the string "404".
-    
-    ──────────────────────── WORKFLOW ────────────────────────
-    
-    Load each needed table with
-    df = dataframes.get("File.xlsx").
-    
-    Use vectorised pandas operations; avoid slow .apply loops.
-    
-    Finish with one print() that outputs the answer (label clearly if multiple values).
-    
-    ──────────────────────── GENERAL RULES ───────────────────
-    • Use only columns & filenames that appear in the schemas – never invent names.
-    • Map obvious synonyms / typos (utilisation ↔ utilization, visits ↔ footfalls, rebate ↔ rebates, …).
-    • If a required column/table is missing, print "404" and exit.
-    • Never reveal or print Chat_history.
-    • Define every variable before first use; otherwise print "404".
-    • When listing rows, call .drop_duplicates() to avoid repeats.
-    
-    ────────────────── SAFE-DATA & INTEGRITY RULES ───────────
-    • After filtering rows (mask = …), either update in-place with
-    df.loc[mask, "col"] = value or work on a copy: df_filtered = df[mask].copy().
-    Never assign on a raw slice.
-    
-    • Immediately after every df = dataframes.get("File.xlsx") call:
-        if df is None:
-        print("404"); exit()
-    
-    • Wrap all date literals with pd.Timestamp("YYYY-MM-DD") and normalise:
-    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.normalize().
-    
-    • Convert numeric text to numbers:
-    df["col"] = pd.to_numeric(df["col"].replace(["-", "N/A", " "], pd.NA), errors="coerce").
-    
-    • Aggregations (sum, mean, corr, …) must ignore NaNs (skipna=True) or fill them.
-    
-    • Before indexing (.iloc[0], .iat[0, 0], …) always guard:
-    if df_sub.empty: print("No data available"); exit().
-    
-        ---
-        
-    **Inputs**
-        
-    User question:
-    {user_question}
-        
-    Dataframe schemas & samples:
-    {SCHEMA_TEXT}
-        
-    Chat_history:
-    {rhistory}
-    """
+You are a python expert. Use the User Question along with the Chat_history to make the python code that will get the answer from the provided Dataframes schemas and samples.
+Only provide the python code and nothing else, without any markdown fences like ```python or ```.
+Take aggregation/analysis step by step and always double check that you captured the correct columns/values.
+Don't give examples, only provide the actual code. If you can't provide the code, say "404" as a string.
 
-    code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.7)
+**General Rules**:
+1. Only use columns that actually exist as per the schemas. Do NOT invent columns or table names.
+2. Don't rely on sample rows for data content; the real dataset can have more/different data. Always reference columns as shown in the schemas.
+3. Return pure Python code that can run as-is, including necessary imports (like `import pandas as pd`).
+4. The code must produce a final `print()` statement with the answer. If multiple pieces of information are requested, print them clearly labeled.
+5. If a user references a column/table that does not exist in the schemas, return "404".
+6. Use semantic reasoning to handle synonyms or minor typos for table/column names if they reasonably map to the provided schemas.
+7. Do not use Chat_history information directly within the generated code logic or print statements, but use it for context if needed to understand the user's question.
 
-    # PATCH 1: Ensure the code includes at least one dataframe reference
-    if "dataframes.get(" not in code_str:
-        first_table = next(iter(_metadata.keys()), None)
-        if first_table:
-            code_str = f'df = dataframes.get("{first_table}")\n' + code_str
+**Data Handling Rules for Pandas Code**:
+A. **Numeric Conversion:** When a column is expected to be numeric for calculations (e.g., for .sum(), .mean(), comparisons):
+   - First, replace common non-numeric placeholders (like '-', 'N/A', or strings containing only spaces) with `pd.NA` or `numpy.nan`. For example: `df['column_name'] = df['column_name'].replace(['-', 'N/A', ' ', '  '], pd.NA)`
+   - Then, explicitly convert the column to a numeric type using `pd.to_numeric(df['column_name'], errors='coerce')`. This will turn any remaining unparseable values into `NaN`.
+B. **Handle NaN Values:** Before performing aggregate functions (like `.sum()`, `.mean()`) or arithmetic operations on numeric columns, ensure `NaN` values are handled, e.g., by using `skipna=True` (which is default for many aggregations like `.sum()`) or by explicitly filling them (e.g., `df['numeric_column'].fillna(0).sum()`).
+C. **Date Columns:** If the question involves dates:
+   - Convert date-like columns to datetime objects using `pd.to_datetime(df['Date_column'], errors='coerce')`.
+   - When comparing or merging data based on dates across multiple dataframes, ensure date columns are of a consistent datetime type and format. Be careful with operations that require aligned date indexes.
+D. **Complex Lookups:** For questions requiring data from multiple tables (e.g., "find X in table A on the date of max Y in table B"):
+   - First, determine the intermediate value (e.g., the date of max Y).
+   - Then, use that value to filter/query the second table.
+   - Ensure data types are compatible for lookups or merges.
+E. **Error Avoidance:** Generate code that is robust. If a filtering step might result in an empty DataFrame or Series, check for this (e.g., `if not df_filtered.empty:`) before trying to access elements by index (e.g., `.iloc[0]`) or perform calculations that would fail on empty data. If data is not found after filtering, print a message like "No data available for the specified criteria." 
+
+User question:
+{user_question}
+
+Dataframes schemas and sample:
+{SCHEMA_TEXT}
+
+Chat_history:
+{rhistory}
+"""
+
+    code_str = call_llm_aux(system_prompt, user_question, max_tokens=1200, temperature=0.7)
 
     if not code_str or code_str == "404":
         return {"result": "No information", "code": "", "table_names": []}
@@ -778,25 +721,8 @@ def tool_2_code_run(user_question, user_tier=1, recent_history=None):
     # Check references vs. user tier
     access_issue = reference_table_data(code_str, user_tier)
     if access_issue:
-        # Extract table names from the code even if access is denied
-        table_names = []
-        # Pattern 1: dataframes.get("filename")
-        pattern1 = re.compile(r'dataframes\.get\(\s*[\'\"]([^\'\"]+)[\'\"]\s*\)')
-        matches1 = pattern1.findall(code_str)
-        if matches1:
-            for match in matches1:
-                if match not in table_names:
-                    table_names.append(match)
-        # Pattern 2: pd.read_excel("filename") or pd.read_csv("filename")
-        pattern2 = re.compile(r'pd\.read_(?:excel|csv)\(\s*[\'\"]([^\'\"]+)[\'\"]\s*\)')
-        matches2 = pattern2.findall(code_str)
-        if matches2:
-            for match in matches2:
-                if match not in table_names:
-                    table_names.append(match)
-        # Limit to max 3 table names, but keep file extensions
-        table_names = table_names[:3]
-        return {"result": access_issue, "code": code_str, "table_names": table_names}
+        # Return a short "no access" style message
+        return {"result": access_issue, "code": "", "table_names": []}
     
     # Extract table names from the code - check both patterns
     table_names = []
@@ -837,99 +763,95 @@ def execute_generated_code(code_str, required_tables=None):
     # --- MODIFICATION START ---
     # Only proceed to load data if specific tables are requested
     if required_tables:
+        #logging.info(f"Attempting to load required tables: {required_tables}")
         try:
             blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
             container_client = blob_service_client.get_container_client(container_name)
 
             for file_name in required_tables:
-                blob_name = os.path.join(target_folder_path, file_name).replace("\\", "/")
+                # Construct the full path to the blob
+                blob_name = os.path.join(target_folder_path, file_name).replace("\\", "/") # Ensure forward slashes for blob path
+
                 try:
+                    #logging.debug(f"Loading blob: {blob_name}")
                     blob_client = container_client.get_blob_client(blob_name)
                     blob_data = blob_client.download_blob().readall()
+
+                    # Read into DataFrame based on file extension
                     if file_name.lower().endswith(('.xlsx', '.xls')):
                         df = pd.read_excel(io.BytesIO(blob_data))
                         dataframes[file_name] = df
+                        #logging.debug(f"Successfully loaded Excel file: {file_name}")
                     elif file_name.lower().endswith('.csv'):
                         df = pd.read_csv(io.BytesIO(blob_data))
                         dataframes[file_name] = df
+                        #logging.debug(f"Successfully loaded CSV file: {file_name}")
+                    #else:
+                        #logging.warning(f"Skipping file with unsupported extension in required list: {file_name}")
+
                 except Exception as blob_error:
-                    # If a required file fails to load, set to None and return error
-                    dataframes[file_name] = None
+                    # Handle error if a specific required blob is not found or fails to load
                     err_msg = f"Error loading required table '{blob_name}': {blob_error}"
                     print(err_msg)
                     logging.error(err_msg)
+                    # Stop execution and return error if a required file is missing/unreadable
                     return err_msg
+
         except Exception as service_error:
+            # Handle Azure connection errors
             err_msg = f"Azure connection error during selective table loading: {service_error}"
             print(err_msg)
             logging.error(err_msg)
             return err_msg
     else:
+        # If required_tables is empty or None, but code seems to need dataframes
+        # Check if the code likely expects dataframes
+        # This check is basic; might need refinement based on code generation patterns
         if "dataframes.get(" in code_str or "pd.read_excel(" in code_str or "pd.read_csv(" in code_str:
             logging.warning("Code execution might expect tables, but none were identified as required.")
+            # You could return an error, or let it proceed and potentially fail during exec
+            # Returning an error is likely safer.
             return "Error: Code seems to require tables, but specific tables needed were not identified or provided."
         else:
+            # If code doesn't appear to reference dataframes, proceed without loading any.
             logging.info("No required tables specified, proceeding without loading data.")
+
     # --- MODIFICATION END ---
 
-    # PATCH 2: Prevent GPT logic bugs like referencing variables that are never defined
-    # Generalized undefined variable check
-    class VarVisitor(ast.NodeVisitor):
-        def __init__(self):
-            self.assigned = set()
-            self.used = set()
-        def visit_Name(self, node):
-            if isinstance(node.ctx, ast.Store):
-                self.assigned.add(node.id)
-            elif isinstance(node.ctx, ast.Load):
-                self.used.add(node.id)
-    try:
-        tree = ast.parse(code_str)
-        visitor = VarVisitor()
-        visitor.visit(tree)
-        undefined = visitor.used - visitor.assigned - {"dataframes", "pd", "datetime", "print", "exit"}
-        if undefined:
-            return f"Error: variable(s) {', '.join('`'+v+'`' for v in undefined)} used but never defined. Please regenerate the code."
-    except Exception as ast_error:
-        # If parsing fails, fallback to old check
-        undefined_vars = ["data_quality_issues"]
-        for var in undefined_vars:
-            if var in code_str and f"{var} =" not in code_str:
-                return f"Error: variable `{var}` is used but never defined. Please regenerate the code."
 
     # --- Safety check before exec ---
+    # If the code expects dataframes but none were loaded (e.g., due to errors above)
+    # This check might overlap with the one above, but adds safety before exec
     if not dataframes and ("dataframes.get(" in code_str):
          return "Error: Failed to load required tables before code execution."
 
+
     # Modify code string (replace pandas read calls with dataframe dictionary lookups)
+    # This part remains the same
     code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
     code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
 
-    # --- Inject a safe 'exit' function for generated code ---
-    safe_exit = lambda: (_ for _ in ()).throw(SystemExit)
-
-    # --- Compile code before exec to catch syntax errors ---
-    try:
-        compile(code_modified, '<string>', 'exec')
-    except SyntaxError as e:
-        return f"Syntax error in generated code: {e}"
-
+    # Execute the code
     output_buffer = StringIO()
-    try:
+    try: # Wrap exec in its own try/except
         with contextlib.redirect_stdout(output_buffer):
             local_vars = {
-                "dataframes": dataframes,
+                "dataframes": dataframes, # Pass the (potentially empty) dict
                 "pd": pd,
-                "datetime": datetime,
-                "exit": safe_exit
+                "datetime": datetime
             }
-            exec(code_modified, {"pd": pd, "datetime": datetime, "exit": safe_exit}, local_vars)
+            # Execute in a restricted scope
+            exec(code_modified, {"pd": pd, "datetime": datetime}, local_vars) # Pass pd/datetime also to globals for safety
+
         output = output_buffer.getvalue().strip()
         return output if output else "Execution completed with no output."
+
     except Exception as exec_error:
+        # Catch errors specifically during the exec() call
         err_msg = f"An error occurred during code execution: {exec_error}"
         print(err_msg)
         logging.error(err_msg)
+        # Include the generated code that failed in the error message for easier debugging
         return f"{err_msg}\n--- Failing Code ---\n{code_modified}\n--- End Code ---"
 
 #######################################################################################
@@ -1159,6 +1081,7 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
         if src == "Index & Python":
             files  = index_dict .get("file_names", [])
             tables = python_dict.get("table_names", [])
+            #print(f"DEBUG: [post_process_source] src='Index & Python'. Files List: {files}, Tables List: {tables}")
             response_json["source_details"] = {
                 "files"       : "", #index_dict.get("top_k", "No information"),
                 "code"        : "", #python_dict.get("code", ""),
@@ -1228,7 +1151,7 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
         code_text   = python_dict.get("code"  , "")
         file_names  = index_dict .get("file_names" , [])
         table_names = python_dict.get("table_names", [])
-
+        
         src_idx = final_text.lower().find("source:")
         if src_idx >= 0:
             eol = final_text.find("\n", src_idx)
