@@ -433,8 +433,7 @@ def references_tabular_data(question, tables_text):
     
     Available Tables:
     {tables_text}
-    "BCP" is Al bujairy parking and "SCP" is Samhan Parking
-
+    
     Decision Rules:
     1. Reply 'YES' ONLY if the question explicitly asks for numerical facts, figures, statistics, totals, direct calculations from table columns, or specific record lookups that are clearly obtainable from the structured datasets listed in Available Tables.
     2. Reply 'NO' if the question is general, opinion-based, theoretical, policy-related, or does not require specific numerical data directly from these tables.
