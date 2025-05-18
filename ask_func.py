@@ -956,7 +956,7 @@ Important guidelines:
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
 
-For multi-part questions, organize your response clearly with appropriate headings or sections 
+For multi-part questions, organize your response clearly with appropriate headings or sections. For a single question, dont repeat the question as a title.
 for each part of the answer. If one part comes from Index and another from Python, use both sources.
 
 User question:
