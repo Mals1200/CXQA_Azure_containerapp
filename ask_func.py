@@ -19,10 +19,6 @@ from collections import OrderedDict
 import difflib
 import time
 
-#######################################################################################
-#                               GLOBAL CONFIG / CONSTANTS
-#######################################################################################
-#######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
 #######################################################################################
 CONFIG = {
@@ -648,7 +644,7 @@ def reference_table_data(code_str, user_tier):
     """
     # We'll look for patterns like "dataframes.get("SomeFile.xlsx") or the actual file references 
     pattern = re.compile(
-    r'(?:dataframes\.get|pd\.read_(?:excel|csv))\(\s*[\'"]([^\'"]+)[\'"]\s*\)'
+        r'(?:dataframes\.get|pd\.read_(?:excel|csv))\(\s*[\'\"]([^\'\"]+\.(?:xlsx|xls|csv))[\'\"]'
     )
     found_files = pattern.findall(code_str)
     unique_files = list(set(found_files))
@@ -666,7 +662,6 @@ def reference_table_data(code_str, user_tier):
 #                              TOOL #2 - Code Run
 #######################################################################################
 @azure_retry()
-@azure_retry()
 def tool_2_code_run(user_question, user_tier=1, recent_history=None):
     #if not references_tabular_data(user_question, TABLES):
         #return {"result": "No information", "code": "", "table_names": []}
@@ -675,43 +670,105 @@ def tool_2_code_run(user_question, user_tier=1, recent_history=None):
     rhistory = recent_history if recent_history else []
 
     system_prompt = f"""
-You are a python expert. Use the User Question along with the Chat_history to make the python code that will get the answer from the provided Dataframes schemas and samples.
-Only provide the python code and nothing else, without any markdown fences like ```python or ```.
-Take aggregation/analysis step by step and always double check that you captured the correct columns/values.
-Don't give examples, only provide the actual code. If you can't provide the code, say "404" as a string.
+You are a **Python-for-DataFrames agent**.
 
-**General Rules**:
-1. Only use columns that actually exist as per the schemas. Do NOT invent columns or table names.
-2. Don't rely on sample rows for data content; the real dataset can have more/different data. Always reference columns as shown in the schemas.
-3. Return pure Python code that can run as-is, including necessary imports (like `import pandas as pd`).
-4. The code must produce a final `print()` statement with the answer. If multiple pieces of information are requested, print them clearly labeled.
-5. If a user references a column/table that does not exist in the schemas, return "404".
-6. Use semantic reasoning to handle synonyms or minor typos for table/column names if they reasonably map to the provided schemas.
-7. Do not use Chat_history information directly within the generated code logic or print statements, but use it for context if needed to understand the user's question.
+Your task: write runnable **pandas** code that answers the User Question using the provided Excel/CSV tables.
 
-**Data Handling Rules for Pandas Code**:
-A. **Numeric Conversion:** When a column is expected to be numeric for calculations (e.g., for .sum(), .mean(), comparisons):
-   - First, replace common non-numeric placeholders (like '-', 'N/A', or strings containing only spaces) with `pd.NA` or `numpy.nan`. For example: `df['column_name'] = df['column_name'].replace(['-', 'N/A', ' ', '  '], pd.NA)`
-   - Then, explicitly convert the column to a numeric type using `pd.to_numeric(df['column_name'], errors='coerce')`. This will turn any remaining unparseable values into `NaN`.
-B. **Handle NaN Values:** Before performing aggregate functions (like `.sum()`, `.mean()`) or arithmetic operations on numeric columns, ensure `NaN` values are handled, e.g., by using `skipna=True` (which is default for many aggregations like `.sum()`) or by explicitly filling them (e.g., `df['numeric_column'].fillna(0).sum()`).
-C. **Date Columns:** If the question involves dates:
-   - Convert date-like columns to datetime objects using `pd.to_datetime(df['Date_column'], errors='coerce')`.
-   - When comparing or merging data based on dates across multiple dataframes, ensure date columns are of a consistent datetime type and format. Be careful with operations that require aligned date indexes.
-D. **Complex Lookups:** For questions requiring data from multiple tables (e.g., "find X in table A on the date of max Y in table B"):
-   - First, determine the intermediate value (e.g., the date of max Y).
-   - Then, use that value to filter/query the second table.
-   - Ensure data types are compatible for lookups or merges.
-E. **Error Avoidance:** Generate code that is robust. If a filtering step might result in an empty DataFrame or Series, check for this (e.g., `if not df_filtered.empty:`) before trying to access elements by index (e.g., `.iloc[0]`) or perform calculations that would fail on empty data. If data is not found after filtering, print a message like "No data available for the specified criteria." 
+Return **only the code** (no ``` fences).  
+If you cannot produce working code – or a required table/column is missing and no close alias (Levenshtein ≤ 2) exists – return the exact string **"404"**.
 
-User question:
+───────────────────── WORKFLOW ─────────────────────
+• `import pandas as pd` (and `import numpy as np` if needed).
+• Load each required table with  
+  df = dataframes.get("File.xlsx")  
+  if df is None:  
+      print("404"); exit()
+• Use **vectorised** pandas operations; avoid slow `.apply` loops.
+• Take aggregation/analysis **step by step** and double-check that you picked the correct columns/values.
+• Finish with **one `print()`** that clearly labels the answer(s).  
+  (If multiple values are requested, label each in that single print.)
+
+────────────────── GENERAL RULES ──────────────────
+1. **Only** use columns & filenames that appear in the schemas – never invent names.  
+2. If the user spelling differs, choose the *single closest* table/column whose Levenshtein distance ≤ 2 **or** that is listed as an explicit alias in the schema.  
+3. If nothing matches, output **"404"** and exit.  
+4. Do **not** reveal or print `Chat_history`.  
+5. Define every variable before first use.  
+6. When listing rows, call `.drop_duplicates()` to avoid repeats.
+
+──────────────── DATA-SAFETY & INTEGRITY ───────────
+A. **Date columns**  
+   • Convert with  
+      df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.normalize()  
+   • Wrap literals as `pd.Timestamp("YYYY-MM-DD")`.
+
+B. **Numeric columns**  
+   • Replace placeholders (`'-', 'N/A', ' ', '  '`) with `pd.NA`, then  
+      df["col"] = pd.to_numeric(df["col"], errors="coerce")  
+   • Aggregations (`sum`, `mean`, `corr`, …) must ignore NaNs (`skipna=True`) or fill them.
+
+C. **Safe assignment**  
+   • After building a mask, either  
+      df.loc[mask, "col"] = value **or**  
+      df_filtered = df[mask].copy()  # never assign on a raw slice.
+
+D. **Robust indexing**  
+   • Before using `.iloc[0]`, `.iat[0,0]`, etc.:  
+      if df_sub.empty:  
+          print("No data available for the specified criteria."); exit()
+
+E. **Complex look-ups / multi-table tasks**  
+   • First derive the intermediate key (e.g., the date of max Y), then query the other table.  
+   • Ensure datatypes are aligned when merging or comparing.
+
+──────────────────── INPUTS ────────────────────────
+User question:  
 {user_question}
 
-Dataframes schemas and sample:
+Dataframe schemas & sample rows:  
 {SCHEMA_TEXT}
 
-Chat_history:
+Chat_history:  
 {rhistory}
+
+# ───────── PATCH v2 (do not edit) ─────────
+F1. Always wrap filenames in plain string literals, e.g.  
+    df = dataframes.get("Tickets.xlsx")   # ✅  
+    df = dataframes.get(f"{{file}}")      # ❌ Not allowed  
+F2. If you must abandon because a required table/column     
+    is missing for any reason whatsoever, raise SystemExit("404")        # use this exact call instead of exit()
+    # If this line is missing for ANY reason whatsoever,
+    # raise SystemExit("404")              # ← DO NOT change the string
+
+F3. Double-check that every string literal is properly closed; the code  
+    must pass `ast.parse(code)` with no syntax errors before you print it.  
+F4. When you build a DataFrame from multiple Python lists/arrays  
+    (e.g., `pd.DataFrame({{'a': a_list, 'b': b_list}})`), first make sure  
+    **all lists are exactly the same length**.  
+    • If they are not, do **one** of the following:  
+        – Truncate them to the shortest length with  
+          `min_len = min(map(len, [a_list, b_list, ...]));` then slice each list `[:min_len]`, **or**  
+        – Abort cleanly with `SystemExit("404")`.  
+    This prevents the runtime error "All arrays must be of the same length."
+
+# ───────── PATCH v3 (do not edit) ─────────
+**Extra safeguards (patch v3)**  
+F5. **Always convert dtypes before maths / comparisons**  
+    • Numeric ops → `df["col"]  = pd.to_numeric(df["col"],  errors="coerce")`  
+    • Date   ops → `df["date"] = pd.to_datetime(df["date"], errors="coerce")`  
+
+F6. **GroupBy**: never pass the deprecated `skipna=` parameter.  
+    Instead drop NaNs first (`df.dropna(subset=["col"])`) or use  
+    `grp.std(ddof=0)`, `grp.mean()`, etc.  
+
+F7. **Merging a Series with a DataFrame**:  
+    s.name = "my_col"          # give the Series a name  
+    df2   = s.to_frame()       # convert to DataFrame  
+    df_final = df.merge(df2, left_index=True, right_index=True)  
+    # avoids "Series without a name" merge error
 """
+
+    # This stops "unterminated string" crashes and replaces the undefined exit() with a safe SystemExit.
 
     code_str = call_llm_aux(system_prompt, user_question, max_tokens=1200, temperature=0.7)
 
@@ -751,6 +808,8 @@ Chat_history:
     #print(f"DEBUG: Extracted table_names: {table_names}")
     #This line was changed to include only the tables needed
     execution_result = execute_generated_code(code_str, required_tables=table_names) # Pass table_names
+    if str(execution_result).strip() == "404":
+        return {"result": "No information", "code": code_str, "table_names": []}
     return {"result": execution_result, "code": code_str, "table_names": table_names}
 
 def execute_generated_code(code_str, required_tables=None):
@@ -825,11 +884,20 @@ def execute_generated_code(code_str, required_tables=None):
     if not dataframes and ("dataframes.get(" in code_str):
          return "Error: Failed to load required tables before code execution."
 
+    # Silence pandas SettingWithCopyWarning globally
+    pd.options.mode.chained_assignment = None      
 
     # Modify code string (replace pandas read calls with dataframe dictionary lookups)
     # This part remains the same
     code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
     code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
+
+    # Change 3: Catch syntax errors before exec
+    import ast
+    try:
+        ast.parse(code_modified)
+    except SyntaxError as syn_err:
+        return f"Syntax error in generated code: {syn_err}"
 
     # Execute the code
     output_buffer = StringIO()
@@ -840,12 +908,18 @@ def execute_generated_code(code_str, required_tables=None):
                 "pd": pd,
                 "datetime": datetime
             }
+            # Change 2: Let generated code call exit() safely
+            import sys
+            local_vars["exit"] = sys.exit    # allow generated code that still uses exit()
             # Execute in a restricted scope
             exec(code_modified, {"pd": pd, "datetime": datetime}, local_vars) # Pass pd/datetime also to globals for safety
 
         output = output_buffer.getvalue().strip()
         return output if output else "Execution completed with no output."
-
+    except SystemExit as se:
+        if str(se) == "404":          # generated code raised SystemExit("404")
+            return "404"              # bubble up a clean sentinel
+        raise                         # any other SystemExit: keep crashing loudly
     except Exception as exec_error:
         # Catch errors specifically during the exec() call
         err_msg = f"An error occurred during code execution: {exec_error}"
@@ -1357,7 +1431,7 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
         python_dict = tool_2_code_run(user_question, user_tier=user_tier, recent_history=recent_history)
 
         question_lower = user_question.lower()
-        calc_keywords = ["calculate", "total", "average", "sum", "count", "how many", "revenue", "volume", "footfall", "what is the visits", "visitation", "sales", "attendance", "utilization", "parking", "tickets"]
+        calc_keywords = ["calculate", "total", "average", "sum", "count", "how many", "revenue", "sales", "what is the visits", "visitation", "utilization", "parking", "tickets"]
         policy_keywords = ["policy", "procedure", "what to do", "how to", "describe", "sop", "guideline", "rule", "if someone", "in case of", "address"]
         
         has_calc_keyword = any(keyword in question_lower for keyword in calc_keywords)
