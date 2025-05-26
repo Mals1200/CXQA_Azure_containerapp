@@ -143,87 +143,94 @@ async def _bot_logic(turn_context: TurnContext):
         cleaned = cleaned.replace('\n', '\\n')
         # Try to parse the response as JSON first
         try:
-            # Remove code block markers if present
-            # Fix: Replace real newlines with escaped newlines to allow JSON parsing
-            # This is necessary because the LLM may output real newlines inside string values, which is invalid in JSON
             response_json = json.loads(cleaned)
-            # Check if this is our expected JSON format with content and source
-            if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
-                # We have a structured JSON response!
-                content_items = response_json["content"]
-                source = response_json["source"]
-                files = response_json["source_details"].get("file_names", [])
-                tables = response_json["source_details"].get("table_names", [])
-
-                # Render Markdown fallback for Teams
-                md = teams_markdown.render(
-                    question=user_message,
-                    content=content_items,
-                    source=source,
-                    files=files,
-                    tables=tables
-                )
-                
-                await turn_context.send_activity(Activity(type="message", text=md))
-                return
-        
+            
         except json.JSONDecodeError:
         # not structured JSON → fall through to Adaptive Card or plain text
-                pass
+           response_json = None  # signal “no JSON”
+            # Check if this is our expected JSON format with content and source
+        
+        if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
+            # We have a structured JSON response!
+            content_items = response_json["content"]
+            source = response_json["source"]
+            files = response_json["source_details"].get("file_names", [])
+            tables = response_json["source_details"].get("table_names", [])
+
+            # Render Markdown fallback for Teams
+            md = teams_markdown.render(
+                question=user_message,
+                content=content_items,
+                source=source,
+                files=files,
+                tables=tables
+            )
+                
+            await turn_context.send_activity(Activity(type="message", text=md))
+            return
+        
+
+        # 2️⃣ If JSON but no Markdown sent above, build Adaptive Card
+        if isinstance(response_json, dict) and "content" in response_json:
+            content_items = response_json["content"]
+            source = response_json.get("source", "")
+            files = response_json["source_details"].get("file_names", [])
+            tables = response_json["source_details"].get("table_names", [])
+
             
-                # Build the adaptive card body
-                body_blocks = []
-                #referenced_paragraphs = []
-                #calculated_paragraphs = []
-                #other_paragraphs = []
-                # Process each content item based on its type
-                for item in content_items:
-                    item_type = item.get("type", "")
-                    if item_type == "heading":
+            # Build the adaptive card body
+            body_blocks = []
+            #referenced_paragraphs = []
+            #calculated_paragraphs = []
+            #other_paragraphs = []
+            # Process each content item based on its type
+            for item in content_items:
+                item_type = item.get("type", "")
+                if item_type == "heading":
+                    body_blocks.append({
+                        "type": "TextBlock",
+                        "text": item.get("text", ""),
+                        "wrap": True,
+                        "weight": "Bolder",
+                        "size": "Large",
+                        "spacing": "Medium"
+                    })
+                elif item_type == "paragraph":
+                    text = item.get("text", "")
+                    # Only add to main body if not a reference/calculated paragraph
+                    if not (text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:")):
                         body_blocks.append({
                             "type": "TextBlock",
-                            "text": item.get("text", ""),
+                            "text": text,
                             "wrap": True,
-                            "weight": "Bolder",
-                            "size": "Large",
-                            "spacing": "Medium"
+                            "spacing": "Small"
                         })
-                    elif item_type == "paragraph":
-                        text = item.get("text", "")
-                        # Only add to main body if not a reference/calculated paragraph
-                        if not (text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:")):
-                            body_blocks.append({
-                                "type": "TextBlock",
-                                "text": text,
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
-                    elif item_type == "bullet_list":
-                        items = item.get("items", [])
-                        for list_item in items:
-                            body_blocks.append({
-                                "type": "TextBlock",
-                                "text": f"• {list_item}",
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
-                    elif item_type == "numbered_list":
-                        items = item.get("items", [])
-                        for i, list_item in enumerate(items, 1):
-                            body_blocks.append({
-                                "type": "TextBlock",
-                                "text": f"{i}. {list_item}",
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
-                    elif item_type == "code_block":
+                elif item_type == "bullet_list":
+                    items = item.get("items", [])
+                    for list_item in items:
                         body_blocks.append({
                             "type": "TextBlock",
-                            "text": f"```\n{item.get('code', '')}\n```",
+                            "text": f"• {list_item}",
                             "wrap": True,
-                            "fontType": "Monospace",
-                            "spacing": "Medium"
+                            "spacing": "Small"
                         })
+                elif item_type == "numbered_list":
+                    items = item.get("items", [])
+                    for i, list_item in enumerate(items, 1):
+                        body_blocks.append({
+                            "type": "TextBlock",
+                            "text": f"{i}. {list_item}",
+                            "wrap": True,
+                            "spacing": "Small"
+                        })
+                elif item_type == "code_block":
+                    body_blocks.append({
+                        "type": "TextBlock",
+                        "text": f"```\n{item.get('code', '')}\n```",
+                        "wrap": True,
+                        "fontType": "Monospace",
+                        "spacing": "Medium"
+                    })
                 # Add all non-source paragraphs to the main body
                 # for text in other_paragraphs:
                 #     body_blocks.append({
