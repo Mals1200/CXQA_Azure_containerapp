@@ -128,8 +128,8 @@ async def _bot_logic(turn_context: TurnContext):
         state['cache'] = ask_func.tool_cache
 
         # Parse and format the response
-        # source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
-        match = re.search(answer_text, flags=re.DOTALL)
+        source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
+        match = re.search(source_pattern, answer_text, flags=re.DOTALL)
 
         # Normalize the LLM output into JSON
         cleaned = answer_text.strip()
@@ -140,13 +140,13 @@ async def _bot_logic(turn_context: TurnContext):
             cleaned = cleaned[3:].strip()
         if cleaned.endswith('```'):
             cleaned = cleaned[:-3].strip()
-        cleaned_answer_text = cleaned_answer_text.replace('\n', '\\n')
+        cleaned = cleaned.replace('\n', '\\n')
         # Try to parse the response as JSON first
         try:
             # Remove code block markers if present
             # Fix: Replace real newlines with escaped newlines to allow JSON parsing
             # This is necessary because the LLM may output real newlines inside string values, which is invalid in JSON
-            response_json = json.loads(cleaned_answer_text)
+            response_json = json.loads(cleaned)
             # Check if this is our expected JSON format with content and source
             if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
                 # We have a structured JSON response!
