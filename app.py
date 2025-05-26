@@ -1,16 +1,13 @@
-# version 11b 
-# ((Hyperlink file names))
+# version 11
 # Made it display the files sources for the compounded questions:
-    # Referenced: <Files>                <-------Hyperlink to sharepoint
-    # Calculated using: <Tables>         <-------Hyperlink to sharepoint
-# still the url is fixed to one file. (NEEDS WORK!)
+    # Referenced: <Files>     
+    # Calculated using: <Tables>
 
 import os
 import asyncio
 from threading import Lock
 import re
 import json
-import urllib.parse
 
 from flask import Flask, request, jsonify, Response
 from botbuilder.core import (
@@ -123,9 +120,16 @@ async def _bot_logic(turn_context: TurnContext):
     await turn_context.send_activity(typing_activity)
 
     try:
-        # Process the message
-        ans_gen = Ask_Question(user_message, user_id=user_id)
-        answer_text = "".join(ans_gen)
+        answer_chunks = []
+        try:
+            for chunk in Ask_Question(user_message, user_id=user_id):
+                answer_chunks.append(chunk)
+            answer_text = "".join(answer_chunks)
+        except Exception as e:
+            answer_text = f"Sorry, an error occurred while answering your question: {e}"
+
+        if not answer_text.strip():
+            answer_text = "Sorry, I couldn't find an answer or something went wrong."
 
         # Update state
         state['history'] = ask_func.chat_history
@@ -231,38 +235,12 @@ async def _bot_logic(turn_context: TurnContext):
                     if item.get("type", "") == "paragraph":
                         text = item.get("text", "")
                         if text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:"):
-                            lines = text.split("\n")
-                            # Add the heading ("Referenced:" or "Calculated using:")
-                            if lines:
-                                source_container["items"].append({
-                                    "type": "TextBlock",
-                                    "text": lines[0],
-                                    "wrap": True,
-                                    "spacing": "Small",
-                                    "weight": "Bolder"
-                                })
-                            # For each file/table, add a markdown link as a TextBlock
-                            for line in lines[1:]:
-                                if line.strip().startswith("-"):
-                                    fname = line.strip()[1:].strip()
-                                    if fname:
-                                        sharepoint_base = "https://dgda.sharepoint.com/sites/CXQAData/Shared%20Documents/Forms/AllItems.aspx"
-                                        url = sharepoint_base
-                                        print(f"DEBUG: Adding file link: {fname} -> {url}")
-                                        source_container["items"].append({
-                                            "type": "TextBlock",
-                                            "text": f"[{fname}]({url})",
-                                            "wrap": True,
-                                            "spacing": "Small"
-                                        })
-                                else:
-                                    # If not a file line, just add as text
-                                    source_container["items"].append({
-                                        "type": "TextBlock",
-                                        "text": line,
-                                        "wrap": True,
-                                        "spacing": "Small"
-                                    })
+                            source_container["items"].append({
+                                "type": "TextBlock",
+                                "text": text,
+                                "wrap": True,
+                                "spacing": "Small"
+                            })
                 # Remove file_names/table_names and code/file blocks from the collapsible section
                 # Always add the source line at the bottom of the container
                 source_container["items"].append({
