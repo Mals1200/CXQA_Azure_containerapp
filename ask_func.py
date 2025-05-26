@@ -22,28 +22,29 @@ from functools import lru_cache, wraps
 from collections import OrderedDict
 import difflib
 import time
+import concurrent.futures
 
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
 #######################################################################################
 CONFIG = {
     # ── MAIN, high-capacity model (Tool-1 Index, Tool-2 Python, Tool-3 Fallback) ──
-    "LLM_ENDPOINT"     : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
-                         "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
+    "LLM_ENDPOINT"     : "https://cxqaazureaihub2358016269.openai.azure.com/"
+                         "openai/deployments/gpt-4o-3/chat/completions?api-version=2025-01-01-preview",
 
     # same key used for both deployments
-    "LLM_API_KEY"      : "5EgVev7KCYaO758NWn5yL7f2iyrS4U3FaSI5lQhTx7RlePQ7QMESJQQJ99AKACHYHv6XJ3w3AAAAACOGoSfb",
+    "LLM_API_KEY"      : "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor",
 
     # ── AUXILIARY model (classifiers, splitters, etc.) ────────────────────────────
-    "LLM_ENDPOINT_AUX" : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
+    "LLM_ENDPOINT_AUX" : "https://cxqaazureaihub2358016269.openai.azure.com/"
                          "openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview",
 
     # (unchanged settings below) ───────────────────────────────────────────────────
     "SEARCH_SERVICE_NAME": "cxqa-azureai-search",
     "SEARCH_ENDPOINT"    : "https://cxqa-azureai-search.search.windows.net",
     "ADMIN_API_KEY"      : "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv",
-    "INDEX_NAME"         : "vector-1746718296853-08-05-2025",  #"vector-1741865904949",
-    "SEMANTIC_CONFIG_NAME": "vector-1746718296853-08-05-2025-semantic-configuration", #"vector-1741865904949-semantic-configuration",
+    "INDEX_NAME"         : "vector-1741865904949",
+    "SEMANTIC_CONFIG_NAME": "vector-1741865904949-semantic-configuration",
     "CONTENT_FIELD"      : "chunk",
     "ACCOUNT_URL"        : "https://cxqaazureaihub8779474245.blob.core.windows.net",
     "SAS_TOKEN"          : (
@@ -55,6 +56,7 @@ CONFIG = {
     "TARGET_FOLDER_PATH": "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
 }
 
+
 # Global objects with better initialization
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
 logging.getLogger("azure").setLevel(logging.WARNING)
@@ -63,6 +65,70 @@ logging.getLogger("azure").setLevel(logging.WARNING)
 chat_history = []
 recent_history = []
 tool_cache = {}
+
+# Global persistent HTTP session
+session = requests.Session()
+
+# Global RBAC/schema cache
+def get_rbac():
+    if _rbac_cache['user'] is not None and _rbac_cache['file'] is not None:
+        return _rbac_cache['user'], _rbac_cache['file']
+    df_user, df_file = load_rbac_files_uncached()
+    _rbac_cache['user'] = df_user
+    _rbac_cache['file'] = df_file
+    return df_user, df_file
+
+def get_schema():
+    global _schema_cache
+    if _schema_cache is not None:
+        return _schema_cache
+    _schema_cache = load_table_metadata_uncached()
+    return _schema_cache
+
+# --- Uncached RBAC/schema loaders (original logic) ---
+def load_rbac_files_uncached():
+    account_url = CONFIG["ACCOUNT_URL"]
+    sas_token = CONFIG["SAS_TOKEN"]
+    container_name = CONFIG["CONTAINER_NAME"]
+    rbac_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/RBAC/"
+    user_rbac_file = "User_rbac.xlsx"
+    file_rbac_file = "File_rbac.xlsx"
+    df_user = pd.DataFrame()
+    df_file = pd.DataFrame()
+    try:
+        blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
+        container_client = blob_service_client.get_container_client(container_name)
+        user_rbac_blob = container_client.get_blob_client(rbac_folder_path + user_rbac_file)
+        user_rbac_data = user_rbac_blob.download_blob().readall()
+        df_user = pd.read_excel(BytesIO(user_rbac_data))
+        file_rbac_blob = container_client.get_blob_client(rbac_folder_path + file_rbac_file)
+        file_rbac_data = file_rbac_blob.download_blob().readall()
+        df_file = pd.read_excel(BytesIO(file_rbac_data))
+    except Exception as e:
+        logging.error(f"Failed to load RBAC files: {e}")
+    return df_user, df_file
+
+from functools import lru_cache
+@lru_cache(maxsize=1)
+def load_table_metadata_uncached(sample_n: int = 2):
+    container = BlobServiceClient(account_url=CONFIG["ACCOUNT_URL"], credential=CONFIG["SAS_TOKEN"])
+    container = container.get_container_client(CONFIG["CONTAINER_NAME"])
+    prefix = CONFIG["TARGET_FOLDER_PATH"]
+    meta = OrderedDict()
+    for blob in container.list_blobs(name_starts_with=prefix):
+        fn = os.path.basename(blob.name)
+        if not fn.lower().endswith((".xlsx", ".xls", ".csv")):
+            continue
+        data = container.get_blob_client(blob.name).download_blob().readall()
+        df = (pd.read_excel if fn.lower().endswith((".xlsx", ".xls")) else pd.read_csv)(BytesIO(data))
+        schema = {col: str(dt) for col, dt in df.dtypes.items()}
+        sample = df.head(sample_n).to_dict(orient="records")
+        meta[fn] = {"schema": schema, "sample": sample}
+    return meta
+
+# Global RBAC/schema cache variables
+_rbac_cache = {'user': None, 'file': None}
+_schema_cache = None
 
 # Add retry decorator for Azure API calls
 def azure_retry(max_attempts=3, delay=2):
@@ -92,35 +158,7 @@ def load_rbac_files():
     returns them as two DataFrame objects: (df_user, df_file).
     If anything fails, returns two empty dataframes.
     """
-    account_url = CONFIG["ACCOUNT_URL"]
-    sas_token = CONFIG["SAS_TOKEN"]
-    container_name = CONFIG["CONTAINER_NAME"]
-
-    rbac_folder_path = "UI/2024-11-20_142337_UTC/cxqa_data/RBAC/"
-    user_rbac_file = "User_rbac.xlsx"
-    file_rbac_file = "File_rbac.xlsx"
-
-    df_user = pd.DataFrame()
-    df_file = pd.DataFrame()
-
-    try:
-        blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
-        container_client = blob_service_client.get_container_client(container_name)
-
-        # Load User_rbac.xlsx
-        user_rbac_blob = container_client.get_blob_client(rbac_folder_path + user_rbac_file)
-        user_rbac_data = user_rbac_blob.download_blob().readall()
-        df_user = pd.read_excel(BytesIO(user_rbac_data))
-
-        # Load File_rbac.xlsx
-        file_rbac_blob = container_client.get_blob_client(rbac_folder_path + file_rbac_file)
-        file_rbac_data = file_rbac_blob.download_blob().readall()
-        df_file = pd.read_excel(BytesIO(file_rbac_data))
-
-    except Exception as e:
-        logging.error(f"Failed to load RBAC files: {e}")
-    
-    return df_user, df_file
+    return get_rbac()
 
 def get_file_tier(file_name):
     """
@@ -128,7 +166,7 @@ def get_file_tier(file_name):
     Now uses fuzzy matching via difflib to find the best match if the exact or partial
     match isn't found. If best match ratio is below 0.8, defaults to tier=1.
     """
-    _, df_file = load_rbac_files()
+    _, df_file = get_rbac()
     if df_file.empty or ("File_Name" not in df_file.columns) or ("Tier" not in df_file.columns):
         # default if not loaded or columns missing
         return 1  
@@ -190,24 +228,7 @@ def get_file_tier(file_name):
 #######################################################################################
 @lru_cache(maxsize=1)
 def load_table_metadata(sample_n: int = 2):
-    container = BlobServiceClient(account_url=CONFIG["ACCOUNT_URL"], credential=CONFIG["SAS_TOKEN"])\
-                    .get_container_client(CONFIG["CONTAINER_NAME"])
-    prefix = CONFIG["TARGET_FOLDER_PATH"]
-    meta = OrderedDict()
-
-    for blob in container.list_blobs(name_starts_with=prefix):
-        fn = os.path.basename(blob.name)
-        if not fn.lower().endswith((".xlsx", ".xls", ".csv")):
-            continue
-
-        data = container.get_blob_client(blob.name).download_blob().readall()
-        df = (pd.read_excel if fn.lower().endswith((".xlsx", ".xls")) else pd.read_csv)(BytesIO(data))
-
-        schema = {col: str(dt) for col, dt in df.dtypes.items()}
-        sample = df.head(sample_n).to_dict(orient="records")
-        meta[fn] = {"schema": schema, "sample": sample}
-
-    return meta
+    return get_schema()
 
 def format_tables_text(meta: dict) -> str:
     lines = []
@@ -259,7 +280,7 @@ def call_llm(system_prompt, user_prompt, max_tokens=500, temperature=0.0):
             "max_tokens": max_tokens,
             "temperature": temperature
         }
-        response = requests.post(CONFIG["LLM_ENDPOINT"], headers=headers, json=payload)
+        response = session.post(CONFIG["LLM_ENDPOINT"], headers=headers, json=payload)
         response.raise_for_status()
         data = response.json()
         if "choices" in data and data["choices"]:
@@ -289,8 +310,6 @@ def call_llm_aux(system_prompt, user_prompt, max_tokens=300, temperature=0.0):
     Lightweight LLM caller that targets the GPT-4o auxiliary deployment.
     Used for classifiers, question splitters, etc. — NOT for Tool-1/2/3.
     """
-    import requests, time, logging, json
-
     headers = {
         "Content-Type": "application/json",
         "api-key": CONFIG["LLM_API_KEY"]
@@ -306,7 +325,7 @@ def call_llm_aux(system_prompt, user_prompt, max_tokens=300, temperature=0.0):
 
     for attempt in range(3):
         try:
-            r = requests.post(CONFIG["LLM_ENDPOINT_AUX"], headers=headers, json=payload, timeout=30)
+            r = session.post(CONFIG["LLM_ENDPOINT_AUX"], headers=headers, json=payload, timeout=30)
             if r.status_code == 429:
                 time.sleep(1.5 * (attempt + 1))
                 continue
@@ -1172,9 +1191,9 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     user_question_stripped = user_question.strip()
     if is_entirely_greeting_or_punc(user_question_stripped):
         if len(chat_history) < 4:
-            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'."
+            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         else:
-            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'."
+            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         return
 
     # Check cache
@@ -1189,9 +1208,13 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     python_dict = {"result": "No information", "code": ""}
 
     if needs_tabular_data:
-        python_dict = tool_2_code_run(user_question, user_tier=user_tier, recent_history=recent_history)
-
-    index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            fut_py = executor.submit(tool_2_code_run, user_question, user_tier, recent_history)
+            fut_idx = executor.submit(tool_1_index_search, user_question, 5, user_tier)
+            python_dict = fut_py.result()
+            index_dict = fut_idx.result()
+    else:
+        index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
 
     raw_answer = ""
     for token in final_answer_llm(user_question, index_dict, python_dict):
@@ -1215,7 +1238,7 @@ def get_user_tier(user_id):
     Otherwise returns the tier from the file.
     """
     user_id_str = str(user_id).strip().lower()
-    df_user, _ = load_rbac_files()
+    df_user, _ = get_rbac()
 
     if user_id_str == "0":
         return 0
@@ -1285,7 +1308,7 @@ def Ask_Question(question, user_id="anonymous"):
                 return
 
         # Handle "restart chat" command
-        if question_lower == "restart chat":
+        if question_lower == ("restart") or ("restart chat") or ("restartchat") or ("chat restart") or ("chatrestart"):
             chat_history = []
             tool_cache.clear()
             recent_history = []
