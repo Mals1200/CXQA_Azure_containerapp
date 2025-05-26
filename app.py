@@ -1,13 +1,8 @@
-# version 11
-# Made it display the files sources for the compounded questions:
-    # Referenced: <Files>     
-    # Calculated using: <Tables>
+# version 11b - “Notebook output” mode: Teams shows exactly what your notebook prints!
 
 import os
 import asyncio
 from threading import Lock
-import re
-import json
 
 from flask import Flask, request, jsonify, Response
 from botbuilder.core import (
@@ -16,7 +11,6 @@ from botbuilder.core import (
     TurnContext
 )
 from botbuilder.schema import Activity
-# *** Important: import TeamsInfo ***
 from botbuilder.core.teams import TeamsInfo
 
 from ask_func import Ask_Question, chat_history
@@ -119,316 +113,21 @@ async def _bot_logic(turn_context: TurnContext):
     typing_activity = Activity(type="typing")
     await turn_context.send_activity(typing_activity)
 
-    try:
-        answer_chunks = []
-        try:
-            for chunk in Ask_Question(user_message, user_id=user_id):
-                answer_chunks.append(chunk)
-            answer_text = "".join(answer_chunks)
-        except Exception as e:
-            answer_text = f"Sorry, an error occurred while answering your question: {e}"
+    # ---------------------------------------------------------------------
+    # 🟩 Core fix: Collect answer as in the notebook, send as-is, no post-processing
+    # ---------------------------------------------------------------------
+    answer_chunks = []
+    for chunk in Ask_Question(user_message, user_id=user_id):
+        answer_chunks.append(chunk)
+    answer_text = "".join(answer_chunks)
 
-        if not answer_text.strip():
-            answer_text = "Sorry, I couldn't find an answer or something went wrong."
+    # Update state
+    state['history'] = ask_func.chat_history
+    state['cache'] = ask_func.tool_cache
 
-        # Update state
-        state['history'] = ask_func.chat_history
-        state['cache'] = ask_func.tool_cache
-
-        # Parse and format the response
-        source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
-        match = re.search(source_pattern, answer_text, flags=re.DOTALL)
-
-        # Try to parse the response as JSON first
-        try:
-            # Remove code block markers if present
-            cleaned_answer_text = answer_text.strip()
-            if cleaned_answer_text.startswith('```json'):
-                cleaned_answer_text = cleaned_answer_text[7:].strip()
-            if cleaned_answer_text.startswith('```'):
-                cleaned_answer_text = cleaned_answer_text[3:].strip()
-            if cleaned_answer_text.endswith('```'):
-                cleaned_answer_text = cleaned_answer_text[:-3].strip()
-            # Fix: Replace real newlines with escaped newlines to allow JSON parsing
-            # This is necessary because the LLM may output real newlines inside string values, which is invalid in JSON
-            cleaned_answer_text = cleaned_answer_text.replace('\n', '\\n')
-            response_json = json.loads(cleaned_answer_text)
-            # Check if this is our expected JSON format with content and source
-            if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
-                # We have a structured JSON response!
-                content_items = response_json["content"]
-                source = response_json["source"]
-                # Build the adaptive card body
-                body_blocks = []
-                #referenced_paragraphs = []
-                #calculated_paragraphs = []
-                #other_paragraphs = []
-                # Process each content item based on its type
-                for item in content_items:
-                    item_type = item.get("type", "")
-                    if item_type == "heading":
-                        body_blocks.append({
-                            "type": "TextBlock",
-                            "text": item.get("text", ""),
-                            "wrap": True,
-                            "weight": "Bolder",
-                            "size": "Large",
-                            "spacing": "Medium"
-                        })
-                    elif item_type == "paragraph":
-                        text = item.get("text", "")
-                        # Only add to main body if not a reference/calculated paragraph
-                        if not (text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:")):
-                            body_blocks.append({
-                                "type": "TextBlock",
-                                "text": text,
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
-                    elif item_type == "bullet_list":
-                        items = item.get("items", [])
-                        for list_item in items:
-                            body_blocks.append({
-                                "type": "TextBlock",
-                                "text": f"• {list_item}",
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
-                    elif item_type == "numbered_list":
-                        items = item.get("items", [])
-                        for i, list_item in enumerate(items, 1):
-                            body_blocks.append({
-                                "type": "TextBlock",
-                                "text": f"{i}. {list_item}",
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
-                    elif item_type == "code_block":
-                        body_blocks.append({
-                            "type": "TextBlock",
-                            "text": f"```\n{item.get('code', '')}\n```",
-                            "wrap": True,
-                            "fontType": "Monospace",
-                            "spacing": "Medium"
-                        })
-                # Add all non-source paragraphs to the main body
-                # for text in other_paragraphs:
-                #     body_blocks.append({
-                #         "type": "TextBlock",
-                #         "text": text,
-                #         "wrap": True,
-                #         "spacing": "Small"
-                #     })
-                # Create the source section
-                source_container = {
-                    "type": "Container",
-                    "id": "sourceContainer",
-                    "isVisible": False,
-                    "style": "emphasis",
-                    "bleed": True,
-                    "maxHeight": "500px",
-                    "isScrollable": True, 
-                    "items": []
-                }
-                # Add Referenced/Calculated paragraphs to the collapsible section if present
-                for item in content_items:
-                    if item.get("type", "") == "paragraph":
-                        text = item.get("text", "")
-                        if text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:"):
-                            source_container["items"].append({
-                                "type": "TextBlock",
-                                "text": text,
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
-                # Remove file_names/table_names and code/file blocks from the collapsible section
-                # Always add the source line at the bottom of the container
-                source_container["items"].append({
-                    "type": "TextBlock",
-                    "text": f"Source: {source}",
-                    "wrap": True,
-                    "weight": "Bolder",
-                    "color": "Accent",
-                    "spacing": "Medium",
-                })
-                body_blocks.append(source_container)
-                # Add the show/hide source buttons
-                body_blocks.append({
-                    "type": "ColumnSet",
-                    "columns": [
-                        {
-                            "type": "Column",
-                            "id": "showSourceBtn",
-                            "items": [
-                                {
-                                    "type": "ActionSet",
-                                    "actions": [
-                                        {
-                                            "type": "Action.ToggleVisibility",
-                                            "title": "Show Source",
-                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                        }
-                                    ]
-                                }
-                            ]
-                        },
-                        {
-                            "type": "Column",
-                            "id": "hideSourceBtn",
-                            "isVisible": False,
-                            "items": [
-                                {
-                                    "type": "ActionSet",
-                                    "actions": [
-                                        {
-                                            "type": "Action.ToggleVisibility",
-                                            "title": "Hide Source",
-                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                        }
-                                    ]
-                                }
-                            ]
-                        }
-                    ]
-                })
-                # Create and send the adaptive card
-                adaptive_card = {
-                    "type": "AdaptiveCard",
-                    "body": body_blocks,
-                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                    "version": "1.5"
-                }
-                message = Activity(
-                    type="message",
-                    attachments=[{
-                        "contentType": "application/vnd.microsoft.card.adaptive",
-                        "content": adaptive_card
-                    }]
-                )
-                await turn_context.send_activity(message)
-                # Successfully processed JSON, so return early
-                return
-                
-        except (json.JSONDecodeError, KeyError, TypeError):
-            # Not JSON or not in our expected format, fall back to the regular processing
-            pass
-            
-        # If we're here, the response wasn't valid JSON, so process normally
-        if match:
-            main_answer = match.group(1).strip()
-            source_line = match.group(2).strip()
-            appended_details = match.group(3) if match.group(3) else ""
-        else:
-            main_answer = answer_text
-            source_line = ""
-            appended_details = ""
-
-        if source_line:
-            # Create simple text blocks without complex formatting
-            body_blocks = [{
-                "type": "TextBlock",
-                "text": main_answer,
-                "wrap": True
-            }]
-            
-            # Create the collapsible source container
-            if source_line or appended_details:
-                # Create a container that will be toggled
-                source_container = {
-                    "type": "Container",
-                    "id": "sourceContainer",
-                    "isVisible": False,
-                    "style": "emphasis",
-                    "bleed": True,
-                    "maxHeight": "500px",
-                    "isScrollable": True, 
-                    "items": [
-                        {
-                            "type": "TextBlock",
-                            "text": source_line,
-                            "wrap": True,
-                            "weight": "Bolder",
-                            "color": "Accent",
-                            "spacing": "Medium",
-                        }
-                    ]
-                }
-                
-                # Add source details if it exists
-                if appended_details:
-                    source_container["items"].append({
-                        "type": "TextBlock",
-                        "text": appended_details.strip(),
-                        "wrap": True,
-                        "spacing": "Small"
-                    })
-                    
-                body_blocks.append(source_container)
-                
-                body_blocks.append({
-                    "type": "ColumnSet",
-                    "columns": [
-                        {
-                            "type": "Column",
-                            "id": "showSourceBtn",
-                            "items": [
-                                {
-                                    "type": "ActionSet",
-                                    "actions": [
-                                        {
-                                            "type": "Action.ToggleVisibility",
-                                            "title": "Show Source",
-                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                        }
-                                    ]
-                                }
-                            ]
-                        },
-                        {
-                            "type": "Column",
-                            "id": "hideSourceBtn",
-                            "isVisible": False,
-                            "items": [
-                                {
-                                    "type": "ActionSet",
-                                    "actions": [
-                                        {
-                                            "type": "Action.ToggleVisibility",
-                                            "title": "Hide Source",
-                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                        }
-                                    ]
-                                }
-                            ]
-                        }
-                    ]
-                })
-
-
-            adaptive_card = {
-                "type": "AdaptiveCard",
-                "body": body_blocks,
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "version": "1.5"
-            }
-            
-            message = Activity(
-                type="message",
-                attachments=[{
-                    "contentType": "application/vnd.microsoft.card.adaptive",
-                    "content": adaptive_card
-                }]
-            )
-            await turn_context.send_activity(message)
-        else:
-            # For simple responses without source, send formatted markdown directly
-            # Teams supports some markdown in regular messages
-            await turn_context.send_activity(Activity(type="message", text=main_answer))
-
-    except Exception as e:
-        error_message = f"An error occurred while processing your request: {str(e)}"
-        print(f"Error in bot logic: {e}")
-        await turn_context.send_activity(Activity(type="message", text=error_message))
+    # Send answer to Teams exactly as received, no extra logic
+    await turn_context.send_activity(Activity(type="message", text=answer_text))
+    return
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=80)
