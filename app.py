@@ -21,16 +21,7 @@ from botbuilder.schema import Activity
 # *** Important: import TeamsInfo ***
 from botbuilder.core.teams import TeamsInfo
 
-try:
-    from ask_func import Ask_Question, chat_history
-except ImportError:
-    # Fallback to importing from 5.py if ask_func doesn't exist
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("main_module", "5.py")
-    main_module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(main_module)
-    Ask_Question = main_module.Ask_Question
-    chat_history = main_module.chat_history
+from ask_func import Ask_Question, chat_history
 
 app = Flask(__name__)
 
@@ -93,18 +84,9 @@ async def _bot_logic(turn_context: TurnContext):
         cleanup_old_states()
 
     # Set the conversation state for this request
-    try:
-        import ask_func
-        ask_func.chat_history = state['history']
-        ask_func.tool_cache = state['cache']
-    except ImportError:
-        # Fallback to 5.py module
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("main_module", "5.py")
-        main_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(main_module)
-        main_module.chat_history = state['history']
-        main_module.tool_cache = state['cache']
+    import ask_func
+    ask_func.chat_history = state['history']
+    ask_func.tool_cache = state['cache']
 
     user_message = turn_context.activity.text or ""
 
@@ -145,35 +127,45 @@ async def _bot_logic(turn_context: TurnContext):
         answer_text = "".join(ans_gen)
 
         # Update state
-        try:
-            import ask_func
-            state['history'] = ask_func.chat_history
-            state['cache'] = ask_func.tool_cache
-        except ImportError:
-            # Fallback for 5.py module
-            state['history'] = main_module.chat_history
-            state['cache'] = main_module.tool_cache
+        import ask_func
+        state['history'] = ask_func.chat_history
+        state['cache'] = ask_func.tool_cache
 
         # Debug: Print the raw answer for troubleshooting
+        print(f"Raw answer length: {len(answer_text)}")
         print(f"Raw answer: {answer_text[:200]}...")
+        
+        # Check if answer is empty or just whitespace
+        if not answer_text or not answer_text.strip():
+            print("WARNING: Empty answer received from Ask_Question")
+            await turn_context.send_activity(Activity(type="message", text="I'm sorry, I couldn't generate a response. Please try rephrasing your question."))
+            return
 
         # Try to parse the response as JSON first (only if it looks like JSON)
         is_json_response = False
         response_json = None
         
-        if answer_text.strip().startswith('{') and answer_text.strip().endswith('}'):
+        # More flexible JSON detection - look for JSON anywhere in the response
+        cleaned_answer_text = answer_text.strip()
+        
+        # Remove code block markers if present
+        if cleaned_answer_text.startswith('```json'):
+            cleaned_answer_text = cleaned_answer_text[7:].strip()
+        elif cleaned_answer_text.startswith('```'):
+            cleaned_answer_text = cleaned_answer_text[3:].strip()
+        if cleaned_answer_text.endswith('```'):
+            cleaned_answer_text = cleaned_answer_text[:-3].strip()
+        
+        # Try to find JSON in the response
+        if '{' in cleaned_answer_text and '}' in cleaned_answer_text:
             try:
-                # Remove code block markers if present
-                cleaned_answer_text = answer_text.strip()
-                if cleaned_answer_text.startswith('```json'):
-                    cleaned_answer_text = cleaned_answer_text[7:].strip()
-                if cleaned_answer_text.startswith('```'):
-                    cleaned_answer_text = cleaned_answer_text[3:].strip()
-                if cleaned_answer_text.endswith('```'):
-                    cleaned_answer_text = cleaned_answer_text[:-3].strip()
+                # Try to extract JSON from the response
+                start_idx = cleaned_answer_text.find('{')
+                end_idx = cleaned_answer_text.rfind('}') + 1
+                json_part = cleaned_answer_text[start_idx:end_idx]
                 
                 # Try to parse as JSON
-                response_json = json.loads(cleaned_answer_text)
+                response_json = json.loads(json_part)
                 # Check if this is our expected JSON format with content and source
                 if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
                     is_json_response = True
@@ -379,7 +371,11 @@ async def _bot_logic(turn_context: TurnContext):
             source_line = ""
             appended_details = ""
 
-        if source_line:
+        # If we have a main answer but no source line, create a basic one
+        if main_answer and not source_line:
+            source_line = "Source: AI Generated"
+
+        if source_line or main_answer:
             # Create simple text blocks without complex formatting
             body_blocks = [{
                 "type": "TextBlock",
@@ -478,7 +474,11 @@ async def _bot_logic(turn_context: TurnContext):
         else:
             # For simple responses without source, send formatted markdown directly
             # Teams supports some markdown in regular messages
-            await turn_context.send_activity(Activity(type="message", text=main_answer))
+            if main_answer:
+                await turn_context.send_activity(Activity(type="message", text=main_answer))
+            else:
+                # Final fallback if we have no content at all
+                await turn_context.send_activity(Activity(type="message", text="I'm sorry, I couldn't generate a response to your question. Please try rephrasing it or ask something else."))
 
     except Exception as e:
         error_message = f"An error occurred while processing your request: {str(e)}"
