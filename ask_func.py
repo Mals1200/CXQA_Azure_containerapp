@@ -1,40 +1,21 @@
-# version 21b
-# 1.  Teams-friendly bullet lists in *plain-text* responses
-#     -----------------------------------------------------
-#     •  Old behaviour:
-#          "Referenced: file1.pdf, file2.pdf"
-#          "Calculated using: table1.xlsx, table2.csv"
+# version v21c  (Fixed the python path to answer questions with the chat history occupied)
+# ---------------------------------------------------------------------------
+# 1) Cleaner tabular-data classifier
+#    • Removed chat_history from the prompt ➜ fewer false “NO” decisions.
 #
-#     •  New behaviour (better line-breaks in Microsoft Teams):
-#          Referenced:
-#          - file1.pdf
-#          - file2.pdf
+# 2) More robust Python-tool trigger
+#    • Run Python whenever:
+#        a) references_tabular_data() == YES
+#        b) OR index search returns “No information”.
 #
-#          Calculated using:
-#          - table1.xlsx
-#          - table2.csv
+# 3) Teams-friendly bullet lists in plain-text mode
+#    • Legacy branches of post_process_source()
+#      now build:
+#          "\nReferenced:\n- " + "\n- ".join(file_names)
+#          "\nCalculated using:\n- " + "\n- ".join(table_names)
 #
-#     •  Where changed:
-#          ─ post_process_source()  → three legacy branches:
-#              a) "source: index & python"
-#              b) "source: python"
-#              c) "source: index"
-#          ─ Each branch now builds *file_info* / *table_info* using:
-#                "\nReferenced:\n- "       + "\n- ".join(file_names)
-#                "\nCalculated using:\n- " + "\n- ".join(table_names)
-#
-# 2.  JSON path remains untouched
-#     -----------------------------------------------------
-#     •  The helper _inject_refs() already produced paragraph blocks.
-#       No modification was required there, except identical bullet-list
-#       formatting for consistency.
-#
-# 3.  No logic or variable names were altered elsewhere
-#     -----------------------------------------------------
-#     •  Only string-building lines were replaced; all surrounding control
-#       flow, error-handling, and logging remain identical to v20.
-###############################################################################
-
+# 4) No changes to JSON path, RBAC, caching, or logging logic.
+# ─────────────────────────────────────────────────────────────────────────────
 
 import os
 import io
@@ -838,6 +819,7 @@ Important guidelines:
 9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
 10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
 11. When questions have multiple parts needing different sources, use "Index & Python" as the source
+12. Always include the user's question as the first heading or paragraph in the content array.
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
