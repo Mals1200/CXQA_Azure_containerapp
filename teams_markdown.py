@@ -8,39 +8,50 @@ SHAREPOINT_BASE = (
 )
 
 def link(fname: str) -> str:
-    url = SHAREPOINT_BASE.format(urllib.parse.quote(fname))
-    return f"[{fname}]({url})"
+    return SHAREPOINT_BASE.format(urllib.parse.quote(fname))
 
 def render(question: str, content: list, source: str, files: list, tables: list) -> str:
     lines = []
+
     # Q1 prefix
     lines.append(f"🗨️ Q1: {question.strip()}")
     lines.append(question.strip())
-    lines.append("")  # blank line
+    lines.append("")
 
-    # Process headings and paragraphs/numbered lists
+    # Content
     for item in content:
-        t = item.get("type")
+        t   = item.get("type")
         txt = item.get("text", "")
         if t == "heading":
             lines.append(f"**{txt}**")
-            lines.append("")  # blank after heading
+            lines.append("")
         elif t == "paragraph" and not txt.startswith(("Referenced:", "Calculated")):
             lines.append(txt)
             lines.append("")
         elif t == "numbered_list":
-            for idx, it in enumerate(item.get("items", []), 1):
-                lines.append(f"{idx}. {it}")
+            for i, li in enumerate(item.get("items", []), 1):
+                lines.append(f"{i}. {li}")
+            lines.append("")
+        elif t == "bullet_list":
+            for li in item.get("items", []):
+                lines.append(f"• {li}")
             lines.append("")
 
-    # Source line
+    # Source
     lines.append(f"Source: {source}")
+    lines.append("")
 
-    # File hyperlinks
-    for f in files:
-        lines.append(f"- {link(f)}")
-    # Tables as “calculated using”
-    for t in tables:
-        lines.append(f"- Calculated using: {link(t)}")
+    # Referenced
+    if files:
+        lines.append("Referenced:")
+        for f in files:
+            lines.append(f"- [{f}]({link(f)})")
+        lines.append("")
+
+    # Calculated using
+    if tables:
+        lines.append("Calculated using:")
+        for t in tables:
+            lines.append(f"- [{t}]({link(t)})")
 
     return "\n".join(lines)
