@@ -1,8 +1,12 @@
-# version 11b - “Notebook output” mode: Teams shows exactly what your notebook prints!
+# version 11b 
+# ((Notebook-style answer formatting in Teams))
 
 import os
 import asyncio
 from threading import Lock
+import re
+import json
+import urllib.parse
 
 from flask import Flask, request, jsonify, Response
 from botbuilder.core import (
@@ -66,13 +70,48 @@ def messages():
 
     return Response(status=200)
 
+def _render_content(blocks):
+    """Notebook-style pretty text renderer for Teams output."""
+    out = []
+    skip_mode = False
+    for blk in blocks:
+        btype = blk.get("type", "")
+        txt   = blk.get("text", "")
+        # Skip "Referenced"/"Calculated using" sections (optional)
+        if btype == "paragraph" and txt.lower().startswith(("calculated using", "referenced")):
+            skip_mode = True
+            continue
+        if skip_mode and btype in ("paragraph", "bullet_list", "numbered_list"):
+            if btype == "heading":
+                skip_mode = False
+            else:
+                continue
+        if skip_mode:
+            continue
+        if btype == "heading":
+            out.append(txt.strip())
+            out.append("")
+        elif btype == "paragraph":
+            out.append(txt.strip())
+            out.append("")
+        elif btype == "bullet_list":
+            out.extend(f"• {item}" for item in blk.get("items", []))
+            out.append("")
+        elif btype == "numbered_list":
+            out.extend(f"{i}. {item}" for i, item in enumerate(blk.get("items", []), 1))
+            out.append("")
+        else:
+            out.append(str(blk))
+            out.append("")
+    return "\n".join(out).strip()
+
 async def _bot_logic(turn_context: TurnContext):
     conversation_id = turn_context.activity.conversation.id
     state = get_conversation_state(conversation_id)
     state['last_activity'] = asyncio.get_event_loop().time()
     
     # Clean up old states periodically
-    if len(conversation_states) > 100:  # Only clean up if we have many states
+    if len(conversation_states) > 100:
         cleanup_old_states()
 
     # Set the conversation state for this request
@@ -87,47 +126,65 @@ async def _bot_logic(turn_context: TurnContext):
     # --------------------------------------------------------------------
     user_id = "anonymous"  # fallback
     try:
-        # 'from_property.id' usually holds the "29:..." Teams user ID
         teams_user_id = turn_context.activity.from_property.id
-
-        # This call will attempt to fetch the user's profile from Teams
         teams_member = await TeamsInfo.get_member(turn_context, teams_user_id)
-        # If successful, you can read these fields:
-        #   teams_member.user_principal_name (often the email/UPN)
-        #   teams_member.email
-        #   teams_member.name
-        #   teams_member.id
         if teams_member and teams_member.user_principal_name:
             user_id = teams_member.user_principal_name
         elif teams_member and teams_member.email:
             user_id = teams_member.email
         else:
             user_id = teams_user_id  # fallback if we can't get an email
-
     except Exception as e:
-        # If get_member call fails (e.g., in a group chat scenario or permission issues),
-        # just fallback to the "29:..." ID or 'anonymous'
         user_id = turn_context.activity.from_property.id or "anonymous"
 
     # Show "thinking" indicator
     typing_activity = Activity(type="typing")
     await turn_context.send_activity(typing_activity)
 
-    # ---------------------------------------------------------------------
-    # 🟩 Core fix: Collect answer as in the notebook, send as-is, no post-processing
-    # ---------------------------------------------------------------------
-    answer_chunks = []
-    for chunk in Ask_Question(user_message, user_id=user_id):
-        answer_chunks.append(chunk)
-    answer_text = "".join(answer_chunks)
+    try:
+        ans_gen = Ask_Question(user_message, user_id=user_id)
+        answer_text = "".join(ans_gen)
 
-    # Update state
-    state['history'] = ask_func.chat_history
-    state['cache'] = ask_func.tool_cache
+        # Update state
+        state['history'] = ask_func.chat_history
+        state['cache'] = ask_func.tool_cache
 
-    # Send answer to Teams exactly as received, no extra logic
-    await turn_context.send_activity(Activity(type="message", text=answer_text))
-    return
+        # ----- Pretty notebook-style rendering logic -----
+        try:
+            cleaned = answer_text.strip()
+            if cleaned.startswith('```json'):
+                cleaned = cleaned[7:].strip()
+            if cleaned.startswith('```'):
+                cleaned = cleaned[3:].strip()
+            if cleaned.endswith('```'):
+                cleaned = cleaned[:-3].strip()
+            response_json = json.loads(cleaned)
+        except Exception as e:
+            response_json = None
+
+        if response_json and "content" in response_json:
+            pretty_text = _render_content(response_json["content"])
+            # Optionally add files/source info:
+            if "source" in response_json:
+                pretty_text += f"\n\nSource: {response_json['source']}"
+            if "source_details" in response_json:
+                det = response_json["source_details"]
+                file_tables = []
+                if det.get("file_names"):
+                    file_tables.extend(det["file_names"])
+                if det.get("table_names"):
+                    file_tables.extend(det["table_names"])
+                if file_tables:
+                    pretty_text += "\nFiles used: " + ", ".join(file_tables)
+            await turn_context.send_activity(Activity(type="message", text=pretty_text))
+        else:
+            # fallback: show plain answer as is
+            await turn_context.send_activity(Activity(type="message", text=answer_text))
+
+    except Exception as e:
+        error_message = f"An error occurred while processing your request: {str(e)}"
+        print(f"Error in bot logic: {e}")
+        await turn_context.send_activity(Activity(type="message", text=error_message))
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=80)
