@@ -1,6 +1,26 @@
-# version 21e:
-# changed the json to not produce a title unless the question is multi-part
-# =========================
+# =====================================================================================
+# CXQA Assistant - Recent Additions (Performance & Usability Improvements)
+# =====================================================================================
+#
+# 1. Persistent HTTP Session for API Calls
+#    - A single requests.Session() is used for all LLM API calls, reducing connection overhead
+#      and making API requests faster and more efficient.
+#
+# 2. Parallel Execution of Index and Python Tools
+#    - When both the index search (Tool 1) and Python code execution (Tool 2) are needed,
+#      they are run in parallel using ThreadPoolExecutor. This reduces total wait time for users.
+#
+# 3. Lazy Loading and Caching of DataFrames
+#    - Only the specific data files referenced in the generated Python code are downloaded and loaded.
+#    - Once a file is loaded, it is stored in a global cache (_dataframe_cache) for reuse in the session.
+#    - This avoids unnecessary downloads and speeds up repeated queries involving the same data.
+#
+# 4. Removal of Timing Print Statements
+#    - All timing/debug print statements have been removed for production use.
+#    - The code remains optimized, but now runs quietly for end users.
+#
+# These changes make the assistant faster, more efficient, and easier to maintain.
+# =====================================================================================
 
 import os
 import io
@@ -28,22 +48,22 @@ import time
 #######################################################################################
 CONFIG = {
     # ── MAIN, high-capacity model (Tool-1 Index, Tool-2 Python, Tool-3 Fallback) ──
-    "LLM_ENDPOINT"     : "https://cxqaazureaihub2358016269.openai.azure.com/"
-                         "openai/deployments/gpt-4o-3/chat/completions?api-version=2025-01-01-preview",
+    "LLM_ENDPOINT"     : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
+                         "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
 
     # same key used for both deployments
-    "LLM_API_KEY"      : "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor",
+    "LLM_API_KEY"      : "5EgVev7KCYaO758NWn5yL7f2iyrS4U3FaSI5lQhTx7RlePQ7QMESJQQJ99AKACHYHv6XJ3w3AAAAACOGoSfb",
 
     # ── AUXILIARY model (classifiers, splitters, etc.) ────────────────────────────
-    "LLM_ENDPOINT_AUX" : "https://cxqaazureaihub2358016269.openai.azure.com/"
+    "LLM_ENDPOINT_AUX" : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
                          "openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview",
 
     # (unchanged settings below) ───────────────────────────────────────────────────
     "SEARCH_SERVICE_NAME": "cxqa-azureai-search",
     "SEARCH_ENDPOINT"    : "https://cxqa-azureai-search.search.windows.net",
     "ADMIN_API_KEY"      : "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv",
-    "INDEX_NAME"         : "vector-1741865904949",
-    "SEMANTIC_CONFIG_NAME": "vector-1741865904949-semantic-configuration",
+    "INDEX_NAME"         : "vector-1746718296853-08-05-2025",  #"vector-1741865904949",
+    "SEMANTIC_CONFIG_NAME": "vector-1746718296853-08-05-2025-semantic-configuration", #"vector-1741865904949-semantic-configuration",
     "CONTENT_FIELD"      : "chunk",
     "ACCOUNT_URL"        : "https://cxqaazureaihub8779474245.blob.core.windows.net",
     "SAS_TOKEN"          : (
@@ -55,7 +75,6 @@ CONFIG = {
     "TARGET_FOLDER_PATH": "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
 }
 
-
 # Global objects with better initialization
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
 logging.getLogger("azure").setLevel(logging.WARNING)
@@ -64,6 +83,9 @@ logging.getLogger("azure").setLevel(logging.WARNING)
 chat_history = []
 recent_history = []
 tool_cache = {}
+
+# Global cache for dataframes
+_dataframe_cache = {}
 
 # Add retry decorator for Azure API calls
 def azure_retry(max_attempts=3, delay=2):
@@ -241,6 +263,8 @@ SCHEMA_TEXT = format_schema_and_sample(_metadata, sample_n=2, char_limit=15)
 #######################################################################################
 #                   CENTRALIZED LLM CALL (Point #1 Optimization)
 #######################################################################################
+session = requests.Session()
+
 def call_llm(system_prompt, user_prompt, max_tokens=500, temperature=0.0):
     """
     Central helper for calling Azure OpenAI LLM.
@@ -260,7 +284,7 @@ def call_llm(system_prompt, user_prompt, max_tokens=500, temperature=0.0):
             "max_tokens": max_tokens,
             "temperature": temperature
         }
-        response = requests.post(CONFIG["LLM_ENDPOINT"], headers=headers, json=payload)
+        response = session.post(CONFIG["LLM_ENDPOINT"], headers=headers, json=payload)
         response.raise_for_status()
         data = response.json()
         if "choices" in data and data["choices"]:
@@ -290,7 +314,7 @@ def call_llm_aux(system_prompt, user_prompt, max_tokens=300, temperature=0.0):
     Lightweight LLM caller that targets the GPT-4o auxiliary deployment.
     Used for classifiers, question splitters, etc. — NOT for Tool-1/2/3.
     """
-    import requests, time, logging, json
+    import time, logging, json
 
     headers = {
         "Content-Type": "application/json",
@@ -307,7 +331,7 @@ def call_llm_aux(system_prompt, user_prompt, max_tokens=300, temperature=0.0):
 
     for attempt in range(3):
         try:
-            r = requests.post(CONFIG["LLM_ENDPOINT_AUX"], headers=headers, json=payload, timeout=30)
+            r = session.post(CONFIG["LLM_ENDPOINT_AUX"], headers=headers, json=payload, timeout=30)
             if r.status_code == 429:
                 time.sleep(1.5 * (attempt + 1))
                 continue
@@ -635,7 +659,7 @@ Chat_history:
     table_names = []
     
     # Pattern 1: dataframes.get("filename")
-    pattern1 = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+    pattern1 = re.compile(r"dataframes\.get\(\s*['\"]([^'\"]+)['\"]\s*\)")
     matches1 = pattern1.findall(code_str)
     if matches1:
         for match in matches1:
@@ -643,7 +667,7 @@ Chat_history:
                 table_names.append(match)
     
     # Pattern 2: pd.read_excel("filename") or pd.read_csv("filename")
-    pattern2 = re.compile(r'pd\.read_(?:excel|csv)\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+    pattern2 = re.compile(r"pd\.read_(?:excel|csv)\(\s*['\"]([^'\"]+)['\"]\s*\)")
     matches2 = pattern2.findall(code_str)
     if matches2:
         for match in matches2:
@@ -657,50 +681,67 @@ Chat_history:
     return {"result": execution_result, "code": code_str, "table_names": table_names}
 
 def execute_generated_code(code_str):
+    import time
     account_url = CONFIG["ACCOUNT_URL"]
     sas_token = CONFIG["SAS_TOKEN"]
     container_name = CONFIG["CONTAINER_NAME"]
     target_folder_path = CONFIG["TARGET_FOLDER_PATH"]
 
     try:
+        t0 = time.time()
         blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
         container_client = blob_service_client.get_container_client(container_name)
+        t1 = time.time()
+
+        # Find referenced files in code
+        import re
+        pattern = re.compile(r"dataframes\.get\(\s*['\"]([^'\"]+)['\"]\s*\)")
+        found_files = pattern.findall(code_str)
+        if not found_files:
+            # Also check for pd.read_excel or pd.read_csv
+            pattern2 = re.compile(r"pd\.read_(?:excel|csv)\(\s*['\"]([^'\"]+)['\"]\s*\)")
+            found_files = pattern2.findall(code_str)
+        t2 = time.time()
 
         dataframes = {}
-        blobs = container_client.list_blobs(name_starts_with=target_folder_path)
-
-        for blob in blobs:
-            file_name = blob.name.split('/')[-1]
-            blob_client = container_client.get_blob_client(blob.name)
+        for file_name in found_files:
+            if file_name in _dataframe_cache:
+                dataframes[file_name] = _dataframe_cache[file_name]
+                continue
+            # Download and load only this file
+            blob_path = target_folder_path + file_name
+            t_dl0 = time.time()
+            blob_client = container_client.get_blob_client(blob_path)
             blob_data = blob_client.download_blob().readall()
-
+            t_dl1 = time.time()
             if file_name.endswith('.xlsx') or file_name.endswith('.xls'):
                 df = pd.read_excel(io.BytesIO(blob_data))
             elif file_name.endswith('.csv'):
                 df = pd.read_csv(io.BytesIO(blob_data))
             else:
                 continue
-
             dataframes[file_name] = df
+            _dataframe_cache[file_name] = df
 
         code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
         code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
 
         output_buffer = StringIO()
+        t_exec0 = time.time()
         with contextlib.redirect_stdout(output_buffer):
-            local_vars = {
+            exec(code_modified, {
                 "dataframes": dataframes,
                 "pd": pd,
                 "datetime": datetime
-            }
-            exec(code_modified, {}, local_vars)
+            })
+        t_exec1 = time.time()
 
         output = output_buffer.getvalue().strip()
         return output if output else "Execution completed with no output."
 
     except Exception as e:
         err_msg = f"An error occurred during code execution: {e}"
-        print(err_msg)            
+        print(err_msg)
         return err_msg
 
 #######################################################################################
@@ -1152,6 +1193,7 @@ def Log_Interaction(
 #                         GREETING HANDLING + AGENT ANSWER
 #######################################################################################
 def agent_answer(user_question, user_tier=1, recent_history=None):
+    import time
     if not user_question.strip():
         return
 
@@ -1173,9 +1215,9 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     user_question_stripped = user_question.strip()
     if is_entirely_greeting_or_punc(user_question_stripped):
         if len(chat_history) < 4:
-            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'."
         else:
-            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'."
         return
 
     # Check cache
@@ -1189,19 +1231,37 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     index_dict = {"top_k": "No information"}
     python_dict = {"result": "No information", "code": ""}
 
+    import concurrent.futures
+    total_start = time.time()
     if needs_tabular_data:
-        python_dict = tool_2_code_run(user_question, user_tier=user_tier, recent_history=recent_history)
-
-    index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            t0 = time.time()
+            fut_py = executor.submit(tool_2_code_run, user_question, user_tier, recent_history)
+            fut_idx = executor.submit(tool_1_index_search, user_question, 5, user_tier)
+            python_dict = fut_py.result()
+            t1 = time.time()
+            index_dict = fut_idx.result()
+            t2 = time.time()
+    else:
+        t0 = time.time()
+        index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
+        t1 = time.time()
+        python_dict = {"result": "No information", "code": ""}
 
     raw_answer = ""
+    t3 = time.time()
     for token in final_answer_llm(user_question, index_dict, python_dict):
         raw_answer += token
+    t4 = time.time()
 
     # Now unify repeated text cleaning
     raw_answer = clean_text(raw_answer)
 
+    t5 = time.time()
     final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict, user_question=user_question)
+    t6 = time.time()
+
+    total_end = time.time()
     tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
     yield final_answer_with_source
 
@@ -1286,7 +1346,7 @@ def Ask_Question(question, user_id="anonymous"):
                 return
 
         # Handle "restart chat" command
-        if question_lower == "restart chat":
+        if question_lower in ("restart", "restart chat", "restartchat", "chat restart", "chatrestart"):
             chat_history = []
             tool_cache.clear()
             recent_history = []
@@ -1342,3 +1402,4 @@ def Ask_Question(question, user_id="anonymous"):
         yield error_msg
         logging.error(error_msg)
         yield error_msg
+
