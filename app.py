@@ -1,4 +1,9 @@
-# version 11c
+# version 11b 
+# ((Hyperlink file names))
+# Made it display the files sources for the compounded questions:
+    # Referenced: <Files>                <-------Hyperlink to sharepoint
+    # Calculated using: <Tables>         <-------Hyperlink to sharepoint
+# still the url is fixed to one file. (NEEDS WORK!)
 
 import os
 import asyncio
@@ -6,7 +11,6 @@ from threading import Lock
 import re
 import json
 import urllib.parse
-import teams_markdown
 
 from flask import Flask, request, jsonify, Response
 from botbuilder.core import (
@@ -131,106 +135,78 @@ async def _bot_logic(turn_context: TurnContext):
         source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
         match = re.search(source_pattern, answer_text, flags=re.DOTALL)
 
-        # Normalize the LLM output into JSON
-        cleaned = answer_text.strip()
-        # strip ```json / ``` wrappers & escape newlines
-        if cleaned.startswith('```json'):
-            cleaned = cleaned[7:].strip()
-        if cleaned.startswith('```'):
-            cleaned = cleaned[3:].strip()
-        if cleaned.endswith('```'):
-            cleaned = cleaned[:-3].strip()
-        cleaned = cleaned.replace('\n', '\\n')
         # Try to parse the response as JSON first
         try:
-            response_json = json.loads(cleaned)
-            
-        except json.JSONDecodeError:
-        # not structured JSON → fall through to Adaptive Card or plain text
-           response_json = None  # signal “no JSON”
+            # Remove code block markers if present
+            cleaned_answer_text = answer_text.strip()
+            if cleaned_answer_text.startswith('```json'):
+                cleaned_answer_text = cleaned_answer_text[7:].strip()
+            if cleaned_answer_text.startswith('```'):
+                cleaned_answer_text = cleaned_answer_text[3:].strip()
+            if cleaned_answer_text.endswith('```'):
+                cleaned_answer_text = cleaned_answer_text[:-3].strip()
+            # Fix: Replace real newlines with escaped newlines to allow JSON parsing
+            # This is necessary because the LLM may output real newlines inside string values, which is invalid in JSON
+            cleaned_answer_text = cleaned_answer_text.replace('\n', '\\n')
+            response_json = json.loads(cleaned_answer_text)
             # Check if this is our expected JSON format with content and source
-        
-        if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
-            # We have a structured JSON response!
-            content_items = response_json["content"]
-            source = response_json["source"]
-            files = response_json["source_details"].get("file_names", [])
-            tables = response_json["source_details"].get("table_names", [])
-
-            # Render Markdown fallback for Teams
-            md = teams_markdown.render(
-                question=user_message,
-                content=content_items,
-                source=source,
-                files=files,
-                tables=tables
-            )
-                
-            await turn_context.send_activity(Activity(type="message", text=md))
-            return
-        
-
-        # 2️⃣ If JSON but no Markdown sent above, build Adaptive Card
-        if isinstance(response_json, dict) and "content" in response_json:
-            content_items = response_json["content"]
-            source = response_json.get("source", "")
-            files = response_json["source_details"].get("file_names", [])
-            tables = response_json["source_details"].get("table_names", [])
-
-            
-            # Build the adaptive card body
-            body_blocks = []
-            #referenced_paragraphs = []
-            #calculated_paragraphs = []
-            #other_paragraphs = []
-            # Process each content item based on its type
-            for item in content_items:
-                item_type = item.get("type", "")
-                if item_type == "heading":
-                    body_blocks.append({
-                        "type": "TextBlock",
-                        "text": item.get("text", ""),
-                        "wrap": True,
-                        "weight": "Bolder",
-                        "size": "Large",
-                        "spacing": "Medium"
-                    })
-                elif item_type == "paragraph":
-                    text = item.get("text", "")
-                    # Only add to main body if not a reference/calculated paragraph
-                    if not (text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:")):
+            if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
+                # We have a structured JSON response!
+                content_items = response_json["content"]
+                source = response_json["source"]
+                # Build the adaptive card body
+                body_blocks = []
+                #referenced_paragraphs = []
+                #calculated_paragraphs = []
+                #other_paragraphs = []
+                # Process each content item based on its type
+                for item in content_items:
+                    item_type = item.get("type", "")
+                    if item_type == "heading":
                         body_blocks.append({
                             "type": "TextBlock",
-                            "text": text,
+                            "text": item.get("text", ""),
                             "wrap": True,
-                            "spacing": "Small"
+                            "weight": "Bolder",
+                            "size": "Large",
+                            "spacing": "Medium"
                         })
-                elif item_type == "bullet_list":
-                    items = item.get("items", [])
-                    for list_item in items:
+                    elif item_type == "paragraph":
+                        text = item.get("text", "")
+                        # Only add to main body if not a reference/calculated paragraph
+                        if not (text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:")):
+                            body_blocks.append({
+                                "type": "TextBlock",
+                                "text": text,
+                                "wrap": True,
+                                "spacing": "Small"
+                            })
+                    elif item_type == "bullet_list":
+                        items = item.get("items", [])
+                        for list_item in items:
+                            body_blocks.append({
+                                "type": "TextBlock",
+                                "text": f"• {list_item}",
+                                "wrap": True,
+                                "spacing": "Small"
+                            })
+                    elif item_type == "numbered_list":
+                        items = item.get("items", [])
+                        for i, list_item in enumerate(items, 1):
+                            body_blocks.append({
+                                "type": "TextBlock",
+                                "text": f"{i}. {list_item}",
+                                "wrap": True,
+                                "spacing": "Small"
+                            })
+                    elif item_type == "code_block":
                         body_blocks.append({
                             "type": "TextBlock",
-                            "text": f"• {list_item}",
+                            "text": f"```\n{item.get('code', '')}\n```",
                             "wrap": True,
-                            "spacing": "Small"
+                            "fontType": "Monospace",
+                            "spacing": "Medium"
                         })
-                elif item_type == "numbered_list":
-                    items = item.get("items", [])
-                    for i, list_item in enumerate(items, 1):
-                        body_blocks.append({
-                            "type": "TextBlock",
-                            "text": f"{i}. {list_item}",
-                            "wrap": True,
-                            "spacing": "Small"
-                        })
-                elif item_type == "code_block":
-                    body_blocks.append({
-                        "type": "TextBlock",
-                        "text": f"```\n{item.get('code', '')}\n```",
-                        "wrap": True,
-                        "fontType": "Monospace",
-                        "spacing": "Medium"
-                    })
                 # Add all non-source paragraphs to the main body
                 # for text in other_paragraphs:
                 #     body_blocks.append({
@@ -351,7 +327,13 @@ async def _bot_logic(turn_context: TurnContext):
                         "content": adaptive_card
                     }]
                 )
+                await turn_context.send_activity(message)
+                # Successfully processed JSON, so return early
+                return
                 
+        except (json.JSONDecodeError, KeyError, TypeError):
+            # Not JSON or not in our expected format, fall back to the regular processing
+            pass
             
         # If we're here, the response wasn't valid JSON, so process normally
         if match:
