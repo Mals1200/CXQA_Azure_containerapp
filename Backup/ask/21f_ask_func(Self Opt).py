@@ -31,7 +31,6 @@
 # - These changes only improve speed and efficiency; answers and features are unchanged.
 #########################################################################################
 
-
 import os
 import io
 import re
@@ -53,7 +52,7 @@ from collections import OrderedDict
 import difflib
 import time
 import concurrent.futures  # Step 3 Optimization: Run Index and Python Tools in Parallel
-
+session = requests.Session()
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
 #######################################################################################
@@ -1382,4 +1381,3 @@ def Ask_Question(question, user_id="anonymous"):
         logging.error(error_msg)
         yield error_msg
 
-# Step 6 Optimization: To refresh cache manually, use load_rbac_files.cache_clear() and load_table_metadata.cache_clear()
