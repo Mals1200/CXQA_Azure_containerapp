@@ -482,10 +482,11 @@ def is_text_relevant(question, snippet):
 
     system_prompt = (
         "You are a classifier. We have a user question and a snippet of text. "
-        "Decide if the snippet is truly relevant to answering the question. "
-        "Return ONLY 'YES' or 'NO'."
+        "The question might have multiple parts. Decide if the snippet is relevant to answering "
+        "ANY part of the question. If the snippet helps answer even one part of a multi-part question, "
+        "it should be considered relevant. Return ONLY 'YES' or 'NO'."
     )
-    user_prompt = f"Question: {question}\nSnippet: {snippet}\nRelevant? Return 'YES' or 'NO' only."
+    user_prompt = f"Question: {question}\nSnippet: {snippet}\nRelevant to any part? Return 'YES' or 'NO' only."
 
     content = call_llm_aux(system_prompt, user_prompt, max_tokens=10, temperature=0.0)
     return content.strip().upper().startswith("YES")
@@ -632,7 +633,8 @@ Don't give examples, only provide the actual code. If you can't provide the code
 5. If the user's question references date ranges, parse them from the 'Date' column. If monthly data is requested, group by month or similar.
 6. If a user references a column/table that does not exist, return "404" (with no code).
 7. Use semantic reasoning to handle synonyms or minor typos (e.g., "Al Bujairy," "albujairi," etc.), as long as they reasonably map to the real table names.
-8. Do not use Chat_history embed Information or Answers in the code. 
+8. Do not use Chat_history embed Information or Answers in the code.
+9. **IMPORTANT**: If the question has multiple parts, focus ONLY on the parts that can be answered with the available tabular data. Ignore parts that require policy information, procedures, or non-tabular data.
 
 User question:
 {user_question}
@@ -839,10 +841,12 @@ Important guidelines:
 6. Use "code_block" for any code snippets
 7. Make sure the JSON is valid and properly escaped
 8. Every section must have a "type" and appropriate content fields
-9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
-10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
-11. When questions have multiple parts needing different sources, use "Index & Python" as the source
-12. **Unless its a (multi-part Question) Never include the user's question as the first heading or paragraph in the content array.**
+9. **CRITICAL**: If BOTH INDEX_DATA and PYTHON_DATA contain useful information (not "No information"), ALWAYS set source to "Index & Python"
+10. If the user asks a multi-part question and you use information from both sources, set source to "Index & Python"
+11. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
+12. Only use "Python" if INDEX_DATA is "No information" and only PYTHON_DATA has useful data
+13. Only use "Index" if PYTHON_DATA is "No information" and only INDEX_DATA has useful data
+14. **Unless its a (multi-part Question) Never include the user's question as the first heading or paragraph in the content array.**
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
@@ -964,10 +968,26 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
         idx_has  = index_dict .get("top_k" , "").strip().lower() not in ["", "no information"]
         py_has   = python_dict.get("result", "").strip().lower() not in ["", "no information"]
         src = response_json["source"].strip()
-        if src == "Python" and idx_has:
+        original_src = src
+        
+        # Debug: Print source detection info (uncomment for debugging)
+        # print(f"[DEBUG] Source detection - idx_has: {idx_has}, py_has: {py_has}, original_src: {original_src}")
+        
+        # Improved source detection logic
+        # If both tools have valid data, always use "Index & Python"
+        if idx_has and py_has:
+            src = "Index & Python"
+        elif src == "Python" and idx_has:
             src = "Index & Python"
         elif src == "Index" and py_has:
             src = "Index & Python"
+        # If LLM said "Index & Python" but only one has data, correct it
+        elif src == "Index & Python" and not idx_has and py_has:
+            src = "Python"
+        elif src == "Index & Python" and idx_has and not py_has:
+            src = "Index"
+        
+        # print(f"[DEBUG] Source corrected from '{original_src}' to '{src}'")
         response_json["source"] = src
         if src == "Index & Python":
             files  = index_dict .get("file_names", [])
@@ -1247,6 +1267,12 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
         index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
         t1 = time.time()
         python_dict = {"result": "No information", "code": ""}
+
+    # Debug: Print what each tool returned (uncomment for debugging)
+    # print(f"[DEBUG] Index result: {index_dict.get('top_k', 'No information')[:100]}...")
+    # print(f"[DEBUG] Python result: {python_dict.get('result', 'No information')[:100]}...")
+    # print(f"[DEBUG] Index files: {index_dict.get('file_names', [])}")
+    # print(f"[DEBUG] Python tables: {python_dict.get('table_names', [])}")
 
     raw_answer = ""
     t3 = time.time()
