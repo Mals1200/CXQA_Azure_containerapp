@@ -1,16 +1,13 @@
-# version 11b 
-# ((Hyperlink file names))
+# version 11c
 # Made it display the files sources for the compounded questions:
-    # Referenced: <Files>                <-------Hyperlink to sharepoint
-    # Calculated using: <Tables>         <-------Hyperlink to sharepoint
-# still the url is fixed to one file. (NEEDS WORK!)
+    # Referenced: <Files>     
+    # Calculated using: <Tables>
 
 import os
 import asyncio
 from threading import Lock
 import re
 import json
-import urllib.parse
 
 from flask import Flask, request, jsonify, Response
 from botbuilder.core import (
@@ -123,9 +120,16 @@ async def _bot_logic(turn_context: TurnContext):
     await turn_context.send_activity(typing_activity)
 
     try:
-        # Process the message
-        ans_gen = Ask_Question(user_message, user_id=user_id)
-        answer_text = "".join(ans_gen)
+        answer_chunks = []
+        try:
+            for chunk in Ask_Question(user_message, user_id=user_id):
+                answer_chunks.append(chunk)
+            answer_text = "".join(answer_chunks)
+        except Exception as e:
+            answer_text = f"Sorry, an error occurred while answering your question: {e}"
+
+        if not answer_text.strip():
+            answer_text = "Sorry, I couldn't find an answer or something went wrong."
 
         # Update state
         state['history'] = ask_func.chat_history
@@ -145,9 +149,9 @@ async def _bot_logic(turn_context: TurnContext):
                 cleaned_answer_text = cleaned_answer_text[3:].strip()
             if cleaned_answer_text.endswith('```'):
                 cleaned_answer_text = cleaned_answer_text[:-3].strip()
-            # Fix: Replace real newlines with escaped newlines to allow JSON parsing
-            # This is necessary because the LLM may output real newlines inside string values, which is invalid in JSON
-            cleaned_answer_text = cleaned_answer_text.replace('\n', '\\n')
+            # DEBUG: Print the cleaned answer text before JSON parsing
+            print("[DEBUG] Cleaned answer text for JSON parsing:", cleaned_answer_text)
+            # DO NOT replace '\n' with '\\n' here (removing that step)
             response_json = json.loads(cleaned_answer_text)
             # Check if this is our expected JSON format with content and source
             if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
@@ -156,10 +160,6 @@ async def _bot_logic(turn_context: TurnContext):
                 source = response_json["source"]
                 # Build the adaptive card body
                 body_blocks = []
-                #referenced_paragraphs = []
-                #calculated_paragraphs = []
-                #other_paragraphs = []
-                # Process each content item based on its type
                 for item in content_items:
                     item_type = item.get("type", "")
                     if item_type == "heading":
@@ -173,7 +173,6 @@ async def _bot_logic(turn_context: TurnContext):
                         })
                     elif item_type == "paragraph":
                         text = item.get("text", "")
-                        # Only add to main body if not a reference/calculated paragraph
                         if not (text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:")):
                             body_blocks.append({
                                 "type": "TextBlock",
@@ -207,15 +206,7 @@ async def _bot_logic(turn_context: TurnContext):
                             "fontType": "Monospace",
                             "spacing": "Medium"
                         })
-                # Add all non-source paragraphs to the main body
-                # for text in other_paragraphs:
-                #     body_blocks.append({
-                #         "type": "TextBlock",
-                #         "text": text,
-                #         "wrap": True,
-                #         "spacing": "Small"
-                #     })
-                # Create the source section
+                # Add Referenced/Calculated paragraphs to the collapsible section if present
                 source_container = {
                     "type": "Container",
                     "id": "sourceContainer",
@@ -226,45 +217,16 @@ async def _bot_logic(turn_context: TurnContext):
                     "isScrollable": True, 
                     "items": []
                 }
-                # Add Referenced/Calculated paragraphs to the collapsible section if present
                 for item in content_items:
                     if item.get("type", "") == "paragraph":
                         text = item.get("text", "")
                         if text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:"):
-                            lines = text.split("\n")
-                            # Add the heading ("Referenced:" or "Calculated using:")
-                            if lines:
-                                source_container["items"].append({
-                                    "type": "TextBlock",
-                                    "text": lines[0],
-                                    "wrap": True,
-                                    "spacing": "Small",
-                                    "weight": "Bolder"
-                                })
-                            # For each file/table, add a markdown link as a TextBlock
-                            for line in lines[1:]:
-                                if line.strip().startswith("-"):
-                                    fname = line.strip()[1:].strip()
-                                    if fname:
-                                        sharepoint_base = "https://dgda.sharepoint.com/:x:/r/sites/CXQAData/_layouts/15/Doc.aspx?sourcedoc=%7B9B3CA3CD-5044-45C7-8A82-0604A1675F46%7D&file={}&action=default&mobileredirect=true"
-                                        url = sharepoint_base.format(urllib.parse.quote(fname))
-                                        print(f"DEBUG: Adding file link: {fname} -> {url}")
-                                        source_container["items"].append({
-                                            "type": "TextBlock",
-                                            "text": f"[{fname}]({url})",
-                                            "wrap": True,
-                                            "spacing": "Small"
-                                        })
-                                else:
-                                    # If not a file line, just add as text
-                                    source_container["items"].append({
-                                        "type": "TextBlock",
-                                        "text": line,
-                                        "wrap": True,
-                                        "spacing": "Small"
-                                    })
-                # Remove file_names/table_names and code/file blocks from the collapsible section
-                # Always add the source line at the bottom of the container
+                            source_container["items"].append({
+                                "type": "TextBlock",
+                                "text": text,
+                                "wrap": True,
+                                "spacing": "Small"
+                            })
                 source_container["items"].append({
                     "type": "TextBlock",
                     "text": f"Source: {source}",
@@ -274,7 +236,6 @@ async def _bot_logic(turn_context: TurnContext):
                     "spacing": "Medium",
                 })
                 body_blocks.append(source_container)
-                # Add the show/hide source buttons
                 body_blocks.append({
                     "type": "ColumnSet",
                     "columns": [
@@ -313,13 +274,14 @@ async def _bot_logic(turn_context: TurnContext):
                         }
                     ]
                 })
-                # Create and send the adaptive card
                 adaptive_card = {
                     "type": "AdaptiveCard",
                     "body": body_blocks,
                     "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                     "version": "1.5"
                 }
+                # DEBUG: Print the outgoing Adaptive Card JSON
+                print("[DEBUG] Outgoing Adaptive Card JSON:", json.dumps(adaptive_card, indent=2))
                 message = Activity(
                     type="message",
                     attachments=[{
@@ -331,8 +293,9 @@ async def _bot_logic(turn_context: TurnContext):
                 # Successfully processed JSON, so return early
                 return
                 
-        except (json.JSONDecodeError, KeyError, TypeError):
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
             # Not JSON or not in our expected format, fall back to the regular processing
+            print(f"[DEBUG] JSON parsing failed: {e}")
             pass
             
         # If we're here, the response wasn't valid JSON, so process normally
@@ -345,6 +308,9 @@ async def _bot_logic(turn_context: TurnContext):
             source_line = ""
             appended_details = ""
 
+        # DEBUG: Print the plain text answer before sending
+        print("[DEBUG] Plain text answer:", main_answer)
+
         if source_line:
             # Create simple text blocks without complex formatting
             body_blocks = [{
@@ -355,7 +321,6 @@ async def _bot_logic(turn_context: TurnContext):
             
             # Create the collapsible source container
             if source_line or appended_details:
-                # Create a container that will be toggled
                 source_container = {
                     "type": "Container",
                     "id": "sourceContainer",
@@ -375,8 +340,6 @@ async def _bot_logic(turn_context: TurnContext):
                         }
                     ]
                 }
-                
-                # Add source details if it exists
                 if appended_details:
                     source_container["items"].append({
                         "type": "TextBlock",
@@ -384,9 +347,7 @@ async def _bot_logic(turn_context: TurnContext):
                         "wrap": True,
                         "spacing": "Small"
                     })
-                    
                 body_blocks.append(source_container)
-                
                 body_blocks.append({
                     "type": "ColumnSet",
                     "columns": [
@@ -426,14 +387,14 @@ async def _bot_logic(turn_context: TurnContext):
                     ]
                 })
 
-
             adaptive_card = {
                 "type": "AdaptiveCard",
                 "body": body_blocks,
                 "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                 "version": "1.5"
             }
-            
+            # DEBUG: Print the outgoing Adaptive Card JSON
+            print("[DEBUG] Outgoing Adaptive Card JSON:", json.dumps(adaptive_card, indent=2))
             message = Activity(
                 type="message",
                 attachments=[{
@@ -444,8 +405,35 @@ async def _bot_logic(turn_context: TurnContext):
             await turn_context.send_activity(message)
         else:
             # For simple responses without source, send formatted markdown directly
-            # Teams supports some markdown in regular messages
+            print("[DEBUG] Sending fallback plain text message:", main_answer)
             await turn_context.send_activity(Activity(type="message", text=main_answer))
+
+        # --- CATCH-ALL FALLBACK: If nothing was sent, send a minimal message ---
+        # (This should never be reached, but just in case)
+        # await turn_context.send_activity(Activity(type="message", text="Sorry, I couldn't process your answer."))
+
+        # --- MINIMAL CARD TEST BLOCK (Uncomment to test minimal card rendering) ---
+        # minimal_card = {
+        #     "type": "AdaptiveCard",
+        #     "body": [
+        #         {
+        #             "type": "TextBlock",
+        #             "text": "Test message from bot.",
+        #             "wrap": True
+        #         }
+        #     ],
+        #     "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        #     "version": "1.5"
+        # }
+        # print("[DEBUG] Outgoing Minimal Adaptive Card JSON:", json.dumps(minimal_card, indent=2))
+        # message = Activity(
+        #     type="message",
+        #     attachments=[{
+        #         "contentType": "application/vnd.microsoft.card.adaptive",
+        #         "content": minimal_card
+        #     }]
+        # )
+        # await turn_context.send_activity(message)
 
     except Exception as e:
         error_message = f"An error occurred while processing your request: {str(e)}"
