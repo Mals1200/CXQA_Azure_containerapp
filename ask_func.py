@@ -1304,3 +1304,6 @@ def Ask_Question(question, user_id="anonymous"):
         logging.error(error_msg)
         return error_msg
 
+# Backwards-compatibility alias required by app.py
+Ask_Question_return = Ask_Question
+
