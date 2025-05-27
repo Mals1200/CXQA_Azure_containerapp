@@ -1,62 +1,126 @@
-# version 11b 
-# ((Hyperlink file names))
-# Made it display the files sources for the compounded questions:
-    # Referenced: <Files>                <-------Hyperlink to sharepoint
-    # Calculated using: <Tables>         <-------Hyperlink to sharepoint
-# still the url is fixed to one file. (NEEDS WORK!)
+# Simple Teams Bot – minimal version focused on plain-text answers
+# ───────────────────────────────────────────────────────────────────────────────
+# This implementation keeps only what is strictly required:
+# • Flask API with Bot Framework adapter
+# • Calls ask_func.Ask_Question and formats the response as plain text
+# • Displays: answer, Source line, Calculated using: <tables>, Referenced: <files>
+#
+# Environment variables expected (as before):
+#   MICROSOFT_APP_ID       – Bot ID issued by Azure Bot registration
+#   MICROSOFT_APP_PASSWORD – Bot password / client secret
 
 import os
 import asyncio
-from threading import Lock
-import re
 import json
-import urllib.parse
+import re
+from threading import Lock
 
-from flask import Flask, request, jsonify, Response
-from botbuilder.core import (
-    BotFrameworkAdapter,
-    BotFrameworkAdapterSettings,
-    TurnContext
-)
+from flask import Flask, request, Response, jsonify
+from botbuilder.core import BotFrameworkAdapter, BotFrameworkAdapterSettings, TurnContext
 from botbuilder.schema import Activity
-# *** Important: import TeamsInfo ***
 from botbuilder.core.teams import TeamsInfo
 
-from ask_func import Ask_Question, chat_history
+from ask_func import Ask_Question, chat_history as global_chat_history, tool_cache as global_tool_cache
 
+# ──────────────────────── Flask & Bot Adapter setup ───────────────────────────
 app = Flask(__name__)
 
-MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
+MICROSOFT_APP_ID       = os.environ.get("MICROSOFT_APP_ID", "")
 MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 
 adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
-adapter = BotFrameworkAdapter(adapter_settings)
+adapter          = BotFrameworkAdapter(adapter_settings)
 
-# Thread-safe conversation state management
-conversation_states = {}
+# ─────────────────────── Conversation-state (very light) ──────────────────────
+conversation_states = {}  # conversation_id → {history, cache, last_activity}
 state_lock = Lock()
 
-def get_conversation_state(conversation_id):
+def _get_state(cid: str):
     with state_lock:
-        if conversation_id not in conversation_states:
-            conversation_states[conversation_id] = {
-                'history': [],
-                'cache': {},
-                'last_activity': None
-            }
-        return conversation_states[conversation_id]
+        st = conversation_states.setdefault(cid, {"history": [], "cache": {}, "last_activity": None})
+    return st
 
-def cleanup_old_states():
-    """Clean up conversation states older than 24 hours"""
-    with state_lock:
-        current_time = asyncio.get_event_loop().time()
-        for conv_id, state in list(conversation_states.items()):
-            if state['last_activity'] and (current_time - state['last_activity']) > 86400:  # 24 hours
-                del conversation_states[conv_id]
+# ───────────────────────────── Helper functions ───────────────────────────────
+
+def _render_content(blocks):
+    """Extracts human-readable text from the structured `content` array produced
+    by ask_func (omitting internal Calculated/Referenced bullets)."""
+    out_lines = []
+    skip = False
+    for blk in blocks or []:
+        bt = blk.get("type", "")
+        txt = blk.get("text", "")
+        if bt == "paragraph" and txt.lower().startswith(("calculated using", "referenced")):
+            skip = True
+            continue
+        if skip and bt in ("paragraph", "bullet_list", "numbered_list"):
+            continue  # keep skipping until new section
+        if bt == "heading":
+            out_lines.append(txt.strip())
+            out_lines.append("")
+        elif bt == "paragraph":
+            out_lines.append(txt.strip())
+            out_lines.append("")
+        elif bt == "bullet_list":
+            out_lines.extend(f"• {itm}" for itm in blk.get("items", []))
+            out_lines.append("")
+        elif bt == "numbered_list":
+            out_lines.extend(f"{i}. {itm}" for i, itm in enumerate(blk.get("items", []), 1))
+            out_lines.append("")
+    return "\n".join(out_lines).strip()
+
+
+def _parse_answer(full_answer):
+    """Return tuple (answer_text, source_type, tables_used, files_used).
+    Supports both the new JSON schema and legacy plain-text answers."""
+
+    # 1) Try JSON format (preferred)
+    try:
+        cleaned = full_answer.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:].strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned[3:].strip()
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3].strip()
+        js = json.loads(cleaned)
+        if isinstance(js, dict) and "content" in js and "source" in js:
+            answer_text = _render_content(js.get("content", [])) or cleaned
+            source_type = js.get("source", "Unknown")
+            sd = js.get("source_details", {})
+            tables = sd.get("table_names", [])
+            files  = sd.get("file_names", [])
+            return answer_text, source_type, tables, files
+    except Exception:
+        pass
+
+    # 2) Legacy plain-text parsing
+    answer_text, source_type = full_answer, "Unknown"
+    tables, files = [], []
+
+    # Extract source line if present
+    m = re.search(r"^(.+?)\s*Source:\s*(.+)$", full_answer, flags=re.IGNORECASE | re.DOTALL)
+    if m:
+        answer_text = m.group(1).strip()
+        rest       = m.group(2).strip()
+        source_type_line, *rest_lines = rest.splitlines()
+        source_type = source_type_line.strip()
+        joined_rest = "\n".join(rest_lines)
+        # Find Calculated/Referenced sections
+        cal_match = re.search(r"Calculated using:\s*(.+)", joined_rest, flags=re.IGNORECASE)
+        ref_match = re.search(r"Referenced:\s*(.+)", joined_rest, flags=re.IGNORECASE)
+        if cal_match:
+            tables = [t.strip() for t in cal_match.group(1).split(",") if t.strip()]
+        if ref_match:
+            files  = [f.strip() for f in ref_match.group(1).split(",") if f.strip()]
+
+    return answer_text, source_type, tables, files
+
+# ───────────────────────────── Flask endpoints ────────────────────────────────
 
 @app.route("/", methods=["GET"])
 def home():
-    return jsonify({"message": "API is running!"}), 200
+    return jsonify({"message": "CXQA bot API is running"}), 200
 
 @app.route("/api/messages", methods=["POST"])
 def messages():
@@ -70,387 +134,62 @@ def messages():
     loop = asyncio.new_event_loop()
     try:
         loop.run_until_complete(adapter.process_activity(activity, auth_header, _bot_logic))
+        return Response(status=200)
     finally:
         loop.close()
 
-    return Response(status=200)
+# ───────────────────────────── Bot logic ──────────────────────────────────────
 
 async def _bot_logic(turn_context: TurnContext):
     conversation_id = turn_context.activity.conversation.id
-    state = get_conversation_state(conversation_id)
-    state['last_activity'] = asyncio.get_event_loop().time()
-    
-    # Clean up old states periodically
-    if len(conversation_states) > 100:  # Only clean up if we have many states
-        cleanup_old_states()
+    state           = _get_state(conversation_id)
+    state["last_activity"] = asyncio.get_event_loop().time()
 
-    # Set the conversation state for this request
-    import ask_func
-    ask_func.chat_history = state['history']
-    ask_func.tool_cache = state['cache']
+    # Sync ask_func global vars with per-conversation state
+    global_chat_history[:] = state["history"]
+    global_tool_cache.clear()
+    global_tool_cache.update(state["cache"])
 
     user_message = turn_context.activity.text or ""
 
-    # --------------------------------------------------------------------
-    # Use 'TeamsInfo.get_member' to get userPrincipalName or email
-    # --------------------------------------------------------------------
-    user_id = "anonymous"  # fallback
+    # show typing indicator
+    await turn_context.send_activity(Activity(type="typing"))
+
+    # Determine a "user_id" (email preferred)
     try:
-        # 'from_property.id' usually holds the "29:..." Teams user ID
-        teams_user_id = turn_context.activity.from_property.id
-
-        # This call will attempt to fetch the user's profile from Teams
-        teams_member = await TeamsInfo.get_member(turn_context, teams_user_id)
-        # If successful, you can read these fields:
-        #   teams_member.user_principal_name (often the email/UPN)
-        #   teams_member.email
-        #   teams_member.name
-        #   teams_member.id
-        if teams_member and teams_member.user_principal_name:
-            user_id = teams_member.user_principal_name
-        elif teams_member and teams_member.email:
-            user_id = teams_member.email
-        else:
-            user_id = teams_user_id  # fallback if we can't get an email
-
-    except Exception as e:
-        # If get_member call fails (e.g., in a group chat scenario or permission issues),
-        # just fallback to the "29:..." ID or 'anonymous'
+        teams_member = await TeamsInfo.get_member(turn_context, turn_context.activity.from_property.id)
+        user_id = teams_member.user_principal_name or teams_member.email or teams_member.id
+    except Exception:
         user_id = turn_context.activity.from_property.id or "anonymous"
 
-    # Show "thinking" indicator
-    typing_activity = Activity(type="typing")
-    await turn_context.send_activity(typing_activity)
-
+    # Call main QA function
     try:
-        # Process the message
-        ans_gen = Ask_Question(user_message, user_id=user_id)
-        answer_text = "".join(ans_gen)
-
-        # Update state
-        state['history'] = ask_func.chat_history
-        state['cache'] = ask_func.tool_cache
-
-        # Parse and format the response
-        source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
-        match = re.search(source_pattern, answer_text, flags=re.DOTALL)
-
-        # Try to parse the response as JSON first
-        try:
-            # Remove code block markers if present
-            cleaned_answer_text = answer_text.strip()
-            if cleaned_answer_text.startswith('```json'):
-                cleaned_answer_text = cleaned_answer_text[7:].strip()
-            if cleaned_answer_text.startswith('```'):
-                cleaned_answer_text = cleaned_answer_text[3:].strip()
-            if cleaned_answer_text.endswith('```'):
-                cleaned_answer_text = cleaned_answer_text[:-3].strip()
-            # Fix: Replace real newlines with escaped newlines to allow JSON parsing
-            # This is necessary because the LLM may output real newlines inside string values, which is invalid in JSON
-            cleaned_answer_text = cleaned_answer_text.replace('\n', '\\n')
-            response_json = json.loads(cleaned_answer_text)
-            # Check if this is our expected JSON format with content and source
-            if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
-                # We have a structured JSON response!
-                content_items = response_json["content"]
-                source = response_json["source"]
-                # Build the adaptive card body
-                body_blocks = []
-                #referenced_paragraphs = []
-                #calculated_paragraphs = []
-                #other_paragraphs = []
-                # Process each content item based on its type
-                for item in content_items:
-                    item_type = item.get("type", "")
-                    if item_type == "heading":
-                        body_blocks.append({
-                            "type": "TextBlock",
-                            "text": item.get("text", ""),
-                            "wrap": True,
-                            "weight": "Bolder",
-                            "size": "Large",
-                            "spacing": "Medium"
-                        })
-                    elif item_type == "paragraph":
-                        text = item.get("text", "")
-                        # Only add to main body if not a reference/calculated paragraph
-                        if not (text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:")):
-                            body_blocks.append({
-                                "type": "TextBlock",
-                                "text": text,
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
-                    elif item_type == "bullet_list":
-                        items = item.get("items", [])
-                        for list_item in items:
-                            body_blocks.append({
-                                "type": "TextBlock",
-                                "text": f"• {list_item}",
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
-                    elif item_type == "numbered_list":
-                        items = item.get("items", [])
-                        for i, list_item in enumerate(items, 1):
-                            body_blocks.append({
-                                "type": "TextBlock",
-                                "text": f"{i}. {list_item}",
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
-                    elif item_type == "code_block":
-                        body_blocks.append({
-                            "type": "TextBlock",
-                            "text": f"```\n{item.get('code', '')}\n```",
-                            "wrap": True,
-                            "fontType": "Monospace",
-                            "spacing": "Medium"
-                        })
-                # Add all non-source paragraphs to the main body
-                # for text in other_paragraphs:
-                #     body_blocks.append({
-                #         "type": "TextBlock",
-                #         "text": text,
-                #         "wrap": True,
-                #         "spacing": "Small"
-                #     })
-                # Create the source section
-                source_container = {
-                    "type": "Container",
-                    "id": "sourceContainer",
-                    "isVisible": False,
-                    "style": "emphasis",
-                    "bleed": True,
-                    "maxHeight": "500px",
-                    "isScrollable": True, 
-                    "items": []
-                }
-                # Add Referenced/Calculated paragraphs to the collapsible section if present
-                for item in content_items:
-                    if item.get("type", "") == "paragraph":
-                        text = item.get("text", "")
-                        if text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:"):
-                            lines = text.split("\n")
-                            # Add the heading ("Referenced:" or "Calculated using:")
-                            if lines:
-                                source_container["items"].append({
-                                    "type": "TextBlock",
-                                    "text": lines[0],
-                                    "wrap": True,
-                                    "spacing": "Small",
-                                    "weight": "Bolder"
-                                })
-                            # For each file/table, add a markdown link as a TextBlock
-                            for line in lines[1:]:
-                                if line.strip().startswith("-"):
-                                    fname = line.strip()[1:].strip()
-                                    if fname:
-                                        sharepoint_base = "https://dgda.sharepoint.com/:x:/r/sites/CXQAData/_layouts/15/Doc.aspx?sourcedoc=%7B9B3CA3CD-5044-45C7-8A82-0604A1675F46%7D&file={}&action=default&mobileredirect=true"
-                                        url = sharepoint_base.format(urllib.parse.quote(fname))
-                                        print(f"DEBUG: Adding file link: {fname} -> {url}")
-                                        source_container["items"].append({
-                                            "type": "TextBlock",
-                                            "text": f"[{fname}]({url})",
-                                            "wrap": True,
-                                            "spacing": "Small"
-                                        })
-                                else:
-                                    # If not a file line, just add as text
-                                    source_container["items"].append({
-                                        "type": "TextBlock",
-                                        "text": line,
-                                        "wrap": True,
-                                        "spacing": "Small"
-                                    })
-                # Remove file_names/table_names and code/file blocks from the collapsible section
-                # Always add the source line at the bottom of the container
-                source_container["items"].append({
-                    "type": "TextBlock",
-                    "text": f"Source: {source}",
-                    "wrap": True,
-                    "weight": "Bolder",
-                    "color": "Accent",
-                    "spacing": "Medium",
-                })
-                body_blocks.append(source_container)
-                # Add the show/hide source buttons
-                body_blocks.append({
-                    "type": "ColumnSet",
-                    "columns": [
-                        {
-                            "type": "Column",
-                            "id": "showSourceBtn",
-                            "items": [
-                                {
-                                    "type": "ActionSet",
-                                    "actions": [
-                                        {
-                                            "type": "Action.ToggleVisibility",
-                                            "title": "Show Source",
-                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                        }
-                                    ]
-                                }
-                            ]
-                        },
-                        {
-                            "type": "Column",
-                            "id": "hideSourceBtn",
-                            "isVisible": False,
-                            "items": [
-                                {
-                                    "type": "ActionSet",
-                                    "actions": [
-                                        {
-                                            "type": "Action.ToggleVisibility",
-                                            "title": "Hide Source",
-                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                        }
-                                    ]
-                                }
-                            ]
-                        }
-                    ]
-                })
-                # Create and send the adaptive card
-                adaptive_card = {
-                    "type": "AdaptiveCard",
-                    "body": body_blocks,
-                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                    "version": "1.5"
-                }
-                message = Activity(
-                    type="message",
-                    attachments=[{
-                        "contentType": "application/vnd.microsoft.card.adaptive",
-                        "content": adaptive_card
-                    }]
-                )
-                await turn_context.send_activity(message)
-                # Successfully processed JSON, so return early
-                return
-                
-        except (json.JSONDecodeError, KeyError, TypeError):
-            # Not JSON or not in our expected format, fall back to the regular processing
-            pass
-            
-        # If we're here, the response wasn't valid JSON, so process normally
-        if match:
-            main_answer = match.group(1).strip()
-            source_line = match.group(2).strip()
-            appended_details = match.group(3) if match.group(3) else ""
-        else:
-            main_answer = answer_text
-            source_line = ""
-            appended_details = ""
-
-        if source_line:
-            # Create simple text blocks without complex formatting
-            body_blocks = [{
-                "type": "TextBlock",
-                "text": main_answer,
-                "wrap": True
-            }]
-            
-            # Create the collapsible source container
-            if source_line or appended_details:
-                # Create a container that will be toggled
-                source_container = {
-                    "type": "Container",
-                    "id": "sourceContainer",
-                    "isVisible": False,
-                    "style": "emphasis",
-                    "bleed": True,
-                    "maxHeight": "500px",
-                    "isScrollable": True, 
-                    "items": [
-                        {
-                            "type": "TextBlock",
-                            "text": source_line,
-                            "wrap": True,
-                            "weight": "Bolder",
-                            "color": "Accent",
-                            "spacing": "Medium",
-                        }
-                    ]
-                }
-                
-                # Add source details if it exists
-                if appended_details:
-                    source_container["items"].append({
-                        "type": "TextBlock",
-                        "text": appended_details.strip(),
-                        "wrap": True,
-                        "spacing": "Small"
-                    })
-                    
-                body_blocks.append(source_container)
-                
-                body_blocks.append({
-                    "type": "ColumnSet",
-                    "columns": [
-                        {
-                            "type": "Column",
-                            "id": "showSourceBtn",
-                            "items": [
-                                {
-                                    "type": "ActionSet",
-                                    "actions": [
-                                        {
-                                            "type": "Action.ToggleVisibility",
-                                            "title": "Show Source",
-                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                        }
-                                    ]
-                                }
-                            ]
-                        },
-                        {
-                            "type": "Column",
-                            "id": "hideSourceBtn",
-                            "isVisible": False,
-                            "items": [
-                                {
-                                    "type": "ActionSet",
-                                    "actions": [
-                                        {
-                                            "type": "Action.ToggleVisibility",
-                                            "title": "Hide Source",
-                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                        }
-                                    ]
-                                }
-                            ]
-                        }
-                    ]
-                })
-
-
-            adaptive_card = {
-                "type": "AdaptiveCard",
-                "body": body_blocks,
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "version": "1.5"
-            }
-            
-            message = Activity(
-                type="message",
-                attachments=[{
-                    "contentType": "application/vnd.microsoft.card.adaptive",
-                    "content": adaptive_card
-                }]
-            )
-            await turn_context.send_activity(message)
-        else:
-            # For simple responses without source, send formatted markdown directly
-            # Teams supports some markdown in regular messages
-            await turn_context.send_activity(Activity(type="message", text=main_answer))
-
+        tokens = Ask_Question(user_message, user_id=user_id)
+        full_answer = "".join(tokens)
     except Exception as e:
-        error_message = f"An error occurred while processing your request: {str(e)}"
-        print(f"Error in bot logic: {e}")
-        await turn_context.send_activity(Activity(type="message", text=error_message))
+        await turn_context.send_activity(Activity(type="message", text=f"Error: {e}"))
+        return
+
+    # Parse output to desired format
+    answer_text, source_type, tables, files = _parse_answer(full_answer)
+
+    # Build final plain-text response
+    lines = [answer_text, f"Source: {source_type}"]
+    if tables:
+        lines.append("Calculated using: " + ", ".join(tables))
+    if files:
+        lines.append("Referenced: " + ", ".join(files))
+
+    final_text = "\n".join(lines)
+
+    # Send the message
+    await turn_context.send_activity(Activity(type="message", text=final_text))
+
+    # Persist updated state
+    state["history"] = global_chat_history.copy()
+    state["cache"]   = global_tool_cache.copy()
+
+# ────────────────────────── Application entrypoint ───────────────────────────
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=80)
