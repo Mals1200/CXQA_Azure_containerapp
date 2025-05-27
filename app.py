@@ -131,6 +131,10 @@ async def _bot_logic(turn_context: TurnContext):
         state['history'] = ask_func.chat_history
         state['cache'] = ask_func.tool_cache
 
+        # Parse and format the response
+        source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
+        match = re.search(source_pattern, answer_text, flags=re.DOTALL)
+
         # Try to parse the response as JSON first
         try:
             # Remove code block markers if present
@@ -141,58 +145,77 @@ async def _bot_logic(turn_context: TurnContext):
                 cleaned_answer_text = cleaned_answer_text[3:].strip()
             if cleaned_answer_text.endswith('```'):
                 cleaned_answer_text = cleaned_answer_text[:-3].strip()
+            # Fix: Replace real newlines with escaped newlines to allow JSON parsing
+            # This is necessary because the LLM may output real newlines inside string values, which is invalid in JSON
+            cleaned_answer_text = cleaned_answer_text.replace('\n', '\\n')
             response_json = json.loads(cleaned_answer_text)
-
-            # NEW: Handle subanswers format (merged, beautiful display)
-            if isinstance(response_json, dict) and "subanswers" in response_json:
+            # Check if this is our expected JSON format with content and source
+            if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
+                # We have a structured JSON response!
+                content_items = response_json["content"]
+                source = response_json["source"]
+                # Build the adaptive card body
                 body_blocks = []
-                all_sources = set()
-                all_files = set()
-                all_tables = set()
-                for sub in response_json["subanswers"]:
-                    subq = sub.get("subquestion", "").strip()
-                    ans = sub.get("answer", "").strip()
-                    if subq:
+                #referenced_paragraphs = []
+                #calculated_paragraphs = []
+                #other_paragraphs = []
+                # Process each content item based on its type
+                for item in content_items:
+                    item_type = item.get("type", "")
+                    if item_type == "heading":
                         body_blocks.append({
                             "type": "TextBlock",
-                            "text": subq,
+                            "text": item.get("text", ""),
                             "wrap": True,
                             "weight": "Bolder",
-                            "size": "Medium",
+                            "size": "Large",
                             "spacing": "Medium"
                         })
-                    if ans:
-                        # Try to split answer into paragraphs/bullets/numbers
-                        for para in ans.split("\n"):
-                            para = para.strip()
-                            if not para:
-                                continue
-                            if para.startswith("• "):
-                                body_blocks.append({
-                                    "type": "TextBlock",
-                                    "text": para,
-                                    "wrap": True,
-                                    "spacing": "Small"
-                                })
-                            elif re.match(r"^\d+\. ", para):
-                                body_blocks.append({
-                                    "type": "TextBlock",
-                                    "text": para,
-                                    "wrap": True,
-                                    "spacing": "Small"
-                                })
-                            else:
-                                body_blocks.append({
-                                    "type": "TextBlock",
-                                    "text": para,
-                                    "wrap": True,
-                                    "spacing": "Small"
-                                })
-                        body_blocks.append({"type": "TextBlock", "text": "", "wrap": True})
-                    all_sources.add(sub.get("source", "Unknown"))
-                    all_files.update(sub.get("files", []))
-                    all_tables.update(sub.get("tables", []))
-                # --- Collapsible section for files/source ---
+                    elif item_type == "paragraph":
+                        text = item.get("text", "")
+                        # Only add to main body if not a reference/calculated paragraph
+                        if not (text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:")):
+                            body_blocks.append({
+                                "type": "TextBlock",
+                                "text": text,
+                                "wrap": True,
+                                "spacing": "Small"
+                            })
+                    elif item_type == "bullet_list":
+                        items = item.get("items", [])
+                        for list_item in items:
+                            body_blocks.append({
+                                "type": "TextBlock",
+                                "text": f"• {list_item}",
+                                "wrap": True,
+                                "spacing": "Small"
+                            })
+                    elif item_type == "numbered_list":
+                        items = item.get("items", [])
+                        for i, list_item in enumerate(items, 1):
+                            body_blocks.append({
+                                "type": "TextBlock",
+                                "text": f"{i}. {list_item}",
+                                "wrap": True,
+                                "spacing": "Small"
+                            })
+                    elif item_type == "code_block":
+                        body_blocks.append({
+                            "type": "TextBlock",
+                            "text": f"```\n{item.get('code', '')}\n```",
+                            "wrap": True,
+                            "fontType": "Monospace",
+                            "spacing": "Medium"
+                        })
+                # Add all non-source paragraphs to the main body
+                # for text in other_paragraphs:
+                #     body_blocks.append({
+                #         "type": "TextBlock",
+                #         "text": text,
+                #         "wrap": True,
+                #         "spacing": "Small"
+                #     })
+                # Create the source section
                 source_container = {
                     "type": "Container",
                     "id": "sourceContainer",
@@ -200,55 +223,58 @@ async def _bot_logic(turn_context: TurnContext):
                     "style": "emphasis",
                     "bleed": True,
                     "maxHeight": "500px",
-                    "isScrollable": True,
+                    "isScrollable": True, 
                     "items": []
                 }
-                # Files (Referenced/Calculated using)
-                if all_files:
-                    source_container["items"].append({
-                        "type": "TextBlock",
-                        "text": "Referenced:",
-                        "wrap": True,
-                        "weight": "Bolder",
-                        "spacing": "Small"
-                    })
-                    for fname in sorted(all_files):
-                        sharepoint_base = "https://dgda.sharepoint.com/:x:/r/sites/CXQAData/_layouts/15/Doc.aspx?sourcedoc=%7B9B3CA3CD-5044-45C7-8A82-0604A1675F46%7D&file={}&action=default&mobileredirect=true"
-                        url = sharepoint_base.format(urllib.parse.quote(fname))
-                        source_container["items"].append({
-                            "type": "TextBlock",
-                            "text": f"[{fname}]({url})",
-                            "wrap": True,
-                            "spacing": "Small"
-                        })
-                if all_tables:
-                    source_container["items"].append({
-                        "type": "TextBlock",
-                        "text": "Calculated using:",
-                        "wrap": True,
-                        "weight": "Bolder",
-                        "spacing": "Small"
-                    })
-                    for tname in sorted(all_tables):
-                        sharepoint_base = "https://dgda.sharepoint.com/:x:/r/sites/CXQAData/_layouts/15/Doc.aspx?sourcedoc=%7B9B3CA3CD-5044-45C7-8A82-0604A1675F46%7D&file={}&action=default&mobileredirect=true"
-                        url = sharepoint_base.format(urllib.parse.quote(tname))
-                        source_container["items"].append({
-                            "type": "TextBlock",
-                            "text": f"[{tname}]({url})",
-                            "wrap": True,
-                            "spacing": "Small"
-                        })
-                # Source type
+                # Add Referenced/Calculated paragraphs to the collapsible section if present
+                for item in content_items:
+                    if item.get("type", "") == "paragraph":
+                        text = item.get("text", "")
+                        if text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:"):
+                            lines = text.split("\n")
+                            # Add the heading ("Referenced:" or "Calculated using:")
+                            if lines:
+                                source_container["items"].append({
+                                    "type": "TextBlock",
+                                    "text": lines[0],
+                                    "wrap": True,
+                                    "spacing": "Small",
+                                    "weight": "Bolder"
+                                })
+                            # For each file/table, add a markdown link as a TextBlock
+                            for line in lines[1:]:
+                                if line.strip().startswith("-"):
+                                    fname = line.strip()[1:].strip()
+                                    if fname:
+                                        sharepoint_base = "https://dgda.sharepoint.com/:x:/r/sites/CXQAData/_layouts/15/Doc.aspx?sourcedoc=%7B9B3CA3CD-5044-45C7-8A82-0604A1675F46%7D&file={}&action=default&mobileredirect=true"
+                                        url = sharepoint_base.format(urllib.parse.quote(fname))
+                                        print(f"DEBUG: Adding file link: {fname} -> {url}")
+                                        source_container["items"].append({
+                                            "type": "TextBlock",
+                                            "text": f"[{fname}]({url})",
+                                            "wrap": True,
+                                            "spacing": "Small"
+                                        })
+                                else:
+                                    # If not a file line, just add as text
+                                    source_container["items"].append({
+                                        "type": "TextBlock",
+                                        "text": line,
+                                        "wrap": True,
+                                        "spacing": "Small"
+                                    })
+                # Remove file_names/table_names and code/file blocks from the collapsible section
+                # Always add the source line at the bottom of the container
                 source_container["items"].append({
                     "type": "TextBlock",
-                    "text": f"Source: {', '.join(sorted(all_sources))}",
+                    "text": f"Source: {source}",
                     "wrap": True,
                     "weight": "Bolder",
                     "color": "Accent",
                     "spacing": "Medium",
                 })
                 body_blocks.append(source_container)
-                # Show/hide source button
+                # Add the show/hide source buttons
                 body_blocks.append({
                     "type": "ColumnSet",
                     "columns": [
@@ -261,7 +287,7 @@ async def _bot_logic(turn_context: TurnContext):
                                     "actions": [
                                         {
                                             "type": "Action.ToggleVisibility",
-                                            "title": "Show Files & Source",
+                                            "title": "Show Source",
                                             "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
                                         }
                                     ]
@@ -278,7 +304,7 @@ async def _bot_logic(turn_context: TurnContext):
                                     "actions": [
                                         {
                                             "type": "Action.ToggleVisibility",
-                                            "title": "Hide Files & Source",
+                                            "title": "Hide Source",
                                             "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
                                         }
                                     ]
@@ -287,6 +313,7 @@ async def _bot_logic(turn_context: TurnContext):
                         }
                     ]
                 })
+                # Create and send the adaptive card
                 adaptive_card = {
                     "type": "AdaptiveCard",
                     "body": body_blocks,
@@ -301,9 +328,9 @@ async def _bot_logic(turn_context: TurnContext):
                     }]
                 )
                 await turn_context.send_activity(message)
+                # Successfully processed JSON, so return early
                 return
-            # ... (rest of your old logic for legacy format)
-
+                
         except (json.JSONDecodeError, KeyError, TypeError):
             # Not JSON or not in our expected format, fall back to the regular processing
             pass
