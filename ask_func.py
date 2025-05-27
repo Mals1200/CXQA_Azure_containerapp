@@ -239,8 +239,6 @@ SCHEMA_TEXT = format_schema_and_sample(_metadata, sample_n=2, char_limit=15)
 #######################################################################################
 #                   CENTRALIZED LLM CALL (Point #1 Optimization)
 #######################################################################################
-session = requests.Session()
-
 def call_llm(system_prompt, user_prompt, max_tokens=500, temperature=0.0):
     """
     Central helper for calling Azure OpenAI LLM.
@@ -260,7 +258,7 @@ def call_llm(system_prompt, user_prompt, max_tokens=500, temperature=0.0):
             "max_tokens": max_tokens,
             "temperature": temperature
         }
-        response = session.post(CONFIG["LLM_ENDPOINT"], headers=headers, json=payload)
+        response = requests.post(CONFIG["LLM_ENDPOINT"], headers=headers, json=payload)
         response.raise_for_status()
         data = response.json()
         if "choices" in data and data["choices"]:
@@ -307,7 +305,7 @@ def call_llm_aux(system_prompt, user_prompt, max_tokens=300, temperature=0.0):
 
     for attempt in range(3):
         try:
-            r = session.post(CONFIG["LLM_ENDPOINT_AUX"], headers=headers, json=payload, timeout=30)
+            r = requests.post(CONFIG["LLM_ENDPOINT_AUX"], headers=headers, json=payload, timeout=30)
             if r.status_code == 429:
                 time.sleep(1.5 * (attempt + 1))
                 continue
