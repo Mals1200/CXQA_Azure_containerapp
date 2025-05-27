@@ -1,9 +1,4 @@
-# version 11b 
-# ((Hyperlink file names))
-# Made it display the files sources for the compounded questions:
-    # Referenced: <Files>                <-------Hyperlink to sharepoint
-    # Calculated using: <Tables>         <-------Hyperlink to sharepoint
-# still the url is fixed to one file. (NEEDS WORK!)
+# version 11c
 
 import os
 import asyncio
@@ -145,191 +140,176 @@ async def _bot_logic(turn_context: TurnContext):
                 cleaned_answer_text = cleaned_answer_text[3:].strip()
             if cleaned_answer_text.endswith('```'):
                 cleaned_answer_text = cleaned_answer_text[:-3].strip()
-            # Fix: Replace real newlines with escaped newlines to allow JSON parsing
-            # This is necessary because the LLM may output real newlines inside string values, which is invalid in JSON
-            cleaned_answer_text = cleaned_answer_text.replace('\n', '\\n')
             response_json = json.loads(cleaned_answer_text)
             # Check if this is our expected JSON format with content and source
-            if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
-                # We have a structured JSON response!
-                content_items = response_json["content"]
-                source = response_json["source"]
-                # Build the adaptive card body
-                body_blocks = []
-                #referenced_paragraphs = []
-                #calculated_paragraphs = []
-                #other_paragraphs = []
-                # Process each content item based on its type
-                for item in content_items:
-                    item_type = item.get("type", "")
-                    if item_type == "heading":
+            if not (isinstance(response_json, dict) and "content" in response_json and "source" in response_json):
+                # fallback: send as markdown, don't try to build a card
+                await turn_context.send_activity(Activity(type="message", text=answer_text))
+                return
+            content_items = response_json["content"]
+            source = response_json["source"]
+            source_details = response_json.get("source_details", {})
+            file_names = source_details.get("file_names", []) or []
+            table_names = source_details.get("table_names", []) or []
+            # Build the adaptive card body
+            body_blocks = []
+            for item in content_items:
+                item_type = item.get("type", "")
+                if item_type == "heading":
+                    body_blocks.append({
+                        "type": "TextBlock",
+                        "text": item.get("text", ""),
+                        "wrap": True,
+                        "weight": "Bolder",
+                        "size": "Large",
+                        "spacing": "Medium"
+                    })
+                elif item_type == "paragraph":
+                    text = item.get("text", "")
+                    # Render all paragraphs as normal text (do not parse for Referenced/Calculated)
+                    body_blocks.append({
+                        "type": "TextBlock",
+                        "text": text,
+                        "wrap": True,
+                        "spacing": "Small"
+                    })
+                elif item_type == "bullet_list":
+                    items = item.get("items", [])
+                    for list_item in items:
                         body_blocks.append({
                             "type": "TextBlock",
-                            "text": item.get("text", ""),
+                            "text": f"• {list_item}",
                             "wrap": True,
-                            "weight": "Bolder",
-                            "size": "Large",
-                            "spacing": "Medium"
+                            "spacing": "Small"
                         })
-                    elif item_type == "paragraph":
-                        text = item.get("text", "")
-                        # Only add to main body if not a reference/calculated paragraph
-                        if not (text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:")):
-                            body_blocks.append({
-                                "type": "TextBlock",
-                                "text": text,
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
-                    elif item_type == "bullet_list":
-                        items = item.get("items", [])
-                        for list_item in items:
-                            body_blocks.append({
-                                "type": "TextBlock",
-                                "text": f"• {list_item}",
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
-                    elif item_type == "numbered_list":
-                        items = item.get("items", [])
-                        for i, list_item in enumerate(items, 1):
-                            body_blocks.append({
-                                "type": "TextBlock",
-                                "text": f"{i}. {list_item}",
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
-                    elif item_type == "code_block":
+                elif item_type == "numbered_list":
+                    items = item.get("items", [])
+                    for i, list_item in enumerate(items, 1):
                         body_blocks.append({
                             "type": "TextBlock",
-                            "text": f"```\n{item.get('code', '')}\n```",
+                            "text": f"{i}. {list_item}",
                             "wrap": True,
-                            "fontType": "Monospace",
-                            "spacing": "Medium"
+                            "spacing": "Small"
                         })
-                # Add all non-source paragraphs to the main body
-                # for text in other_paragraphs:
-                #     body_blocks.append({
-                #         "type": "TextBlock",
-                #         "text": text,
-                #         "wrap": True,
-                #         "spacing": "Small"
-                #     })
-                # Create the source section
-                source_container = {
-                    "type": "Container",
-                    "id": "sourceContainer",
-                    "isVisible": False,
-                    "style": "emphasis",
-                    "bleed": True,
-                    "maxHeight": "500px",
-                    "isScrollable": True, 
-                    "items": []
-                }
-                # Add Referenced/Calculated paragraphs to the collapsible section if present
-                for item in content_items:
-                    if item.get("type", "") == "paragraph":
-                        text = item.get("text", "")
-                        if text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:"):
-                            lines = text.split("\n")
-                            # Add the heading ("Referenced:" or "Calculated using:")
-                            if lines:
-                                source_container["items"].append({
-                                    "type": "TextBlock",
-                                    "text": lines[0],
-                                    "wrap": True,
-                                    "spacing": "Small",
-                                    "weight": "Bolder"
-                                })
-                            # For each file/table, add a markdown link as a TextBlock
-                            for line in lines[1:]:
-                                if line.strip().startswith("-"):
-                                    fname = line.strip()[1:].strip()
-                                    if fname:
-                                        sharepoint_base = "https://dgda.sharepoint.com/:x:/r/sites/CXQAData/_layouts/15/Doc.aspx?sourcedoc=%7B9B3CA3CD-5044-45C7-8A82-0604A1675F46%7D&file={}&action=default&mobileredirect=true"
-                                        url = sharepoint_base.format(urllib.parse.quote(fname))
-                                        print(f"DEBUG: Adding file link: {fname} -> {url}")
-                                        source_container["items"].append({
-                                            "type": "TextBlock",
-                                            "text": f"[{fname}]({url})",
-                                            "wrap": True,
-                                            "spacing": "Small"
-                                        })
-                                else:
-                                    # If not a file line, just add as text
-                                    source_container["items"].append({
-                                        "type": "TextBlock",
-                                        "text": line,
-                                        "wrap": True,
-                                        "spacing": "Small"
-                                    })
-                # Remove file_names/table_names and code/file blocks from the collapsible section
-                # Always add the source line at the bottom of the container
+                elif item_type == "code_block":
+                    body_blocks.append({
+                        "type": "TextBlock",
+                        "text": f"```\n{item.get('code', '')}\n```",
+                        "wrap": True,
+                        "fontType": "Monospace",
+                        "spacing": "Medium"
+                    })
+            # Create the source section using file_names and table_names from source_details
+            source_container = {
+                "type": "Container",
+                "id": "sourceContainer",
+                "isVisible": False,
+                "style": "emphasis",
+                "bleed": True,
+                "maxHeight": "500px",
+                "isScrollable": True, 
+                "items": []
+            }
+            if file_names:
                 source_container["items"].append({
                     "type": "TextBlock",
-                    "text": f"Source: {source}",
+                    "text": "Referenced:",
                     "wrap": True,
-                    "weight": "Bolder",
-                    "color": "Accent",
-                    "spacing": "Medium",
+                    "spacing": "Small",
+                    "weight": "Bolder"
                 })
-                body_blocks.append(source_container)
-                # Add the show/hide source buttons
-                body_blocks.append({
-                    "type": "ColumnSet",
-                    "columns": [
-                        {
-                            "type": "Column",
-                            "id": "showSourceBtn",
-                            "items": [
-                                {
-                                    "type": "ActionSet",
-                                    "actions": [
-                                        {
-                                            "type": "Action.ToggleVisibility",
-                                            "title": "Show Source",
-                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                        }
-                                    ]
-                                }
-                            ]
-                        },
-                        {
-                            "type": "Column",
-                            "id": "hideSourceBtn",
-                            "isVisible": False,
-                            "items": [
-                                {
-                                    "type": "ActionSet",
-                                    "actions": [
-                                        {
-                                            "type": "Action.ToggleVisibility",
-                                            "title": "Hide Source",
-                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                        }
-                                    ]
-                                }
-                            ]
-                        }
-                    ]
+                for fname in file_names:
+                    sharepoint_base = "https://dgda.sharepoint.com/:x:/r/sites/CXQAData/_layouts/15/Doc.aspx?sourcedoc=%7B9B3CA3CD-5044-45C7-8A82-0604A1675F46%7D&file={}&action=default&mobileredirect=true"
+                    url = sharepoint_base.format(urllib.parse.quote(fname))
+                    source_container["items"].append({
+                        "type": "TextBlock",
+                        "text": f"[{fname}]({url})",
+                        "wrap": True,
+                        "spacing": "Small"
+                    })
+            if table_names:
+                source_container["items"].append({
+                    "type": "TextBlock",
+                    "text": "Calculated using:",
+                    "wrap": True,
+                    "spacing": "Small",
+                    "weight": "Bolder"
                 })
-                # Create and send the adaptive card
-                adaptive_card = {
-                    "type": "AdaptiveCard",
-                    "body": body_blocks,
-                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                    "version": "1.5"
-                }
-                message = Activity(
-                    type="message",
-                    attachments=[{
-                        "contentType": "application/vnd.microsoft.card.adaptive",
-                        "content": adaptive_card
-                    }]
-                )
-                await turn_context.send_activity(message)
-                # Successfully processed JSON, so return early
-                return
+                for tname in table_names:
+                    sharepoint_base = "https://dgda.sharepoint.com/:x:/r/sites/CXQAData/_layouts/15/Doc.aspx?sourcedoc=%7B9B3CA3CD-5044-45C7-8A82-0604A1675F46%7D&file={}&action=default&mobileredirect=true"
+                    url = sharepoint_base.format(urllib.parse.quote(tname))
+                    source_container["items"].append({
+                        "type": "TextBlock",
+                        "text": f"[{tname}]({url})",
+                        "wrap": True,
+                        "spacing": "Small"
+                    })
+            # Always add the source line at the bottom of the container
+            source_container["items"].append({
+                "type": "TextBlock",
+                "text": f"Source: {source}",
+                "wrap": True,
+                "weight": "Bolder",
+                "color": "Accent",
+                "spacing": "Medium",
+            })
+            body_blocks.append(source_container)
+            # Add the show/hide source buttons
+            body_blocks.append({
+                "type": "ColumnSet",
+                "columns": [
+                    {
+                        "type": "Column",
+                        "id": "showSourceBtn",
+                        "items": [
+                            {
+                                "type": "ActionSet",
+                                "actions": [
+                                    {
+                                        "type": "Action.ToggleVisibility",
+                                        "title": "Show Source",
+                                        "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "type": "Column",
+                        "id": "hideSourceBtn",
+                        "isVisible": False,
+                        "items": [
+                            {
+                                "type": "ActionSet",
+                                "actions": [
+                                    {
+                                        "type": "Action.ToggleVisibility",
+                                        "title": "Hide Source",
+                                        "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            })
+            # Create and send the adaptive card
+            adaptive_card = {
+                "type": "AdaptiveCard",
+                "body": body_blocks,
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "version": "1.5"
+            }
+            message = Activity(
+                type="message",
+                attachments=[{
+                    "contentType": "application/vnd.microsoft.card.adaptive",
+                    "content": adaptive_card
+                }]
+            )
+            await turn_context.send_activity(message)
+            # Successfully processed JSON, so return early
+            return
                 
         except (json.JSONDecodeError, KeyError, TypeError):
             # Not JSON or not in our expected format, fall back to the regular processing
