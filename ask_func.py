@@ -43,10 +43,6 @@ from collections import OrderedDict
 import difflib
 import time
 
-# Add logging configuration at the very top
-import logging
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
-
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
 #######################################################################################
@@ -476,12 +472,9 @@ def references_tabular_data(question, tables_text):
 
     Final instruction: Reply ONLY with 'YES' or 'NO'.
     """
-    logging.debug(f"[Classifier] Question={question!r}")
     llm_response = call_llm_aux(llm_system_message, llm_user_message, max_tokens=5, temperature=0.0)
     clean_response = llm_response.strip().upper()
-    use_tables = "YES" in clean_response
-    logging.debug(f"[Classifier] NEEDS_TABULAR={'YES' if use_tables else 'NO'} (raw response {llm_response!r})")
-    return use_tables
+    return "YES" in clean_response
 
 def is_text_relevant(question, snippet):
     if not snippet.strip():
@@ -515,7 +508,6 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1):
     CONTENT_FIELD = CONFIG["CONTENT_FIELD"]
 
     subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
-    logging.debug(f"[Index] Running semantic search on: {subquestions}")
     if not subquestions:
         subquestions = [user_question]
 
@@ -545,7 +537,6 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1):
                     merged_docs.append({"title": title, "snippet": snippet})
 
         if not merged_docs:
-            logging.debug(f"[Index] Returning 0 docs, snippets length=0")
             return {"top_k": "No information", "file_names": []}
 
         # Filter by access + relevance
@@ -559,7 +550,6 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1):
                     relevant_docs.append(doc)
 
         if not relevant_docs:
-            logging.debug(f"[Index] Returning 0 docs after relevance filter, snippets length=0")
             return {"top_k": "No information", "file_names": []}
 
         # Weighted scoring
@@ -588,7 +578,6 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1):
         
         re_ranked_texts = [d["snippet"] for d in docs_top_k]
         combined = "\n\n---\n\n".join(re_ranked_texts)
-        logging.debug(f"[Index] Returning {len(file_names)} docs, snippets length={len(combined)}")
 
         return {"top_k": combined, "file_names": file_names}
 
@@ -658,7 +647,6 @@ Chat_history:
 """
 
     code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.7)
-    logging.debug(f"[CodeRun] Code generated:\n{code_str}")
 
     if not code_str or code_str == "404":
         return {"result": "No information", "code": "", "table_names": []}
@@ -692,7 +680,6 @@ Chat_history:
     table_names = table_names[:3]
 
     execution_result = execute_generated_code(code_str)
-    logging.debug(f"[CodeRun] Tables referenced: {table_names}, result: {execution_result!r}")
     return {"result": execution_result, "code": code_str, "table_names": table_names}
 
 def execute_generated_code(code_str):
@@ -809,109 +796,109 @@ def final_answer_llm(user_question, index_dict, python_dict):
     # # JSON RESPONSE FORMAT - REMOVE COMMENTS TO ENABLE
     # # This block modifies the system prompt to output a well-structured JSON
     # ########################################################################
-    system_prompt = f"""
-You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
-1) Index data: (INDEX_DATA)
-2) Python data: (PYTHON_DATA)
-*) Always Prioritise The python result if the 2 are different.
+#     system_prompt = f"""
+# You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
+# 1) Index data: (INDEX_DATA)
+# 2) Python data: (PYTHON_DATA)
+# *) Always Prioritise The python result if the 2 are different.
 
-Your output must be formatted as a properly escaped JSON with the following structure:
-{{
-  "content": [
-    {{
-      "type": "heading",
-      "text": "If needed Main answer heading/title here (Not the user_question repeated)"
-    }},
-    {{
-      "type": "paragraph",
-      "text": "Normal paragraph text here"
-    }},
-    {{
-      "type": "bullet_list",
-      "items": [
-        "List item 1",
-        "List item 2",
-        "List item 3"
-      ]
-    }},
-    {{
-      "type": "numbered_list",
-      "items": [
-        "Numbered item 1",
-        "Numbered item 2"
-      ]
-    }}
-  ],
-  "source": "Source type (Index, Python, Index & Python, or AI Generated)"
-}}
+# Your output must be formatted as a properly escaped JSON with the following structure:
+# {{
+#   "content": [
+#     {{
+#       "type": "heading",
+#       "text": "If needed Main answer heading/title here (Not the user_question repeated)"
+#     }},
+#     {{
+#       "type": "paragraph",
+#       "text": "Normal paragraph text here"
+#     }},
+#     {{
+#       "type": "bullet_list",
+#       "items": [
+#         "List item 1",
+#         "List item 2",
+#         "List item 3"
+#       ]
+#     }},
+#     {{
+#       "type": "numbered_list",
+#       "items": [
+#         "Numbered item 1",
+#         "Numbered item 2"
+#       ]
+#     }}
+#   ],
+#   "source": "Source type (Index, Python, Index & Python, or AI Generated)"
+# }}
 
-Important guidelines:
-1. Format your content appropriately based on the answer structure you want to convey
-2. Use "heading" for titles and subtitles not user question
-3. Use "paragraph" for normal text blocks
-4. Use "bullet_list" for unordered lists
-5. Use "numbered_list" for ordered/numbered lists
-6. Use "code_block" for any code snippets
-7. Make sure the JSON is valid and properly escaped
-8. Every section must have a "type" and appropriate content fields
-9. **CRITICAL**: If BOTH INDEX_DATA and PYTHON_DATA contain useful information (not "No information"), ALWAYS set source to "Index & Python"
-10. If the user asks a multi-part question and you use information from both sources, set source to "Index & Python"
-11. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
-12. Only use "Python" if INDEX_DATA is "No information" and only PYTHON_DATA has useful data
-13. Only use "Index" if PYTHON_DATA is "No information" and only INDEX_DATA has useful data
-14. **Unless its a (multi-part Question) Never include the user's question as the first heading or paragraph in the content array.**
+# Important guidelines:
+# 1. Format your content appropriately based on the answer structure you want to convey
+# 2. Use "heading" for titles and subtitles not user question
+# 3. Use "paragraph" for normal text blocks
+# 4. Use "bullet_list" for unordered lists
+# 5. Use "numbered_list" for ordered/numbered lists
+# 6. Use "code_block" for any code snippets
+# 7. Make sure the JSON is valid and properly escaped
+# 8. Every section must have a "type" and appropriate content fields
+# 9. **CRITICAL**: If BOTH INDEX_DATA and PYTHON_DATA contain useful information (not "No information"), ALWAYS set source to "Index & Python"
+# 10. If the user asks a multi-part question and you use information from both sources, set source to "Index & Python"
+# 11. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
+# 12. Only use "Python" if INDEX_DATA is "No information" and only PYTHON_DATA has useful data
+# 13. Only use "Index" if PYTHON_DATA is "No information" and only INDEX_DATA has useful data
+# 14. **Unless its a (multi-part Question) Never include the user's question as the first heading or paragraph in the content array.**
 
-Use only these two sources to answer. If you find relevant info from both, answer using both. 
-If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
+# Use only these two sources to answer. If you find relevant info from both, answer using both. 
+# If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
 
-For multi-part questions, organize your response clearly with appropriate headings or sections 
-for each part of the answer. If one part comes from Index and another from Python, use both sources.
+# For multi-part questions, organize your response clearly with appropriate headings or sections 
+# for each part of the answer. If one part comes from Index and another from Python, use both sources.
 
-User question:
-{user_question}
+# User question:
+# {user_question}
 
-INDEX_DATA:
-{index_top_k}
+# INDEX_DATA:
+# {index_top_k}
 
-PYTHON_DATA:
-{python_result}
+# PYTHON_DATA:
+# {python_result}
 
-Chat_history:
-{recent_history if recent_history else []}
-"""
+# Chat_history:
+# {recent_history if recent_history else []}
+# """
 
     # ########################################################################
     # # ORIGINAL SYSTEM PROMPT - UNCOMMENT TO USE INSTEAD OF JSON FORMAT
     # ########################################################################
-    # system_prompt = f"""
-    # You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
-    # 1) Index data: (INDEX_DATA)
-    # 2) Python data: (PYTHON_DATA)
-    # *) Always Prioritise The python result if the 2 are different.
+    system_prompt = f"""
+    You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
+    1) Index data: (INDEX_DATA)
+    2) Python data: (PYTHON_DATA)
+    *) Always Prioritise The python result if the 2 are different.
     
-    # Use only these two sources to answer. If you find relevant info from both, answer using both. 
-    # At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
-    # - "Index" if only index data was used,
-    # - "Python" if only python data was used,
-    # - "Index & Python" if both were used,
-    # - or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
-    # - Present your answer in a clear, readable format.
+    Use only these two sources to answer. If you find relevant info from both, answer using both. 
+    At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
+    - "Index" if only index data was used,
+    - "Python" if only python data was used,
+    - "Index & Python" if both were used,
+    - or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
+    - Present your answer in a clear, readable format.
     
-    # Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
-    # Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
+    Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
+    Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
     
-    # User question:
-    # {user_question}
+    User question:
+    {user_question}
     
-    # INDEX_DATA:
-    # {index_top_k}
+    INDEX_DATA:
+    {index_top_k}
     
-    # PYTHON_DATA:
-    # {python_result}
+    PYTHON_DATA:
+    {python_result}
     
-    # Chat_history:
-    # {recent_history if recent_history else []}
-    # """
+    Chat_history:
+    {recent_history if recent_history else []}
+    """
 
     try:
         final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
@@ -1294,13 +1281,11 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     t4 = time.time()
 
     # Now unify repeated text cleaning
-    logging.debug(f"[Final] RAW_ANSWER={raw_answer!r}")
     raw_answer = clean_text(raw_answer)
 
     t5 = time.time()
     final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict, user_question=user_question)
     t6 = time.time()
-    logging.debug(f"[Final] FINAL_JSON={final_answer_with_source}")
 
     total_end = time.time()
     tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
