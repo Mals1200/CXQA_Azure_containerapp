@@ -24,6 +24,12 @@ from botbuilder.core.teams import TeamsInfo
 
 from ask_func import Ask_Question, chat_history
 
+sharepoint_links = {
+    "File1.xlsx": "9B3CA3CD-5044-45C7-8A82-0604A1675F46",
+    "File2.xlsx": "3A1BCF12-1234-5678-ABCD-987654321000",
+    # Add more mappings as needed
+}
+
 app = Flask(__name__)
 
 MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
@@ -125,7 +131,13 @@ async def _bot_logic(turn_context: TurnContext):
     try:
         # Process the message
         ans_gen = Ask_Question(user_message, user_id=user_id)
-        answer_text = "".join(ans_gen)
+        answer_chunks = list(ans_gen) # I update this
+        answer_text = "".join(answer_chunks).strip()
+        # Fallback if nothing was returned
+        if not answer_text:
+            print("WARNING: Ask_Question yielded no output")
+            await turn_context.send_activity(Activity(type="message", text="Sorry, I couldn't find an answer to your question."))
+            return
 
         # Update state
         state['history'] = ask_func.chat_history
@@ -145,12 +157,9 @@ async def _bot_logic(turn_context: TurnContext):
                 cleaned_answer_text = cleaned_answer_text[3:].strip()
             if cleaned_answer_text.endswith('```'):
                 cleaned_answer_text = cleaned_answer_text[:-3].strip()
-            # NOTE: Do NOT blindly escape real newline characters, as JSON allows
-            # whitespace outside of string literals. Escaping them globally breaks
-            # the JSON structure (e.g. producing `{\n` which is invalid). The
-            # answers returned from `ask_func` are already serialized using
-            # `json.dumps`, so any newline characters that _must_ be escaped are
-            # already handled. Therefore, we simply attempt to load the JSON as-is.
+            # Fix: Replace real newlines with escaped newlines to allow JSON parsing
+            # This is necessary because the LLM may output real newlines inside string values, which is invalid in JSON
+            cleaned_answer_text = cleaned_answer_text.replace('\n', '\\n')
             response_json = json.loads(cleaned_answer_text)
             # Check if this is our expected JSON format with content and source
             if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
@@ -246,26 +255,39 @@ async def _bot_logic(turn_context: TurnContext):
                                 })
                             # For each file/table, add a markdown link as a TextBlock
                             for line in lines[1:]:
-                                if line.strip().startswith("-"):
+                                 if line.strip().startswith("-"):
                                     fname = line.strip()[1:].strip()
                                     if fname:
-                                        sharepoint_base = "https://dgda.sharepoint.com/:x:/r/sites/CXQAData/_layouts/15/Doc.aspx?sourcedoc=%7B9B3CA3CD-5044-45C7-8A82-0604A1675F46%7D&file={}&action=default&mobileredirect=true"
-                                        url = sharepoint_base.format(urllib.parse.quote(fname))
-                                        print(f"DEBUG: Adding file link: {fname} -> {url}")
-                                        source_container["items"].append({
+            # Lookup the sourcedoc GUID from the mapping
+                                        sourcedoc_guid = sharepoint_links.get(fname)
+                                        if sourcedoc_guid:
+                                            url = (
+                                                    f"https://dgda.sharepoint.com/:x:/r/sites/CXQAData/_layouts/15/"
+                                                    f"Doc.aspx?sourcedoc=%7B{sourcedoc_guid}%7D&file={urllib.parse.quote(fname)}"
+                                                    "&action=default&mobileredirect=true"
+                                                )
+                                            print(f"DEBUG: Adding file link: {fname} -> {url}")
+                                            source_container["items"].append({
                                             "type": "TextBlock",
                                             "text": f"[{fname}]({url})",
                                             "wrap": True,
                                             "spacing": "Small"
-                                        })
-                                else:
-                                    # If not a file line, just add as text
-                                    source_container["items"].append({
+                                            })
+                                        else:
+                                            print(f"WARNING: No sourcedoc mapping found for {fname}")
+                                            source_container["items"].append({
+                                            "type": "TextBlock",
+                                            "text": fname,
+                                            "wrap": True,
+                                            "spacing": "Small"
+                                            })
+                                    else:
+                                        source_container["items"].append({
                                         "type": "TextBlock",
                                         "text": line,
                                         "wrap": True,
                                         "spacing": "Small"
-                                    })
+                                        })
                 # Remove file_names/table_names and code/file blocks from the collapsible section
                 # Always add the source line at the bottom of the container
                 source_container["items"].append({
@@ -335,28 +357,18 @@ async def _bot_logic(turn_context: TurnContext):
                 return
                 
         except (json.JSONDecodeError, KeyError, TypeError):
-            # Not JSON or parse failed – we'll handle with the robust fallback below
-            cleaned_answer_text = None  # signal for later
+            # Not JSON or not in our expected format, fall back to the regular processing
+            pass
             
-        # ------------------------------------------------------------------
-        # Fallback logic – use the same helper as Testing code.py so we always
-        # get an answer, source, and any file names even when the response is
-        # not perfect JSON (or we purposely skipped showing the full card).
-        # ------------------------------------------------------------------
-
-        if cleaned_answer_text is None:  # JSON branch failed
-            main_answer, source_line, files_csv = _parse_answer(answer_text)
-            appended_details = ""
+        # If we're here, the response wasn't valid JSON, so process normally
+        if match:
+            main_answer = match.group(1).strip()
+            source_line = match.group(2).strip()
+            appended_details = match.group(3) if match.group(3) else ""
         else:
-            # JSON parsed but wasn't our structured schema – keep legacy flow
-            if match:
-                main_answer = match.group(1).strip()
-                source_line = match.group(2).strip()
-                appended_details = match.group(3) if match.group(3) else ""
-            else:
-                main_answer = answer_text
-                source_line = ""
-                appended_details = ""
+            main_answer = answer_text
+            source_line = ""
+            appended_details = ""
 
         if source_line:
             # Create simple text blocks without complex formatting
@@ -464,83 +476,6 @@ async def _bot_logic(turn_context: TurnContext):
         error_message = f"An error occurred while processing your request: {str(e)}"
         print(f"Error in bot logic: {e}")
         await turn_context.send_activity(Activity(type="message", text=error_message))
-
-# -----------------------------------------------------------------------------
-# Helper functions (borrowed from Testing code.py) to robustly parse Ask_Question
-# responses whether they are JSON or legacy plaintext. These allow us to extract
-# a clean answer string, the source type, and any referenced files/tables.
-# -----------------------------------------------------------------------------
-from typing import List, Tuple
-
-
-def _render_content(blocks: List[dict]) -> str:
-    """Render structured LLM content → plain text while **omitting** any internal
-    Calculated/Referenced sections (those will be displayed separately)."""
-    out: List[str] = []
-    skip_mode = False  # True while inside Calc/Ref bullets we plan to skip
-
-    for blk in blocks:
-        btype = blk.get("type", "")
-        txt = blk.get("text", "")
-
-        # Detect and skip "Calculated using:" or "Referenced:" paragraphs + their bullets
-        if btype == "paragraph" and txt.lower().startswith(("calculated using", "referenced")):
-            skip_mode = True
-            continue  # skip marker line
-        if skip_mode and btype in ("paragraph", "bullet_list", "numbered_list"):
-            # Still skipping until a new heading arrives
-            if btype == "heading":
-                skip_mode = False  # end skip on new section
-            else:
-                continue
-
-        if skip_mode:
-            continue
-
-        if btype == "heading":
-            out.append(txt.strip())
-            out.append("")
-        elif btype == "paragraph":
-            out.append(txt.strip())
-            out.append("")
-        elif btype == "bullet_list":
-            out.extend(f"• {item}" for item in blk.get("items", []))
-            out.append("")
-        elif btype == "numbered_list":
-            out.extend(f"{i}. {item}" for i, item in enumerate(blk.get("items", []), 1))
-            out.append("")
-        else:  # unknown – stringify
-            out.append(str(blk))
-            out.append("")
-
-    return "\n".join(out).strip()
-
-
-def _parse_answer(full: str) -> Tuple[str, str, str]:
-    """Return (clean_answer, source_type, files_used). Works for both the new
-    JSON schema and the older plaintext format."""
-    # 1) Prefer JSON schema
-    try:
-        js = json.loads(full)
-        answer = _render_content(js.get("content", [])) or full
-        source_type = js.get("source", "Unknown")
-        det = js.get("source_details", {}) if isinstance(js, dict) else {}
-        files = det.get("file_names", []) + det.get("table_names", [])
-        files_used = ", ".join(files)
-        return answer, source_type, files_used
-    except (json.JSONDecodeError, TypeError):
-        pass
-
-    # 2) Legacy plain-text splitter
-    if "Source:" in full:
-        ans, src_part = full.split("Source:", 1)
-        ans_clean = ans.strip()
-        src_lines = [l.strip() for l in src_part.splitlines() if l.strip()]
-        src_type = src_lines[0] if src_lines else "Unknown"
-        files = ", ".join(src_lines[1:]) if len(src_lines) > 1 else ""
-        return ans_clean, src_type, files
-
-    return full.strip(), "Unknown", ""
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=80)
