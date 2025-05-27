@@ -1,26 +1,21 @@
-# =====================================================================================
-# CXQA Assistant - Recent Additions (Performance & Usability Improvements)
-# =====================================================================================
+# version v21c  (Fixed the python path to answer questions with the chat history occupied)
+# ---------------------------------------------------------------------------
+# 1) Cleaner tabular-data classifier
+#    • Removed chat_history from the prompt ➜ fewer false “NO” decisions.
 #
-# 1. Persistent HTTP Session for API Calls
-#    - A single requests.Session() is used for all LLM API calls, reducing connection overhead
-#      and making API requests faster and more efficient.
+# 2) More robust Python-tool trigger
+#    • Run Python whenever:
+#        a) references_tabular_data() == YES
+#        b) OR index search returns “No information”.
 #
-# 2. Parallel Execution of Index and Python Tools
-#    - When both the index search (Tool 1) and Python code execution (Tool 2) are needed,
-#      they are run in parallel using ThreadPoolExecutor. This reduces total wait time for users.
+# 3) Teams-friendly bullet lists in plain-text mode
+#    • Legacy branches of post_process_source()
+#      now build:
+#          "\nReferenced:\n- " + "\n- ".join(file_names)
+#          "\nCalculated using:\n- " + "\n- ".join(table_names)
 #
-# 3. Lazy Loading and Caching of DataFrames
-#    - Only the specific data files referenced in the generated Python code are downloaded and loaded.
-#    - Once a file is loaded, it is stored in a global cache (_dataframe_cache) for reuse in the session.
-#    - This avoids unnecessary downloads and speeds up repeated queries involving the same data.
-#
-# 4. Removal of Timing Print Statements
-#    - All timing/debug print statements have been removed for production use.
-#    - The code remains optimized, but now runs quietly for end users.
-#
-# These changes make the assistant faster, more efficient, and easier to maintain.
-# =====================================================================================
+# 4) No changes to JSON path, RBAC, caching, or logging logic.
+# ─────────────────────────────────────────────────────────────────────────────
 
 import os
 import io
@@ -46,24 +41,27 @@ import time
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
 #######################################################################################
+#######################################################################################
+#                               GLOBAL CONFIG / CONSTANTS
+#######################################################################################
 CONFIG = {
     # ── MAIN, high-capacity model (Tool-1 Index, Tool-2 Python, Tool-3 Fallback) ──
-    "LLM_ENDPOINT"     : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
-                         "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
+    "LLM_ENDPOINT"     : "https://cxqaazureaihub2358016269.openai.azure.com/"
+                         "openai/deployments/gpt-4o-3/chat/completions?api-version=2025-01-01-preview",
 
     # same key used for both deployments
-    "LLM_API_KEY"      : "5EgVev7KCYaO758NWn5yL7f2iyrS4U3FaSI5lQhTx7RlePQ7QMESJQQJ99AKACHYHv6XJ3w3AAAAACOGoSfb",
+    "LLM_API_KEY"      : "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor",
 
     # ── AUXILIARY model (classifiers, splitters, etc.) ────────────────────────────
-    "LLM_ENDPOINT_AUX" : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
+    "LLM_ENDPOINT_AUX" : "https://cxqaazureaihub2358016269.openai.azure.com/"
                          "openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview",
 
     # (unchanged settings below) ───────────────────────────────────────────────────
     "SEARCH_SERVICE_NAME": "cxqa-azureai-search",
     "SEARCH_ENDPOINT"    : "https://cxqa-azureai-search.search.windows.net",
     "ADMIN_API_KEY"      : "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv",
-    "INDEX_NAME"         : "vector-1746718296853-08-05-2025",  #"vector-1741865904949",
-    "SEMANTIC_CONFIG_NAME": "vector-1746718296853-08-05-2025-semantic-configuration", #"vector-1741865904949-semantic-configuration",
+    "INDEX_NAME"         : "vector-1741865904949",
+    "SEMANTIC_CONFIG_NAME": "vector-1741865904949-semantic-configuration",
     "CONTENT_FIELD"      : "chunk",
     "ACCOUNT_URL"        : "https://cxqaazureaihub8779474245.blob.core.windows.net",
     "SAS_TOKEN"          : (
@@ -75,6 +73,7 @@ CONFIG = {
     "TARGET_FOLDER_PATH": "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
 }
 
+
 # Global objects with better initialization
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
 logging.getLogger("azure").setLevel(logging.WARNING)
@@ -83,9 +82,6 @@ logging.getLogger("azure").setLevel(logging.WARNING)
 chat_history = []
 recent_history = []
 tool_cache = {}
-
-# Global cache for dataframes
-_dataframe_cache = {}
 
 # Add retry decorator for Azure API calls
 def azure_retry(max_attempts=3, delay=2):
@@ -263,8 +259,6 @@ SCHEMA_TEXT = format_schema_and_sample(_metadata, sample_n=2, char_limit=15)
 #######################################################################################
 #                   CENTRALIZED LLM CALL (Point #1 Optimization)
 #######################################################################################
-session = requests.Session()
-
 def call_llm(system_prompt, user_prompt, max_tokens=500, temperature=0.0):
     """
     Central helper for calling Azure OpenAI LLM.
@@ -284,7 +278,7 @@ def call_llm(system_prompt, user_prompt, max_tokens=500, temperature=0.0):
             "max_tokens": max_tokens,
             "temperature": temperature
         }
-        response = session.post(CONFIG["LLM_ENDPOINT"], headers=headers, json=payload)
+        response = requests.post(CONFIG["LLM_ENDPOINT"], headers=headers, json=payload)
         response.raise_for_status()
         data = response.json()
         if "choices" in data and data["choices"]:
@@ -314,7 +308,7 @@ def call_llm_aux(system_prompt, user_prompt, max_tokens=300, temperature=0.0):
     Lightweight LLM caller that targets the GPT-4o auxiliary deployment.
     Used for classifiers, question splitters, etc. — NOT for Tool-1/2/3.
     """
-    import time, logging, json
+    import requests, time, logging, json
 
     headers = {
         "Content-Type": "application/json",
@@ -331,7 +325,7 @@ def call_llm_aux(system_prompt, user_prompt, max_tokens=300, temperature=0.0):
 
     for attempt in range(3):
         try:
-            r = session.post(CONFIG["LLM_ENDPOINT_AUX"], headers=headers, json=payload, timeout=30)
+            r = requests.post(CONFIG["LLM_ENDPOINT_AUX"], headers=headers, json=payload, timeout=30)
             if r.status_code == 429:
                 time.sleep(1.5 * (attempt + 1))
                 continue
@@ -659,7 +653,7 @@ Chat_history:
     table_names = []
     
     # Pattern 1: dataframes.get("filename")
-    pattern1 = re.compile(r"dataframes\.get\(\s*['\"]([^'\"]+)['\"]\s*\)")
+    pattern1 = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
     matches1 = pattern1.findall(code_str)
     if matches1:
         for match in matches1:
@@ -667,7 +661,7 @@ Chat_history:
                 table_names.append(match)
     
     # Pattern 2: pd.read_excel("filename") or pd.read_csv("filename")
-    pattern2 = re.compile(r"pd\.read_(?:excel|csv)\(\s*['\"]([^'\"]+)['\"]\s*\)")
+    pattern2 = re.compile(r'pd\.read_(?:excel|csv)\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
     matches2 = pattern2.findall(code_str)
     if matches2:
         for match in matches2:
@@ -681,67 +675,50 @@ Chat_history:
     return {"result": execution_result, "code": code_str, "table_names": table_names}
 
 def execute_generated_code(code_str):
-    import time
     account_url = CONFIG["ACCOUNT_URL"]
     sas_token = CONFIG["SAS_TOKEN"]
     container_name = CONFIG["CONTAINER_NAME"]
     target_folder_path = CONFIG["TARGET_FOLDER_PATH"]
 
     try:
-        t0 = time.time()
         blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
         container_client = blob_service_client.get_container_client(container_name)
-        t1 = time.time()
-
-        # Find referenced files in code
-        import re
-        pattern = re.compile(r"dataframes\.get\(\s*['\"]([^'\"]+)['\"]\s*\)")
-        found_files = pattern.findall(code_str)
-        if not found_files:
-            # Also check for pd.read_excel or pd.read_csv
-            pattern2 = re.compile(r"pd\.read_(?:excel|csv)\(\s*['\"]([^'\"]+)['\"]\s*\)")
-            found_files = pattern2.findall(code_str)
-        t2 = time.time()
 
         dataframes = {}
-        for file_name in found_files:
-            if file_name in _dataframe_cache:
-                dataframes[file_name] = _dataframe_cache[file_name]
-                continue
-            # Download and load only this file
-            blob_path = target_folder_path + file_name
-            t_dl0 = time.time()
-            blob_client = container_client.get_blob_client(blob_path)
+        blobs = container_client.list_blobs(name_starts_with=target_folder_path)
+
+        for blob in blobs:
+            file_name = blob.name.split('/')[-1]
+            blob_client = container_client.get_blob_client(blob.name)
             blob_data = blob_client.download_blob().readall()
-            t_dl1 = time.time()
+
             if file_name.endswith('.xlsx') or file_name.endswith('.xls'):
                 df = pd.read_excel(io.BytesIO(blob_data))
             elif file_name.endswith('.csv'):
                 df = pd.read_csv(io.BytesIO(blob_data))
             else:
                 continue
+
             dataframes[file_name] = df
-            _dataframe_cache[file_name] = df
 
         code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
         code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
 
         output_buffer = StringIO()
-        t_exec0 = time.time()
         with contextlib.redirect_stdout(output_buffer):
-            exec(code_modified, {
+            local_vars = {
                 "dataframes": dataframes,
                 "pd": pd,
                 "datetime": datetime
-            })
-        t_exec1 = time.time()
+            }
+            exec(code_modified, {}, local_vars)
 
         output = output_buffer.getvalue().strip()
         return output if output else "Execution completed with no output."
 
     except Exception as e:
         err_msg = f"An error occurred during code execution: {e}"
-        print(err_msg)
+        print(err_msg)            
         return err_msg
 
 #######################################################################################
@@ -805,7 +782,7 @@ Your output must be formatted as a properly escaped JSON with the following stru
   "content": [
     {{
       "type": "heading",
-      "text": "If needed Main answer heading/title here (Not the user_question repeated)"
+      "text": "Main answer heading/title here"
     }},
     {{
       "type": "paragraph",
@@ -832,7 +809,7 @@ Your output must be formatted as a properly escaped JSON with the following stru
 
 Important guidelines:
 1. Format your content appropriately based on the answer structure you want to convey
-2. Use "heading" for titles and subtitles not user question
+2. Use "heading" for titles and subtitles
 3. Use "paragraph" for normal text blocks
 4. Use "bullet_list" for unordered lists
 5. Use "numbered_list" for ordered/numbered lists
@@ -842,7 +819,7 @@ Important guidelines:
 9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
 10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
 11. When questions have multiple parts needing different sources, use "Index & Python" as the source
-12. **Unless its a (multi-part Question) Never include the user's question as the first heading or paragraph in the content array.**
+12. Always include the user's question as the first heading or paragraph in the content array.
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
@@ -917,25 +894,31 @@ Chat_history:
 #######################################################################################
 #                          POST-PROCESS SOURCE  (adds file / table refs)
 #######################################################################################
-def post_process_source(final_text, index_dict, python_dict, user_question=None):
+def post_process_source(final_text, index_dict, python_dict):
     """
     • If the answer is valid JSON, inject file/table info into BOTH
         – response_json["source_details"]   (for your UI)
         – response_json["content"]          (visible paragraphs)
     • Otherwise fall back to the legacy plain-text logic.
-    • Optionally, always ensure the user's question is present as the first heading or paragraph.
     """
     import json, re
 
+    # ---------- helper to append visible reference paragraphs ----------
     def _inject_refs(resp, files=None, tables=None):
+        """
+        Adds Teams-friendly bullet lists under 'Referenced:' and
+        'Calculated using:' paragraphs inside the JSON response.
+        """
         if not isinstance(resp.get("content"), list):
             resp["content"] = []
+    
         if files:
             bullet_block = "Referenced:\n- " + "\n- ".join(files)
             resp["content"].append({
                 "type": "paragraph",
                 "text": bullet_block
             })
+    
         if tables:
             bullet_block = "Calculated using:\n- " + "\n- ".join(tables)
             resp["content"].append({
@@ -961,14 +944,18 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
         and "content" in response_json
         and "source"  in response_json
     ):
+        # ---- normalise / override "source" field ----
         idx_has  = index_dict .get("top_k" , "").strip().lower() not in ["", "no information"]
         py_has   = python_dict.get("result", "").strip().lower() not in ["", "no information"]
+
         src = response_json["source"].strip()
         if src == "Python" and idx_has:
             src = "Index & Python"
         elif src == "Index" and py_has:
             src = "Index & Python"
         response_json["source"] = src
+
+        # ---- attach source_details & visible refs ----
         if src == "Index & Python":
             files  = index_dict .get("file_names", [])
             tables = python_dict.get("table_names", [])
@@ -979,6 +966,7 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
                 "table_names" : tables
             }
             _inject_refs(response_json, files, tables)
+
         elif src == "Index":
             files = index_dict.get("file_names", [])
             response_json["source_details"] = {
@@ -986,7 +974,9 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
                 "file_names" : files
             }
             _inject_refs(response_json, files=files)
+
         elif src == "Python":
+            # fallback extraction if table_names list is empty
             if not python_dict.get("table_names"):
                 python_dict["table_names"] = re.findall(
                     r'["\']([^"\']+\.(?:xlsx|xls|csv))["\']',
@@ -999,29 +989,8 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
                 "table_names" : tables
             }
             _inject_refs(response_json, tables=tables)
-        # --- Ensure the user's question is present as first heading or paragraph ---
-        if user_question:
-            import difflib
-            def _is_similar(a, b, threshold=0.7):
-                a, b = a.strip().lower(), b.strip().lower()
-                seq_sim = difflib.SequenceMatcher(None, a, b).ratio()
-                a_tokens = set(a.split())
-                b_tokens = set(b.split())
-                if not a_tokens or not b_tokens:
-                    return False
-                overlap = len(a_tokens & b_tokens) / max(len(a_tokens), len(b_tokens))
-                return seq_sim > threshold or overlap > 0.7
 
-            uq_norm = user_question.strip().lower()
-            found = False
-            for i, block in enumerate(response_json["content"]):
-                if block.get("type") in ("heading", "paragraph"):
-                    block_text = block.get("text", "").strip().lower()
-                    if _is_similar(uq_norm, block_text):
-                        found = True
-                        break
-            if not found:
-                response_json["content"].insert(0, {"type": "heading", "text": user_question})
+        # AI Generated or anything else → leave unchanged
         return json.dumps(response_json)
 
     # ---------- legacy plain-text branch (unchanged) ----------
@@ -1193,7 +1162,6 @@ def Log_Interaction(
 #                         GREETING HANDLING + AGENT ANSWER
 #######################################################################################
 def agent_answer(user_question, user_tier=1, recent_history=None):
-    import time
     if not user_question.strip():
         return
 
@@ -1215,9 +1183,9 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     user_question_stripped = user_question.strip()
     if is_entirely_greeting_or_punc(user_question_stripped):
         if len(chat_history) < 4:
-            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'."
+            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         else:
-            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'."
+            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         return
 
     # Check cache
@@ -1231,37 +1199,19 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     index_dict = {"top_k": "No information"}
     python_dict = {"result": "No information", "code": ""}
 
-    import concurrent.futures
-    total_start = time.time()
     if needs_tabular_data:
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            t0 = time.time()
-            fut_py = executor.submit(tool_2_code_run, user_question, user_tier, recent_history)
-            fut_idx = executor.submit(tool_1_index_search, user_question, 5, user_tier)
-            python_dict = fut_py.result()
-            t1 = time.time()
-            index_dict = fut_idx.result()
-            t2 = time.time()
-    else:
-        t0 = time.time()
-        index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
-        t1 = time.time()
-        python_dict = {"result": "No information", "code": ""}
+        python_dict = tool_2_code_run(user_question, user_tier=user_tier, recent_history=recent_history)
+
+    index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
 
     raw_answer = ""
-    t3 = time.time()
     for token in final_answer_llm(user_question, index_dict, python_dict):
         raw_answer += token
-    t4 = time.time()
 
     # Now unify repeated text cleaning
     raw_answer = clean_text(raw_answer)
 
-    t5 = time.time()
-    final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict, user_question=user_question)
-    t6 = time.time()
-
-    total_end = time.time()
+    final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict)
     tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
     yield final_answer_with_source
 
@@ -1346,7 +1296,7 @@ def Ask_Question(question, user_id="anonymous"):
                 return
 
         # Handle "restart chat" command
-        if question_lower in ("restart", "restart chat", "restartchat", "chat restart", "chatrestart"):
+        if question_lower == "restart chat":
             chat_history = []
             tool_cache.clear()
             recent_history = []
