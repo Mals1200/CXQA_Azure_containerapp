@@ -24,6 +24,12 @@ from botbuilder.core.teams import TeamsInfo
 
 from ask_func import Ask_Question, chat_history
 
+sharepoint_links = {
+    "File1.xlsx": "9B3CA3CD-5044-45C7-8A82-0604A1675F46",
+    "File2.xlsx": "3A1BCF12-1234-5678-ABCD-987654321000",
+    # Add more mappings as needed
+}
+
 app = Flask(__name__)
 
 MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
@@ -125,7 +131,13 @@ async def _bot_logic(turn_context: TurnContext):
     try:
         # Process the message
         ans_gen = Ask_Question(user_message, user_id=user_id)
-        answer_text = "".join(ans_gen)
+        answer_chunks = list(ans_gen) # I update this
+        answer_text = "".join(answer_chunks).strip()
+        # Fallback if nothing was returned
+        if not answer_text:
+            print("WARNING: Ask_Question yielded no output")
+            await turn_context.send_activity(Activity(type="message", text="Sorry, I couldn't find an answer to your question."))
+            return
 
         # Update state
         state['history'] = ask_func.chat_history
@@ -243,26 +255,39 @@ async def _bot_logic(turn_context: TurnContext):
                                 })
                             # For each file/table, add a markdown link as a TextBlock
                             for line in lines[1:]:
-                                if line.strip().startswith("-"):
+                                 if line.strip().startswith("-"):
                                     fname = line.strip()[1:].strip()
                                     if fname:
-                                        sharepoint_base = "https://dgda.sharepoint.com/:x:/r/sites/CXQAData/_layouts/15/Doc.aspx?sourcedoc=%7B9B3CA3CD-5044-45C7-8A82-0604A1675F46%7D&file={}&action=default&mobileredirect=true"
-                                        url = sharepoint_base.format(urllib.parse.quote(fname))
-                                        print(f"DEBUG: Adding file link: {fname} -> {url}")
-                                        source_container["items"].append({
+            # Lookup the sourcedoc GUID from the mapping
+                                        sourcedoc_guid = sharepoint_links.get(fname)
+                                        if sourcedoc_guid:
+                                            url = (
+                                                    f"https://dgda.sharepoint.com/:x:/r/sites/CXQAData/_layouts/15/"
+                                                    f"Doc.aspx?sourcedoc=%7B{sourcedoc_guid}%7D&file={urllib.parse.quote(fname)}"
+                                                    "&action=default&mobileredirect=true"
+                                                )
+                                            print(f"DEBUG: Adding file link: {fname} -> {url}")
+                                            source_container["items"].append({
                                             "type": "TextBlock",
                                             "text": f"[{fname}]({url})",
                                             "wrap": True,
                                             "spacing": "Small"
-                                        })
-                                else:
-                                    # If not a file line, just add as text
-                                    source_container["items"].append({
+                                            })
+                                        else:
+                                            print(f"WARNING: No sourcedoc mapping found for {fname}")
+                                            source_container["items"].append({
+                                            "type": "TextBlock",
+                                            "text": fname,
+                                            "wrap": True,
+                                            "spacing": "Small"
+                                            })
+                                    else:
+                                        source_container["items"].append({
                                         "type": "TextBlock",
                                         "text": line,
                                         "wrap": True,
                                         "spacing": "Small"
-                                    })
+                                        })
                 # Remove file_names/table_names and code/file blocks from the collapsible section
                 # Always add the source line at the bottom of the container
                 source_container["items"].append({
