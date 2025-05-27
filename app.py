@@ -37,6 +37,9 @@ adapter = BotFrameworkAdapter(adapter_settings)
 conversation_states = {}
 state_lock = Lock()
 
+referenced_files = ["File1.xlsx"]  
+calculated_files = ["Table1.xlsx"]  
+
 def get_conversation_state(conversation_id):
     with state_lock:
         if conversation_id not in conversation_states:
@@ -75,6 +78,30 @@ def messages():
         loop.close()
 
     return Response(status=200)
+
+def create_hyperlinked_list(label, files):
+    lines = []
+    for file in files:
+        file_id = sharepoint_links.get(file)
+        if file_id:
+            url = f"https://sharepoint.domain/path?file={file_id}"
+            lines.append(f"[{file}]({url})")
+        else:
+            lines.append(file)
+    return f"{label}: " + ", ".join(lines)
+
+referenced_line = create_hyperlinked_list("Referenced", referenced_files)
+calculated_line = create_hyperlinked_list("Calculated using", calculated_files)
+
+body_blocks.append({
+    "type": "TextBlock",
+    "text": referenced_line
+})
+body_blocks.append({
+    "type": "TextBlock",
+    "text": calculated_line
+})
+
 
 async def _bot_logic(turn_context: TurnContext):
     conversation_id = turn_context.activity.conversation.id
