@@ -11,7 +11,6 @@ from threading import Lock
 import re
 import json
 import urllib.parse
-import logging
 
 from flask import Flask, request, jsonify, Response
 from botbuilder.core import (
@@ -127,7 +126,6 @@ async def _bot_logic(turn_context: TurnContext):
         # Process the message
         ans_gen = Ask_Question(user_message, user_id=user_id)
         answer_text = "".join(ans_gen)
-        logging.debug(f"[Bot] Raw answer_text from Ask_Question:\n{answer_text!r}")
 
         # Update state
         state['history'] = ask_func.chat_history
