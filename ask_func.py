@@ -1,27 +1,3 @@
-# =====================================================================================
-# CXQA Assistant - Recent Additions (Performance & Usability Improvements)
-# =====================================================================================
-#
-# 1. Persistent HTTP Session for API Calls
-#    - A single requests.Session() is used for all LLM API calls, reducing connection overhead
-#      and making API requests faster and more efficient.
-#
-# 2. Parallel Execution of Index and Python Tools
-#    - When both the index search (Tool 1) and Python code execution (Tool 2) are needed,
-#      they are run in parallel using ThreadPoolExecutor. This reduces total wait time for users.
-#
-# 3. Lazy Loading and Caching of DataFrames
-#    - Only the specific data files referenced in the generated Python code are downloaded and loaded.
-#    - Once a file is loaded, it is stored in a global cache (_dataframe_cache) for reuse in the session.
-#    - This avoids unnecessary downloads and speeds up repeated queries involving the same data.
-#
-# 4. Removal of Timing Print Statements
-#    - All timing/debug print statements have been removed for production use.
-#    - The code remains optimized, but now runs quietly for end users.
-#
-# These changes make the assistant faster, more efficient, and easier to maintain.
-# =====================================================================================
-
 import os
 import io
 import re
@@ -796,109 +772,109 @@ def final_answer_llm(user_question, index_dict, python_dict):
     # # JSON RESPONSE FORMAT - REMOVE COMMENTS TO ENABLE
     # # This block modifies the system prompt to output a well-structured JSON
     # ########################################################################
-#     system_prompt = f"""
-# You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
-# 1) Index data: (INDEX_DATA)
-# 2) Python data: (PYTHON_DATA)
-# *) Always Prioritise The python result if the 2 are different.
+    system_prompt = f"""
+You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
+1) Index data: (INDEX_DATA)
+2) Python data: (PYTHON_DATA)
+*) Always Prioritise The python result if the 2 are different.
 
-# Your output must be formatted as a properly escaped JSON with the following structure:
-# {{
-#   "content": [
-#     {{
-#       "type": "heading",
-#       "text": "If needed Main answer heading/title here (Not the user_question repeated)"
-#     }},
-#     {{
-#       "type": "paragraph",
-#       "text": "Normal paragraph text here"
-#     }},
-#     {{
-#       "type": "bullet_list",
-#       "items": [
-#         "List item 1",
-#         "List item 2",
-#         "List item 3"
-#       ]
-#     }},
-#     {{
-#       "type": "numbered_list",
-#       "items": [
-#         "Numbered item 1",
-#         "Numbered item 2"
-#       ]
-#     }}
-#   ],
-#   "source": "Source type (Index, Python, Index & Python, or AI Generated)"
-# }}
+Your output must be formatted as a properly escaped JSON with the following structure:
+{{
+  "content": [
+    {{
+      "type": "heading",
+      "text": "If needed Main answer heading/title here (Not the user_question repeated)"
+    }},
+    {{
+      "type": "paragraph",
+      "text": "Normal paragraph text here"
+    }},
+    {{
+      "type": "bullet_list",
+      "items": [
+        "List item 1",
+        "List item 2",
+        "List item 3"
+      ]
+    }},
+    {{
+      "type": "numbered_list",
+      "items": [
+        "Numbered item 1",
+        "Numbered item 2"
+      ]
+    }}
+  ],
+  "source": "Source type (Index, Python, Index & Python, or AI Generated)"
+}}
 
-# Important guidelines:
-# 1. Format your content appropriately based on the answer structure you want to convey
-# 2. Use "heading" for titles and subtitles not user question
-# 3. Use "paragraph" for normal text blocks
-# 4. Use "bullet_list" for unordered lists
-# 5. Use "numbered_list" for ordered/numbered lists
-# 6. Use "code_block" for any code snippets
-# 7. Make sure the JSON is valid and properly escaped
-# 8. Every section must have a "type" and appropriate content fields
-# 9. **CRITICAL**: If BOTH INDEX_DATA and PYTHON_DATA contain useful information (not "No information"), ALWAYS set source to "Index & Python"
-# 10. If the user asks a multi-part question and you use information from both sources, set source to "Index & Python"
-# 11. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
-# 12. Only use "Python" if INDEX_DATA is "No information" and only PYTHON_DATA has useful data
-# 13. Only use "Index" if PYTHON_DATA is "No information" and only INDEX_DATA has useful data
-# 14. **Unless its a (multi-part Question) Never include the user's question as the first heading or paragraph in the content array.**
+Important guidelines:
+1. Format your content appropriately based on the answer structure you want to convey
+2. Use "heading" for titles and subtitles not user question
+3. Use "paragraph" for normal text blocks
+4. Use "bullet_list" for unordered lists
+5. Use "numbered_list" for ordered/numbered lists
+6. Use "code_block" for any code snippets
+7. Make sure the JSON is valid and properly escaped
+8. Every section must have a "type" and appropriate content fields
+9. **CRITICAL**: If BOTH INDEX_DATA and PYTHON_DATA contain useful information (not "No information"), ALWAYS set source to "Index & Python"
+10. If the user asks a multi-part question and you use information from both sources, set source to "Index & Python"
+11. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
+12. Only use "Python" if INDEX_DATA is "No information" and only PYTHON_DATA has useful data
+13. Only use "Index" if PYTHON_DATA is "No information" and only INDEX_DATA has useful data
+14. **Unless its a (multi-part Question) Never include the user's question as the first heading or paragraph in the content array.**
 
-# Use only these two sources to answer. If you find relevant info from both, answer using both. 
-# If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
+Use only these two sources to answer. If you find relevant info from both, answer using both. 
+If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
 
-# For multi-part questions, organize your response clearly with appropriate headings or sections 
-# for each part of the answer. If one part comes from Index and another from Python, use both sources.
+For multi-part questions, organize your response clearly with appropriate headings or sections 
+for each part of the answer. If one part comes from Index and another from Python, use both sources.
 
-# User question:
-# {user_question}
+User question:
+{user_question}
 
-# INDEX_DATA:
-# {index_top_k}
+INDEX_DATA:
+{index_top_k}
 
-# PYTHON_DATA:
-# {python_result}
+PYTHON_DATA:
+{python_result}
 
-# Chat_history:
-# {recent_history if recent_history else []}
-# """
+Chat_history:
+{recent_history if recent_history else []}
+"""
 
     # ########################################################################
     # # ORIGINAL SYSTEM PROMPT - UNCOMMENT TO USE INSTEAD OF JSON FORMAT
     # ########################################################################
-    system_prompt = f"""
-    You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
-    1) Index data: (INDEX_DATA)
-    2) Python data: (PYTHON_DATA)
-    *) Always Prioritise The python result if the 2 are different.
+    # system_prompt = f"""
+    # You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
+    # 1) Index data: (INDEX_DATA)
+    # 2) Python data: (PYTHON_DATA)
+    # *) Always Prioritise The python result if the 2 are different.
     
-    Use only these two sources to answer. If you find relevant info from both, answer using both. 
-    At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
-    - "Index" if only index data was used,
-    - "Python" if only python data was used,
-    - "Index & Python" if both were used,
-    - or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
-    - Present your answer in a clear, readable format.
+    # Use only these two sources to answer. If you find relevant info from both, answer using both. 
+    # At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
+    # - "Index" if only index data was used,
+    # - "Python" if only python data was used,
+    # - "Index & Python" if both were used,
+    # - or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
+    # - Present your answer in a clear, readable format.
     
-    Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
-    Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
+    # Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
+    # Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
     
-    User question:
-    {user_question}
+    # User question:
+    # {user_question}
     
-    INDEX_DATA:
-    {index_top_k}
+    # INDEX_DATA:
+    # {index_top_k}
     
-    PYTHON_DATA:
-    {python_result}
+    # PYTHON_DATA:
+    # {python_result}
     
-    Chat_history:
-    {recent_history if recent_history else []}
-    """
+    # Chat_history:
+    # {recent_history if recent_history else []}
+    # """
 
     try:
         final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
@@ -1251,17 +1227,19 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     index_dict = {"top_k": "No information"}
     python_dict = {"result": "No information", "code": ""}
 
-    import concurrent.futures
     total_start = time.time()
     if needs_tabular_data:
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            t0 = time.time()
-            fut_py = executor.submit(tool_2_code_run, user_question, user_tier, recent_history)
-            fut_idx = executor.submit(tool_1_index_search, user_question, 5, user_tier)
-            python_dict = fut_py.result()
-            t1 = time.time()
-            index_dict = fut_idx.result()
-            t2 = time.time()
+        # Run Tool-2 (tabular python) first, then Tool-1 (index) sequentially. This
+        # avoids parallel POST requests that occasionally trigger 429 / 5xx errors
+        # from Azure when a shared requests.Session is used inside multiple
+        # threads.  The slight increase in latency is typically <300 ms and keeps
+        # the logic and answer quality unchanged.
+
+        t0 = time.time()
+        python_dict = tool_2_code_run(user_question, user_tier=user_tier, recent_history=recent_history)
+        t1 = time.time()
+        index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
+        t2 = time.time()
     else:
         t0 = time.time()
         index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
