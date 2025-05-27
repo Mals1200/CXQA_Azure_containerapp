@@ -25,6 +25,10 @@ import time
 CONFIG = {
     # ── MAIN, high-capacity model (Tool-1 Index, Tool-2 Python, Tool-3 Fallback) ──
     "LLM_ENDPOINT"     : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
+                         "openai/deployments/gpt-4.1-mini/chat/completions?api-version=2025-01-01-preview",
+
+    # Dedicated, larger model for Python-code generation (Tool-2)
+    "LLM_ENDPOINT_CODE": "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
                          "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
 
     # same key used for both deployments
@@ -32,7 +36,7 @@ CONFIG = {
 
     # ── AUXILIARY model (classifiers, splitters, etc.) ────────────────────────────
     "LLM_ENDPOINT_AUX" : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
-                         "openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview",
+                         "openai/deployments/gpt-4o-mini/chat/completions?api-version=2025-01-01-preview",
 
     # (unchanged settings below) ───────────────────────────────────────────────────
     "SEARCH_SERVICE_NAME": "cxqa-azureai-search",
@@ -620,7 +624,8 @@ Chat_history:
 {rhistory}
 """
 
-    code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.7)
+    # Use the dedicated, higher-capacity model for code generation
+    code_str = call_llm_code(system_prompt, user_question, max_tokens=1200, temperature=0.7)
 
     if not code_str or code_str == "404":
         return {"result": "No information", "code": "", "table_names": []}
@@ -1404,3 +1409,38 @@ def Ask_Question(question, user_id="anonymous"):
         yield error_msg
         logging.error(error_msg)
         yield error_msg
+
+#######################################################################################
+#                    CODE-GENERATION LLM CALL (dedicated endpoint)                    #
+#######################################################################################
+def call_llm_code(system_prompt, user_prompt, max_tokens=1200, temperature=0.7):
+    """
+    Identical to `call_llm` but sends the request to the larger gpt-4.1 deployment that
+    is reserved for generating Python code (Tool-2). Keeping it separate lets us tune
+    temperature/max-tokens independently without affecting the main answer model.
+    """
+    try:
+        headers = {
+            "Content-Type": "application/json",
+            "api-key": CONFIG["LLM_API_KEY"]
+        }
+        payload = {
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_prompt}
+            ],
+            "max_tokens": max_tokens,
+            "temperature": temperature
+        }
+        response = requests.post(CONFIG["LLM_ENDPOINT_CODE"], headers=headers, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        if "choices" in data and data["choices"]:
+            return data["choices"][0]["message"].get("content", "").strip() or "No content from LLM."
+        return "No choices from LLM."
+    except Exception as e:
+        err_msg = f"LLM Error: {e}"
+        if hasattr(e, "response") and e.response is not None:
+            err_msg += f" | Azure response: {e.response.text}"
+        logging.error(err_msg)
+        return err_msg
