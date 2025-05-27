@@ -903,7 +903,9 @@ Chat_history:
 
     try:
         final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
-
+        # Log the raw LLM output (truncated) for easier debugging of malformed JSON
+        logging.error(f"[DEBUG] LLM output for question ({user_question}): {repr(final_text)[:300]}")
+        
         # Ensure we never yield an empty or error-laden string without a fallback
         if (not final_text.strip() 
             or final_text.startswith("LLM Error") 
@@ -950,6 +952,8 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
 
     # ---------- strip code-fence wrappers before JSON parse ----------
     cleaned = final_text.strip()
+    # Clean ugly real newlines that sometimes break JSON parsing
+    cleaned = cleaned.replace('\r\n', '\n').replace('\n', '\\n')
     cleaned = re.sub(r"^```[a-zA-Z]*\s*", "", cleaned)   # remove ```json or ```
     cleaned = re.sub(r"^'''[a-zA-Z]*\s*", "", cleaned)   # remove '''json or '''
     cleaned = re.sub(r"\s*```$", "", cleaned)            # closing ```
@@ -1299,6 +1303,9 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
 
     total_end = time.time()
     tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
+    # Absolute fallback so that we always return something
+    if not final_answer_with_source or not final_answer_with_source.strip():
+        final_answer_with_source = "No answer could be generated for this question. Please try again later."
     yield final_answer_with_source
 
 #######################################################################################
