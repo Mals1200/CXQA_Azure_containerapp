@@ -143,10 +143,6 @@ async def _bot_logic(turn_context: TurnContext):
         state['history'] = ask_func.chat_history
         state['cache'] = ask_func.tool_cache
 
-        # Parse and format the response
-        source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
-        match = re.search(source_pattern, answer_text, flags=re.DOTALL)
-
         # Try to parse the response as JSON first
         try:
             # Remove code block markers if present
@@ -157,10 +153,77 @@ async def _bot_logic(turn_context: TurnContext):
                 cleaned_answer_text = cleaned_answer_text[3:].strip()
             if cleaned_answer_text.endswith('```'):
                 cleaned_answer_text = cleaned_answer_text[:-3].strip()
-            # Fix: Replace real newlines with escaped newlines to allow JSON parsing
-            # This is necessary because the LLM may output real newlines inside string values, which is invalid in JSON
-            cleaned_answer_text = cleaned_answer_text.replace('\n', '\\n')
             response_json = json.loads(cleaned_answer_text)
+
+            # NEW: Handle subanswers format
+            if isinstance(response_json, dict) and "subanswers" in response_json:
+                body_blocks = []
+                for sub in response_json["subanswers"]:
+                    # Heading for subquestion
+                    subq = sub.get("subquestion", "")
+                    if subq:
+                        body_blocks.append({
+                            "type": "TextBlock",
+                            "text": subq,
+                            "wrap": True,
+                            "weight": "Bolder",
+                            "size": "Medium",
+                            "spacing": "Medium"
+                        })
+                    # Main answer
+                    ans = sub.get("answer", "")
+                    if ans:
+                        body_blocks.append({
+                            "type": "TextBlock",
+                            "text": ans,
+                            "wrap": True,
+                            "spacing": "Small"
+                        })
+                    # Source
+                    src = sub.get("source", "")
+                    if src:
+                        body_blocks.append({
+                            "type": "TextBlock",
+                            "text": f"Source: {src}",
+                            "wrap": True,
+                            "weight": "Bolder",
+                            "color": "Accent",
+                            "spacing": "Small"
+                        })
+                    # Files and tables
+                    files = sub.get("files", [])
+                    tables = sub.get("tables", [])
+                    if files or tables:
+                        files_tables = ", ".join(files + tables)
+                        body_blocks.append({
+                            "type": "TextBlock",
+                            "text": f"Files/Tables: {files_tables}",
+                            "wrap": True,
+                            "spacing": "Small"
+                        })
+                    # Spacer
+                    body_blocks.append({
+                        "type": "TextBlock",
+                        "text": "",
+                        "wrap": True,
+                        "spacing": "Small"
+                    })
+                # Build and send the adaptive card as before
+                adaptive_card = {
+                    "type": "AdaptiveCard",
+                    "body": body_blocks,
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "version": "1.5"
+                }
+                message = Activity(
+                    type="message",
+                    attachments=[{
+                        "contentType": "application/vnd.microsoft.card.adaptive",
+                        "content": adaptive_card
+                    }]
+                )
+                await turn_context.send_activity(message)
+                return
             # Check if this is our expected JSON format with content and source
             if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
                 # We have a structured JSON response!
