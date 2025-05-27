@@ -1,4 +1,9 @@
-# version 11c
+# version 11b 
+# ((Hyperlink file names))
+# Made it display the files sources for the compounded questions:
+    # Referenced: <Files>                <-------Hyperlink to sharepoint
+    # Calculated using: <Tables>         <-------Hyperlink to sharepoint
+# still the url is fixed to one file. (NEEDS WORK!)
 
 import os
 import asyncio
@@ -22,6 +27,8 @@ from ask_func import Ask_Question, chat_history
 sharepoint_links = {
     "File1.xlsx": "9B3CA3CD-5044-45C7-8A82-0604A1675F46",
     "File2.xlsx": "3A1BCF12-1234-5678-ABCD-987654321000",
+    "CalculatedTable1.xlsx": "XXX-XXX",
+    "ReferenceSheetA.xlsx": "YYY-YYY",
     # Add more mappings as needed
 }
 
@@ -254,25 +261,26 @@ async def _bot_logic(turn_context: TurnContext):
                                     fname = line.strip()[1:].strip()
                                     if fname:
             # Lookup the sourcedoc GUID from the mapping
-                                        sourcedoc_guid = sharepoint_links.get(fname)
+                                        clean_fname = fname.strip().lower()
+                                        sourcedoc_guid = sharepoint_links.get(clean_fname)
                                         if sourcedoc_guid:
                                             url = (
                                                     f"https://dgda.sharepoint.com/:x:/r/sites/CXQAData/_layouts/15/"
-                                                    f"Doc.aspx?sourcedoc=%7B{sourcedoc_guid}%7D&file={urllib.parse.quote(fname)}"
+                                                    f"Doc.aspx?sourcedoc=%7B{sourcedoc_guid}%7D&file={urllib.parse.quote(clean_fname)}"
                                                     "&action=default&mobileredirect=true"
                                                 )
-                                            print(f"DEBUG: Adding file link: {fname} -> {url}")
+                                            print(f"DEBUG: Adding file link: {clean_fname} -> {url}")
                                             source_container["items"].append({
                                             "type": "TextBlock",
-                                            "text": f"[{fname}]({url})",
+                                            "text": f"[{clean_fname}]({url})",
                                             "wrap": True,
                                             "spacing": "Small"
                                             })
                                         else:
-                                            print(f"WARNING: No sourcedoc mapping found for {fname}")
+                                            print(f"WARNING: No sourcedoc mapping found for {clean_fname}")
                                             source_container["items"].append({
                                             "type": "TextBlock",
-                                            "text": fname,
+                                            "text": f"**{clean_fname}** (No link)",
                                             "wrap": True,
                                             "spacing": "Small"
                                             })
