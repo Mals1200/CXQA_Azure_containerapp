@@ -1,3 +1,4 @@
+# teams_markdown.py (updated)
 import urllib.parse
 
 SHAREPOINT_BASE = (
@@ -13,9 +14,8 @@ def link(fname: str) -> str:
 def render(question: str, content: list, source: str, files: list, tables: list) -> str:
     lines = []
 
-    # Q1 prefix
+    # Q1 prefix (no duplicate)
     lines.append(f"🗨️ Q1: {question.strip()}")
-    lines.append(question.strip())
     lines.append("")
 
     # Content
@@ -37,7 +37,7 @@ def render(question: str, content: list, source: str, files: list, tables: list)
                 lines.append(f"• {li}")
             lines.append("")
 
-    # Source
+    # Source line
     lines.append(f"Source: {source}")
     lines.append("")
 
