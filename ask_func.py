@@ -767,156 +767,69 @@ def tool_3_llm_fallback(user_question):
 #                            FINAL ANSWER FROM LLM
 #######################################################################################
 def final_answer_llm(user_question, index_dict, python_dict):
+    """
+    Consolidate the index and python tool outputs and compose the final LLM answer.
+    This version RETURNS a single string instead of streaming via `yield`.
+    """
     index_top_k = index_dict.get("top_k", "No information").strip()
     python_result = python_dict.get("result", "No information").strip()
 
+    # ------------------------------------------------------------------
+    # If we have no data from either tool, fall back to a direct LLM call
+    # ------------------------------------------------------------------
     if index_top_k.lower() == "no information" and python_result.lower() == "no information":
         fallback_text = tool_3_llm_fallback(user_question)
-        # Format the fallback as JSON to match the expected format
         try:
             import json
             json_response = {
                 "content": [
-                    {
-                        "type": "paragraph",
-                        "text": fallback_text
-                    }
+                    {"type": "paragraph", "text": fallback_text}
                 ],
                 "source": "AI Generated"
             }
-            yield json.dumps(json_response)
-        except:
-            # If JSON conversion fails, fall back to plaintext
-            yield f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
-        return
+            return json.dumps(json_response)
+        except Exception:
+            return f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
 
-    combined_info = f"INDEX_DATA:\n{index_top_k}\n\nPYTHON_DATA:\n{python_result}"
-
-    # ########################################################################
-    # # JSON RESPONSE FORMAT - REMOVE COMMENTS TO ENABLE
-    # # This block modifies the system prompt to output a well-structured JSON
-    # ########################################################################
-#     system_prompt = f"""
-# You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
-# 1) Index data: (INDEX_DATA)
-# 2) Python data: (PYTHON_DATA)
-# *) Always Prioritise The python result if the 2 are different.
-
-# Your output must be formatted as a properly escaped JSON with the following structure:
-# {{
-#   "content": [
-#     {{
-#       "type": "heading",
-#       "text": "If needed Main answer heading/title here (Not the user_question repeated)"
-#     }},
-#     {{
-#       "type": "paragraph",
-#       "text": "Normal paragraph text here"
-#     }},
-#     {{
-#       "type": "bullet_list",
-#       "items": [
-#         "List item 1",
-#         "List item 2",
-#         "List item 3"
-#       ]
-#     }},
-#     {{
-#       "type": "numbered_list",
-#       "items": [
-#         "Numbered item 1",
-#         "Numbered item 2"
-#       ]
-#     }}
-#   ],
-#   "source": "Source type (Index, Python, Index & Python, or AI Generated)"
-# }}
-
-# Important guidelines:
-# 1. Format your content appropriately based on the answer structure you want to convey
-# 2. Use "heading" for titles and subtitles not user question
-# 3. Use "paragraph" for normal text blocks
-# 4. Use "bullet_list" for unordered lists
-# 5. Use "numbered_list" for ordered/numbered lists
-# 6. Use "code_block" for any code snippets
-# 7. Make sure the JSON is valid and properly escaped
-# 8. Every section must have a "type" and appropriate content fields
-# 9. **CRITICAL**: If BOTH INDEX_DATA and PYTHON_DATA contain useful information (not "No information"), ALWAYS set source to "Index & Python"
-# 10. If the user asks a multi-part question and you use information from both sources, set source to "Index & Python"
-# 11. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
-# 12. Only use "Python" if INDEX_DATA is "No information" and only PYTHON_DATA has useful data
-# 13. Only use "Index" if PYTHON_DATA is "No information" and only INDEX_DATA has useful data
-# 14. **Unless its a (multi-part Question) Never include the user's question as the first heading or paragraph in the content array.**
-
-# Use only these two sources to answer. If you find relevant info from both, answer using both. 
-# If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
-
-# For multi-part questions, organize your response clearly with appropriate headings or sections 
-# for each part of the answer. If one part comes from Index and another from Python, use both sources.
-
-# User question:
-# {user_question}
-
-# INDEX_DATA:
-# {index_top_k}
-
-# PYTHON_DATA:
-# {python_result}
-
-# Chat_history:
-# {recent_history if recent_history else []}
-# """
-
-    # ########################################################################
-    # # ORIGINAL SYSTEM PROMPT - UNCOMMENT TO USE INSTEAD OF JSON FORMAT
-    # ########################################################################
+    # ------------------------------------------------------------------
+    # Build the system prompt and query the main LLM
+    # ------------------------------------------------------------------
+    global recent_history  # make the outer variable explicit
     system_prompt = f"""
     You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
     1) Index data: (INDEX_DATA)
     2) Python data: (PYTHON_DATA)
-    *) Always Prioritise The python result if the 2 are different.
-    
-    Use only these two sources to answer. If you find relevant info from both, answer using both. 
-    At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
-    - "Index" if only index data was used,
-    - "Python" if only python data was used,
-    - "Index & Python" if both were used,
-    - or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
-    - Present your answer in a clear, readable format.
-    
-    Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
-    Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
-    
+    *) Always prioritise the python result if the two sources differ.
+
+    Use ONLY these two sources to answer.  If you find relevant info from both, answer using both. 
+    At the end of your answer, put EXACTLY one line with "Source: X" where X can be:
+    - "Index"             if only index data was used,
+    - "Python"            if only python data was used,
+    - "Index & Python"    if both were used,
+    - or "No information was found in the Data. Can I help you with anything else?" if none is relevant.
+
+    If the user asks multiple sub-questions, address each clearly using the appropriate data source.
+
     User question:
     {user_question}
-    
+
     INDEX_DATA:
     {index_top_k}
-    
+
     PYTHON_DATA:
     {python_result}
-    
-    Chat_history:
+
+    Chat_history (last turns):
     {recent_history if recent_history else []}
     """
 
-    try:
-        final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
+    final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
 
-        # Ensure we never yield an empty or error-laden string without a fallback
-        if (not final_text.strip() 
-            or final_text.startswith("LLM Error") 
-            or final_text.startswith("No content from LLM") 
-            or final_text.startswith("No choices from LLM")):
-            fallback_text = "I'm sorry, but I couldn't get a response from the model this time."
-            yield fallback_text
-            return
+    # Safeguard against empty/error responses
+    if not final_text or final_text.startswith(("LLM Error", "No content from LLM", "No choices from LLM")):
+        return "I'm sorry, but I couldn't get a response from the model this time."
 
-        yield final_text
-    except Exception as e:
-        logging.error(f"Error in final_answer_llm: {str(e)}")
-        fallback_text = f"I'm sorry, but an error occurred: {str(e)}"
-        yield fallback_text
+    return final_text
 
 #######################################################################################
 #                          POST-PROCESS SOURCE  (adds file / table refs)
@@ -1213,83 +1126,65 @@ def Log_Interaction(
 #                         GREETING HANDLING + AGENT ANSWER
 #######################################################################################
 def agent_answer(user_question, user_tier=1, recent_history=None):
+    """High-level orchestrator for answering a user question.
+    Returns a single fully-formed answer string.
+    """
     import time
-    if not user_question.strip():
-        return
 
+    if not user_question.strip():
+        return ""
+
+    # ---------------- Greeting detection ----------------
     def is_entirely_greeting_or_punc(phrase):
         greet_words = {
-            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "Good morning", "goodevening", "good evening",
-            "assalam", "hayo", "hola", "salam", "alsalam", "alsalamualaikum", "alsalam", "salam", "al salam", "assalamualaikum",
-            "greetings", "howdy", "what's up", "yo", "sup", "namaste", "shalom", "bonjour", "ciao", "konichiwa",
-            "ni hao", "marhaba", "ahlan", "sawubona", "hallo", "salut", "hola amigo", "hey there", "good day"
+            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "goodevening",
+            "good evening", "assalam", "hola", "salam", "alsalam", "alsalamualaikum", "greetings",
+            "howdy", "what's up", "yo", "sup", "namaste", "shalom", "bonjour", "ciao", "konichiwa",
+            "ni hao", "marhaba", "ahlan", "sawubona", "hallo", "salut", "good day"
         }
         tokens = re.findall(r"[A-Za-z]+", phrase.lower())
-        if not tokens:
-            return False
-        for t in tokens:
-            if t not in greet_words:
-                return False
-        return True
+        return bool(tokens) and all(t in greet_words for t in tokens)
 
     user_question_stripped = user_question.strip()
     if is_entirely_greeting_or_punc(user_question_stripped):
         if len(chat_history) < 4:
-            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'."
+            return "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'."
         else:
-            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'."
-        return
+            return "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'."
 
-    # Check cache
+    # ---------------- Cache check ----------------
     cache_key = user_question_stripped.lower()
     if cache_key in tool_cache:
         _, _, cached_answer = tool_cache[cache_key]
-        yield cached_answer
-        return
+        return cached_answer
 
+    # ---------------- Decide which tools to run ----------------
     needs_tabular_data = references_tabular_data(user_question, TABLES)
     index_dict = {"top_k": "No information"}
     python_dict = {"result": "No information", "code": ""}
 
-    import concurrent.futures
-    total_start = time.time()
     if needs_tabular_data:
+        import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            t0 = time.time()
             fut_py = executor.submit(tool_2_code_run, user_question, user_tier, recent_history)
             fut_idx = executor.submit(tool_1_index_search, user_question, 5, user_tier)
             python_dict = fut_py.result()
-            t1 = time.time()
             index_dict = fut_idx.result()
-            t2 = time.time()
     else:
-        t0 = time.time()
         index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
-        t1 = time.time()
-        python_dict = {"result": "No information", "code": ""}
 
-    # Debug: Print what each tool returned (uncomment for debugging)
-    # print(f"[DEBUG] Index result: {index_dict.get('top_k', 'No information')[:100]}...")
-    # print(f"[DEBUG] Python result: {python_dict.get('result', 'No information')[:100]}...")
-    # print(f"[DEBUG] Index files: {index_dict.get('file_names', [])}")
-    # print(f"[DEBUG] Python tables: {python_dict.get('table_names', [])}")
+    # ---------------- Compose final answer ----------------
+    raw_answer = final_answer_llm(user_question, index_dict, python_dict)
 
-    raw_answer = ""
-    t3 = time.time()
-    for token in final_answer_llm(user_question, index_dict, python_dict):
-        raw_answer += token
-    t4 = time.time()
-
-    # Now unify repeated text cleaning
+    # Clean up repetitive text artefacts
     raw_answer = clean_text(raw_answer)
 
-    t5 = time.time()
     final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict, user_question=user_question)
-    t6 = time.time()
 
-    total_end = time.time()
+    # Cache the result
     tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
-    yield final_answer_with_source
+
+    return final_answer_with_source
 
 #######################################################################################
 #                            get user tier
@@ -1325,91 +1220,71 @@ def get_user_tier(user_id):
 #                            ASK_QUESTION (Main Entry)
 #######################################################################################
 def Ask_Question(question, user_id="anonymous"):
-    global chat_history
-    global tool_cache
-    global recent_history
+    """Main public entry point.  Returns a single string answer."""
+    global chat_history, tool_cache, recent_history
 
     try:
-        # Step 1: Determine user tier from the RBAC
+        # Determine user tier via RBAC
         user_tier = get_user_tier(user_id)
-        
-        # If user_tier==0 => immediate fallback
+
+        # ---------------- Forced fallback ----------------
         if user_tier == 0:
             fallback_raw = tool_3_llm_fallback(question)
             fallback = f"AI Generated answer:\n{fallback_raw}\nSource: Ai Generated"
             chat_history.append(f"User: {question}")
             chat_history.append(f"Assistant: {fallback}")
-            yield fallback
-            Log_Interaction(
-                question=question,
-                full_answer=fallback,
-                chat_history=chat_history,
-                user_id=user_id,
-                index_dict={},
-                python_dict={}
-            )
-            return
+            Log_Interaction(question=question, full_answer=fallback, chat_history=chat_history, user_id=user_id)
+            return fallback
 
         question_lower = question.lower().strip()
 
-        # Handle "export" command
+        # ---------------- Special commands ----------------
         if question_lower.startswith("export"):
             try:
                 from Export_Agent import Call_Export
                 chat_history.append(f"User: {question}")
-                for message in Call_Export(
+                export_messages = Call_Export(
                     latest_question=question,
                     latest_answer=chat_history[-1] if chat_history else "",
                     chat_history=chat_history,
                     instructions=question[6:].strip()
-                ):
-                    yield message
-                return
+                )
+                # `Call_Export` may itself be a generator – collect all output
+                if hasattr(export_messages, "__iter__") and not isinstance(export_messages, str):
+                    export_messages = "\n".join(list(export_messages))
+                answer_collected = str(export_messages)
+                chat_history.append(f"Assistant: {answer_collected}")
+                return answer_collected
             except Exception as e:
                 error_msg = f"Error in export processing: {str(e)}"
                 logging.error(error_msg)
-                yield error_msg
-                return
+                return error_msg
 
-        # Handle "restart chat" command
         if question_lower in ("restart", "restart chat", "restartchat", "chat restart", "chatrestart"):
             chat_history = []
             tool_cache.clear()
             recent_history = []
-            yield "The chat has been restarted."
-            return
+            return "The chat has been restarted."
 
-        # Add user question to chat history
+        # ---------------- Normal question flow ----------------
         chat_history.append(f"User: {question}")
         recent_history = chat_history[-4:] if len(chat_history) >= 4 else chat_history.copy()
 
-        answer_collected = ""
-        try:
-            for token in agent_answer(question, user_tier=user_tier, recent_history=recent_history):
-                yield token
-                answer_collected += token
-        except Exception as e:
-            err_msg = f"❌ Error occurred while generating the answer: {str(e)}"
-            logging.error(err_msg)
-            yield f"\n\n{err_msg}"
-            return
+        answer_collected = agent_answer(question, user_tier=user_tier, recent_history=recent_history)
 
         chat_history.append(f"Assistant: {answer_collected}")
         recent_history = chat_history[-4:] if len(chat_history) >= 4 else chat_history.copy()
 
-        # Truncate history
-        number_of_messages = 10
-        max_pairs = number_of_messages // 2
-        max_entries = max_pairs * 2
+        # Trim history to last N entries
+        max_entries = 10
         chat_history = chat_history[-max_entries:]
 
-        # Log Interaction
+        # ---------------- Logging ----------------
         cache_key = question_lower
         if cache_key in tool_cache:
             index_dict, python_dict, _ = tool_cache[cache_key]
         else:
             index_dict, python_dict = {}, {}
-
         try:
             Log_Interaction(
                 question=question,
@@ -1422,9 +1297,10 @@ def Ask_Question(question, user_id="anonymous"):
         except Exception as e:
             logging.error(f"Error logging interaction: {str(e)}")
 
+        return answer_collected
+
     except Exception as e:
         error_msg = f"Critical error in Ask_Question: {str(e)}"
         logging.error(error_msg)
-        yield error_msg
-        logging.error(error_msg)
-        yield error_msg
+        return error_msg
+
