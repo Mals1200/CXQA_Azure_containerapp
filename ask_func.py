@@ -6,9 +6,9 @@
 #    - A single requests.Session() is used for all LLM API calls, reducing connection overhead
 #      and making API requests faster and more efficient.
 #
-# 2. Sequential Execution of Index and Python Tools
-#    - The index search (Tool 1) is executed first, followed by the Python code execution (Tool 2).
-#      Running sequentially simplifies debugging and avoids concurrency-related edge-cases.
+# 2. Parallel Execution of Index and Python Tools
+#    - When both the index search (Tool 1) and Python code execution (Tool 2) are needed,
+#      they are run in parallel using ThreadPoolExecutor. This reduces total wait time for users.
 #
 # 3. Lazy Loading and Caching of DataFrames
 #    - Only the specific data files referenced in the generated Python code are downloaded and loaded.
@@ -141,7 +141,7 @@ def load_rbac_files():
         df_file = pd.read_excel(BytesIO(file_rbac_data))
 
     except Exception as e:
-        logging.error(f"Failed to load RBAC files: {e}", exc_info=True)
+        logging.error(f"Failed to load RBAC files: {e}")
     
     return df_user, df_file
 
@@ -303,7 +303,7 @@ def call_llm(system_prompt, user_prompt, max_tokens=500, temperature=0.0):
         if hasattr(e, "response") and e.response is not None:           # Azure/OpenAI gives details here
             err_msg += f" | Azure response: {e.response.text}"
         print(err_msg)                                                  # <‑‑ NEW: show in console/stdout
-        logging.error(err_msg, exc_info=True)
+        logging.error(err_msg)
         return err_msg
 
 #######################################################################################
@@ -350,7 +350,7 @@ def call_llm_aux(system_prompt, user_prompt, max_tokens=300, temperature=0.0):
                 continue
             raise
         except Exception as e:
-            logging.error(f"AUX LLM error: {e}", exc_info=True)
+            logging.error(f"AUX LLM error: {e}")
             return f"LLM Error: {e}"
     return "LLM Error: exceeded aux model rate limit"
 
@@ -582,7 +582,7 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1):
         return {"top_k": combined, "file_names": file_names}
 
     except Exception as e:
-        logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}", exc_info=True)
+        logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}")
         return {"top_k": "No information", "file_names": []}
 
 #######################################################################################
@@ -744,7 +744,6 @@ def execute_generated_code(code_str):
     except Exception as e:
         err_msg = f"An error occurred during code execution: {e}"
         print(err_msg)
-        logging.error(err_msg, exc_info=True)
         return err_msg
 
 #######################################################################################
@@ -903,9 +902,7 @@ Chat_history:
 
     try:
         final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
-        # Log the raw LLM output (truncated) for easier debugging of malformed JSON
-        logging.error(f"[DEBUG] LLM output for question ({user_question}): {repr(final_text)[:300]}")
-        
+
         # Ensure we never yield an empty or error-laden string without a fallback
         if (not final_text.strip() 
             or final_text.startswith("LLM Error") 
@@ -917,7 +914,7 @@ Chat_history:
 
         yield final_text
     except Exception as e:
-        logging.error(f"Error in final_answer_llm: {str(e)}", exc_info=True)
+        logging.error(f"Error in final_answer_llm: {str(e)}")
         fallback_text = f"I'm sorry, but an error occurred: {str(e)}"
         yield fallback_text
 
@@ -952,8 +949,6 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
 
     # ---------- strip code-fence wrappers before JSON parse ----------
     cleaned = final_text.strip()
-    # Clean ugly real newlines that sometimes break JSON parsing
-    cleaned = cleaned.replace('\r\n', '\n').replace('\n', '\\n')
     cleaned = re.sub(r"^```[a-zA-Z]*\s*", "", cleaned)   # remove ```json or ```
     cleaned = re.sub(r"^'''[a-zA-Z]*\s*", "", cleaned)   # remove '''json or '''
     cleaned = re.sub(r"\s*```$", "", cleaned)            # closing ```
@@ -1256,27 +1251,23 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     index_dict = {"top_k": "No information"}
     python_dict = {"result": "No information", "code": ""}
 
-    # --- Determine which tools to call and handle failures gracefully ---
+    import concurrent.futures
     total_start = time.time()
     if needs_tabular_data:
-        try:
-            python_dict = tool_2_code_run(user_question, user_tier, recent_history)
-        except Exception as e:
-            logging.error(f"Error in tool_2_code_run: {e}", exc_info=True)
-            python_dict = {"result": "No information", "code": f"Error: {e}"}
-        try:
-            index_dict = tool_1_index_search(user_question, 5, user_tier)
-        except Exception as e:
-            logging.error(f"Error in tool_1_index_search: {e}", exc_info=True)
-            index_dict = {"top_k": "No information", "file_names": [], "error": str(e)}
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            t0 = time.time()
+            fut_py = executor.submit(tool_2_code_run, user_question, user_tier, recent_history)
+            fut_idx = executor.submit(tool_1_index_search, user_question, 5, user_tier)
+            python_dict = fut_py.result()
+            t1 = time.time()
+            index_dict = fut_idx.result()
+            t2 = time.time()
     else:
-        try:
-            index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
-        except Exception as e:
-            logging.error(f"Error in tool_1_index_search: {e}", exc_info=True)
-            index_dict = {"top_k": "No information", "file_names": [], "error": str(e)}
+        t0 = time.time()
+        index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
+        t1 = time.time()
         python_dict = {"result": "No information", "code": ""}
-    
+
     # Debug: Print what each tool returned (uncomment for debugging)
     # print(f"[DEBUG] Index result: {index_dict.get('top_k', 'No information')[:100]}...")
     # print(f"[DEBUG] Python result: {python_dict.get('result', 'No information')[:100]}...")
@@ -1284,15 +1275,10 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     # print(f"[DEBUG] Python tables: {python_dict.get('table_names', [])}")
 
     raw_answer = ""
-    try:
-        for token in final_answer_llm(user_question, index_dict, python_dict):
-            raw_answer += token
-    except Exception as e:
-        logging.error(f"Error in final_answer_llm: {e}", exc_info=True)
-        raw_answer = f"An error occurred: {e}"
-
-    if not raw_answer.strip():
-        raw_answer = "No answer could be generated for this question."
+    t3 = time.time()
+    for token in final_answer_llm(user_question, index_dict, python_dict):
+        raw_answer += token
+    t4 = time.time()
 
     # Now unify repeated text cleaning
     raw_answer = clean_text(raw_answer)
@@ -1303,9 +1289,6 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
 
     total_end = time.time()
     tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
-    # Absolute fallback so that we always return something
-    if not final_answer_with_source or not final_answer_with_source.strip():
-        final_answer_with_source = "No answer could be generated for this question. Please try again later."
     yield final_answer_with_source
 
 #######################################################################################
@@ -1384,7 +1367,7 @@ def Ask_Question(question, user_id="anonymous"):
                 return
             except Exception as e:
                 error_msg = f"Error in export processing: {str(e)}"
-                logging.error(error_msg, exc_info=True)
+                logging.error(error_msg)
                 yield error_msg
                 return
 
@@ -1407,7 +1390,7 @@ def Ask_Question(question, user_id="anonymous"):
                 answer_collected += token
         except Exception as e:
             err_msg = f"❌ Error occurred while generating the answer: {str(e)}"
-            logging.error(err_msg, exc_info=True)
+            logging.error(err_msg)
             yield f"\n\n{err_msg}"
             return
 
@@ -1437,11 +1420,11 @@ def Ask_Question(question, user_id="anonymous"):
                 python_dict=python_dict
             )
         except Exception as e:
-            logging.error(f"Error logging interaction: {str(e)}", exc_info=True)
+            logging.error(f"Error logging interaction: {str(e)}")
 
     except Exception as e:
         error_msg = f"Critical error in Ask_Question: {str(e)}"
-        logging.error(error_msg, exc_info=True)
+        logging.error(error_msg)
         yield error_msg
-        logging.error(error_msg, exc_info=True)
+        logging.error(error_msg)
         yield error_msg
