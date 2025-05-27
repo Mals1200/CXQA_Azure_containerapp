@@ -122,11 +122,6 @@ async def _bot_logic(turn_context: TurnContext):
     typing_activity = Activity(type="typing")
     await turn_context.send_activity(typing_activity)
 
-    # Track whether we actually sent a message back to Teams.  If nothing gets
-    # sent (e.g. malformed adaptive-card JSON), we fall back to plain text so
-    # the user always sees something.
-    message_sent = False
-
     try:
         # Process the message
         ans_gen = Ask_Question(user_message, user_id=user_id)
@@ -333,7 +328,6 @@ async def _bot_logic(turn_context: TurnContext):
                     }]
                 )
                 await turn_context.send_activity(message)
-                message_sent = True
                 # Successfully processed JSON, so return early
                 return
                 
@@ -448,23 +442,10 @@ async def _bot_logic(turn_context: TurnContext):
                 }]
             )
             await turn_context.send_activity(message)
-            message_sent = True
         else:
             # For simple responses without source, send formatted markdown directly
             # Teams supports some markdown in regular messages
             await turn_context.send_activity(Activity(type="message", text=main_answer))
-            message_sent = True
-
-        # ------------------------------------------------------------------
-        # Guaranteed fallback: if for any reason nothing was sent (e.g. an
-        # unexpected branch), send the raw answer text or a default notice.
-        # ------------------------------------------------------------------
-        if not message_sent:
-            if answer_text and answer_text.strip():
-                await turn_context.send_activity(Activity(type="message", text=answer_text))
-            else:
-                await turn_context.send_activity(Activity(type="message", text="No answer could be generated for your question."))
-            message_sent = True
 
     except Exception as e:
         error_message = f"An error occurred while processing your request: {str(e)}"
