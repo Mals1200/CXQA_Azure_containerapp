@@ -320,21 +320,13 @@ async def _bot_logic(turn_context: TurnContext):
                     "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                     "version": "1.5"
                 }
-
-                # ------- NEW: plain-markdown fallback (visible even if card fails) -------
-                markdown_fallback = _content_to_markdown(content_items)
-                if markdown_fallback:
-                    markdown_fallback += f"\n\nSource: {source}"
-                    await turn_context.send_activity(Activity(type="message", text=markdown_fallback))
-
                 message = Activity(
-                     type="message",
-                     # Plain text fallback sent earlier; the activity below only carries the card
-                     attachments=[{
-                         "contentType": "application/vnd.microsoft.card.adaptive",
-                         "content": adaptive_card
-                     }]
-                 )
+                    type="message",
+                    attachments=[{
+                        "contentType": "application/vnd.microsoft.card.adaptive",
+                        "content": adaptive_card
+                    }]
+                )
                 await turn_context.send_activity(message)
                 # Successfully processed JSON, so return early
                 return
@@ -444,7 +436,6 @@ async def _bot_logic(turn_context: TurnContext):
             
             message = Activity(
                 type="message",
-                text=main_answer,  # Fallback plain text
                 attachments=[{
                     "contentType": "application/vnd.microsoft.card.adaptive",
                     "content": adaptive_card
@@ -460,43 +451,6 @@ async def _bot_logic(turn_context: TurnContext):
         error_message = f"An error occurred while processing your request: {str(e)}"
         print(f"Error in bot logic: {e}")
         await turn_context.send_activity(Activity(type="message", text=error_message))
-
-# --------------------------------------------------------------------
-# Helper: convert structured LLM content → markdown (plain-text fallback)
-# --------------------------------------------------------------------
-
-def _content_to_markdown(content_items):
-    """Translate the structured `content` array (heading/paragraph/bullet_list/…)
-    returned by the LLM into a markdown string that should render in Teams as
-    regular text. This is used as a *fallback* in case the adaptive card fails
-    to render (or is not supported on the client)."""
-    md_lines = []
-    for block in content_items:
-        btype = block.get("type", "")
-        if btype == "heading":
-            # Bold heading for visibility
-            md_lines.append(f"**{block.get('text', '')}**\n")
-        elif btype == "paragraph":
-            md_lines.append(block.get("text", ""))
-            md_lines.append("")  # blank line for spacing
-        elif btype == "bullet_list":
-            for itm in block.get("items", []):
-                md_lines.append(f"• {itm}")
-            md_lines.append("")
-        elif btype == "numbered_list":
-            for idx, itm in enumerate(block.get("items", []), 1):
-                md_lines.append(f"{idx}. {itm}")
-            md_lines.append("")
-        elif btype == "code_block":
-            md_lines.append("```")
-            md_lines.append(block.get("code", ""))
-            md_lines.append("```")
-            md_lines.append("")
-        else:
-            # Unknown or unsupported type – stringify just in case
-            md_lines.append(str(block))
-            md_lines.append("")
-    return "\n".join(md_lines).strip()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=80)
