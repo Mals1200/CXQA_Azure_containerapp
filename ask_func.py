@@ -43,6 +43,10 @@ from collections import OrderedDict
 import difflib
 import time
 
+# Add logging configuration at the very top
+import logging
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
+
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
 #######################################################################################
@@ -472,9 +476,12 @@ def references_tabular_data(question, tables_text):
 
     Final instruction: Reply ONLY with 'YES' or 'NO'.
     """
+    logging.debug(f"[Classifier] Question={question!r}")
     llm_response = call_llm_aux(llm_system_message, llm_user_message, max_tokens=5, temperature=0.0)
     clean_response = llm_response.strip().upper()
-    return "YES" in clean_response
+    use_tables = "YES" in clean_response
+    logging.debug(f"[Classifier] NEEDS_TABULAR={'YES' if use_tables else 'NO'} (raw response {llm_response!r})")
+    return use_tables
 
 def is_text_relevant(question, snippet):
     if not snippet.strip():
@@ -508,6 +515,7 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1):
     CONTENT_FIELD = CONFIG["CONTENT_FIELD"]
 
     subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
+    logging.debug(f"[Index] Running semantic search on: {subquestions}")
     if not subquestions:
         subquestions = [user_question]
 
@@ -537,6 +545,7 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1):
                     merged_docs.append({"title": title, "snippet": snippet})
 
         if not merged_docs:
+            logging.debug(f"[Index] Returning 0 docs, snippets length=0")
             return {"top_k": "No information", "file_names": []}
 
         # Filter by access + relevance
@@ -550,6 +559,7 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1):
                     relevant_docs.append(doc)
 
         if not relevant_docs:
+            logging.debug(f"[Index] Returning 0 docs after relevance filter, snippets length=0")
             return {"top_k": "No information", "file_names": []}
 
         # Weighted scoring
@@ -578,6 +588,7 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1):
         
         re_ranked_texts = [d["snippet"] for d in docs_top_k]
         combined = "\n\n---\n\n".join(re_ranked_texts)
+        logging.debug(f"[Index] Returning {len(file_names)} docs, snippets length={len(combined)}")
 
         return {"top_k": combined, "file_names": file_names}
 
@@ -647,6 +658,7 @@ Chat_history:
 """
 
     code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.7)
+    logging.debug(f"[CodeRun] Code generated:\n{code_str}")
 
     if not code_str or code_str == "404":
         return {"result": "No information", "code": "", "table_names": []}
@@ -680,6 +692,7 @@ Chat_history:
     table_names = table_names[:3]
 
     execution_result = execute_generated_code(code_str)
+    logging.debug(f"[CodeRun] Tables referenced: {table_names}, result: {execution_result!r}")
     return {"result": execution_result, "code": code_str, "table_names": table_names}
 
 def execute_generated_code(code_str):
@@ -1281,11 +1294,13 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     t4 = time.time()
 
     # Now unify repeated text cleaning
+    logging.debug(f"[Final] RAW_ANSWER={raw_answer!r}")
     raw_answer = clean_text(raw_answer)
 
     t5 = time.time()
     final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict, user_question=user_question)
     t6 = time.time()
+    logging.debug(f"[Final] FINAL_JSON={final_answer_with_source}")
 
     total_end = time.time()
     tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
