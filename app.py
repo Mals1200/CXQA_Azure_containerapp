@@ -125,13 +125,7 @@ async def _bot_logic(turn_context: TurnContext):
     try:
         # Process the message
         ans_gen = Ask_Question(user_message, user_id=user_id)
-        answer_chunks = list(ans_gen) # I update this
-        answer_text = "".join(answer_chunks).strip()
-        # Fallback if nothing was returned
-        if not answer_text:
-            print("WARNING: Ask_Question yielded no output")
-            await turn_context.send_activity(Activity(type="message", text="Sorry, I couldn't find an answer to your question."))
-            return
+        answer_text = "".join(ans_gen)
 
         # Update state
         state['history'] = ask_func.chat_history
@@ -151,9 +145,12 @@ async def _bot_logic(turn_context: TurnContext):
                 cleaned_answer_text = cleaned_answer_text[3:].strip()
             if cleaned_answer_text.endswith('```'):
                 cleaned_answer_text = cleaned_answer_text[:-3].strip()
-            # Fix: Replace real newlines with escaped newlines to allow JSON parsing
-            # This is necessary because the LLM may output real newlines inside string values, which is invalid in JSON
-            cleaned_answer_text = cleaned_answer_text.replace('\n', '\\n')
+            # NOTE: Do NOT blindly escape real newline characters, as JSON allows
+            # whitespace outside of string literals. Escaping them globally breaks
+            # the JSON structure (e.g. producing `{\n` which is invalid). The
+            # answers returned from `ask_func` are already serialized using
+            # `json.dumps`, so any newline characters that _must_ be escaped are
+            # already handled. Therefore, we simply attempt to load the JSON as-is.
             response_json = json.loads(cleaned_answer_text)
             # Check if this is our expected JSON format with content and source
             if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
