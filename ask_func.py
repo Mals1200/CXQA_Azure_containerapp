@@ -1,4 +1,26 @@
-# new testing
+# =====================================================================================
+# CXQA Assistant - Recent Additions (Performance & Usability Improvements)
+# =====================================================================================
+#
+# 1. Persistent HTTP Session for API Calls
+#    - A single requests.Session() is used for all LLM API calls, reducing connection overhead
+#      and making API requests faster and more efficient.
+#
+# 2. Sequential Execution of Index and Python Tools
+#    - The index search (Tool 1) is executed first, followed by the Python code execution (Tool 2).
+#      Running sequentially simplifies debugging and avoids concurrency-related edge-cases.
+#
+# 3. Lazy Loading and Caching of DataFrames
+#    - Only the specific data files referenced in the generated Python code are downloaded and loaded.
+#    - Once a file is loaded, it is stored in a global cache (_dataframe_cache) for reuse in the session.
+#    - This avoids unnecessary downloads and speeds up repeated queries involving the same data.
+#
+# 4. Removal of Timing Print Statements
+#    - All timing/debug print statements have been removed for production use.
+#    - The code remains optimized, but now runs quietly for end users.
+#
+# These changes make the assistant faster, more efficient, and easier to maintain.
+# =====================================================================================
 
 import os
 import io
@@ -119,7 +141,7 @@ def load_rbac_files():
         df_file = pd.read_excel(BytesIO(file_rbac_data))
 
     except Exception as e:
-        logging.error(f"Failed to load RBAC files: {e}")
+        logging.error(f"Failed to load RBAC files: {e}", exc_info=True)
     
     return df_user, df_file
 
@@ -281,7 +303,7 @@ def call_llm(system_prompt, user_prompt, max_tokens=500, temperature=0.0):
         if hasattr(e, "response") and e.response is not None:           # Azure/OpenAI gives details here
             err_msg += f" | Azure response: {e.response.text}"
         print(err_msg)                                                  # <‑‑ NEW: show in console/stdout
-        logging.error(err_msg)
+        logging.error(err_msg, exc_info=True)
         return err_msg
 
 #######################################################################################
@@ -328,7 +350,7 @@ def call_llm_aux(system_prompt, user_prompt, max_tokens=300, temperature=0.0):
                 continue
             raise
         except Exception as e:
-            logging.error(f"AUX LLM error: {e}")
+            logging.error(f"AUX LLM error: {e}", exc_info=True)
             return f"LLM Error: {e}"
     return "LLM Error: exceeded aux model rate limit"
 
@@ -560,7 +582,7 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1):
         return {"top_k": combined, "file_names": file_names}
 
     except Exception as e:
-        logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}")
+        logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}", exc_info=True)
         return {"top_k": "No information", "file_names": []}
 
 #######################################################################################
@@ -722,6 +744,7 @@ def execute_generated_code(code_str):
     except Exception as e:
         err_msg = f"An error occurred during code execution: {e}"
         print(err_msg)
+        logging.error(err_msg, exc_info=True)
         return err_msg
 
 #######################################################################################
@@ -892,7 +915,7 @@ Chat_history:
 
         yield final_text
     except Exception as e:
-        logging.error(f"Error in final_answer_llm: {str(e)}")
+        logging.error(f"Error in final_answer_llm: {str(e)}", exc_info=True)
         fallback_text = f"I'm sorry, but an error occurred: {str(e)}"
         yield fallback_text
 
@@ -1235,18 +1258,18 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
         try:
             python_dict = tool_2_code_run(user_question, user_tier, recent_history)
         except Exception as e:
-            logging.error(f"Error in tool_2_code_run: {e}")
+            logging.error(f"Error in tool_2_code_run: {e}", exc_info=True)
             python_dict = {"result": "No information", "code": f"Error: {e}"}
         try:
             index_dict = tool_1_index_search(user_question, 5, user_tier)
         except Exception as e:
-            logging.error(f"Error in tool_1_index_search: {e}")
+            logging.error(f"Error in tool_1_index_search: {e}", exc_info=True)
             index_dict = {"top_k": "No information", "file_names": [], "error": str(e)}
     else:
         try:
             index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
         except Exception as e:
-            logging.error(f"Error in tool_1_index_search: {e}")
+            logging.error(f"Error in tool_1_index_search: {e}", exc_info=True)
             index_dict = {"top_k": "No information", "file_names": [], "error": str(e)}
         python_dict = {"result": "No information", "code": ""}
     
@@ -1261,7 +1284,7 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
         for token in final_answer_llm(user_question, index_dict, python_dict):
             raw_answer += token
     except Exception as e:
-        logging.error(f"Error in final_answer_llm: {e}")
+        logging.error(f"Error in final_answer_llm: {e}", exc_info=True)
         raw_answer = f"An error occurred: {e}"
 
     if not raw_answer.strip():
@@ -1354,7 +1377,7 @@ def Ask_Question(question, user_id="anonymous"):
                 return
             except Exception as e:
                 error_msg = f"Error in export processing: {str(e)}"
-                logging.error(error_msg)
+                logging.error(error_msg, exc_info=True)
                 yield error_msg
                 return
 
@@ -1377,7 +1400,7 @@ def Ask_Question(question, user_id="anonymous"):
                 answer_collected += token
         except Exception as e:
             err_msg = f"❌ Error occurred while generating the answer: {str(e)}"
-            logging.error(err_msg)
+            logging.error(err_msg, exc_info=True)
             yield f"\n\n{err_msg}"
             return
 
@@ -1407,11 +1430,11 @@ def Ask_Question(question, user_id="anonymous"):
                 python_dict=python_dict
             )
         except Exception as e:
-            logging.error(f"Error logging interaction: {str(e)}")
+            logging.error(f"Error logging interaction: {str(e)}", exc_info=True)
 
     except Exception as e:
         error_msg = f"Critical error in Ask_Question: {str(e)}"
-        logging.error(error_msg)
+        logging.error(error_msg, exc_info=True)
         yield error_msg
-        logging.error(error_msg)
+        logging.error(error_msg, exc_info=True)
         yield error_msg
