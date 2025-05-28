@@ -1039,7 +1039,7 @@ Important guidelines:
 14. **Never generate more than 12 items in any bullet_list or numbered_list.**
 15. **Prefer a concise answer. If the source content is repetitive, merge and summarize instead of listing.**
 16. **If the user asks for a detailed SOP, you may note in a paragraph: "For full details, see the official SOP."**
-17. **Your total answer should never exceed 1800 characters.**
+17. **Your total answer should never exceed 1000 characters.**
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
