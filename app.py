@@ -67,6 +67,7 @@ def messages():
     return Response(status=200)
 
 async def _bot_logic(turn_context: TurnContext):
+    import traceback
     conversation_id = turn_context.activity.conversation.id
     state = get_conversation_state(conversation_id)
     state['last_activity'] = asyncio.get_event_loop().time()
@@ -78,8 +79,6 @@ async def _bot_logic(turn_context: TurnContext):
     ask_func.tool_cache = state['cache']
 
     user_message = turn_context.activity.text or ""
-
-    # --- User identification logic ---
     user_id = "anonymous"
     try:
         teams_user_id = turn_context.activity.from_property.id
@@ -93,124 +92,111 @@ async def _bot_logic(turn_context: TurnContext):
     except Exception:
         user_id = turn_context.activity.from_property.id or "anonymous"
 
-    typing_activity = Activity(type="typing")
-    await turn_context.send_activity(typing_activity)
+    await turn_context.send_activity(Activity(type="typing"))
 
     try:
         ans_gen = Ask_Question(user_message, user_id=user_id)
         answer_text = "".join(ans_gen)
 
-        # --- Debugging: Output raw answer, length, first 300 chars ---
-        debug_text = f"DEBUG: Raw answer length: {len(answer_text)}\nFirst 300 chars:\n{answer_text[:300]}\n"
-        print(debug_text)
-        await turn_context.send_activity(Activity(type="message", text=f"Debug Info:\n{debug_text}"))
-
-        # --- Parse the response as JSON if possible ---
-        cleaned_answer_text = answer_text.strip()
-        if cleaned_answer_text.startswith('```json'):
-            cleaned_answer_text = cleaned_answer_text[7:].strip()
-        if cleaned_answer_text.startswith('```'):
-            cleaned_answer_text = cleaned_answer_text[3:].strip()
-        if cleaned_answer_text.endswith('```'):
-            cleaned_answer_text = cleaned_answer_text[:-3].strip()
-
-        # Print/log the JSON before parse
-        print("DEBUG: Attempting JSON parse. Cleaned answer text:")
-        print(cleaned_answer_text[:1000])
+        # --- Parse JSON if possible ---
+        cleaned = answer_text.strip()
+        if cleaned.startswith('```json'):
+            cleaned = cleaned[7:].strip()
+        if cleaned.startswith('```'):
+            cleaned = cleaned[3:].strip()
+        if cleaned.endswith('```'):
+            cleaned = cleaned[:-3].strip()
 
         try:
-            response_json = json.loads(cleaned_answer_text)
-            # --- Count blocks and log ---
-            if isinstance(response_json, dict) and "content" in response_json:
-                content_items = response_json["content"]
-                num_blocks = len(content_items)
-                # Count list items
-                num_list_items = 0
-                for item in content_items:
-                    if item.get("type") in ("bullet_list", "numbered_list"):
-                        num_list_items += len(item.get("items", []))
-                block_debug = (f"DEBUG: Card block count: {num_blocks}, "
-                               f"Total list items: {num_list_items}")
-                print(block_debug)
-                await turn_context.send_activity(Activity(type="message", text=block_debug))
+            response_json = json.loads(cleaned)
+            content_items = response_json["content"] if isinstance(response_json, dict) and "content" in response_json else []
+            num_blocks = len(content_items)
+            num_list_items = 0
+            MAX_LIST_ITEMS = 5
+            truncated = False
 
-                # --- Truncate long lists for testing card render ---
-                MAX_LIST_ITEMS = 8  # <== adjust as needed
-                truncated = False
-                for item in content_items:
-                    if item.get("type") in ("bullet_list", "numbered_list"):
-                        items = item.get("items", [])
-                        if len(items) > MAX_LIST_ITEMS:
-                            item["items"] = items[:MAX_LIST_ITEMS] + [f"...and {len(items)-MAX_LIST_ITEMS} more steps."]
-                            truncated = True
-                if truncated:
-                    await turn_context.send_activity(Activity(type="message", text="NOTE: Some lists were truncated for debugging!"))
+            # Truncate all lists in the answer
+            for item in content_items:
+                if item.get("type") in ("bullet_list", "numbered_list"):
+                    items = item.get("items", [])
+                    if len(items) > MAX_LIST_ITEMS:
+                        item["items"] = items[:MAX_LIST_ITEMS] + [f"...and {len(items) - MAX_LIST_ITEMS} more steps. See SOP for full details."]
+                        truncated = True
+                    num_list_items += len(item.get("items", []))
 
-                # --- Build adaptive card as before ---
-                body_blocks = []
-                for item in content_items:
-                    item_type = item.get("type", "")
-                    if item_type == "heading":
+            # Build the Adaptive Card
+            body_blocks = []
+            for item in content_items:
+                item_type = item.get("type", "")
+                if item_type == "heading":
+                    body_blocks.append({
+                        "type": "TextBlock",
+                        "text": item.get("text", ""),
+                        "wrap": True,
+                        "weight": "Bolder",
+                        "size": "Large",
+                        "spacing": "Medium"
+                    })
+                elif item_type == "paragraph":
+                    text = item.get("text", "")
+                    if not (text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:")):
                         body_blocks.append({
                             "type": "TextBlock",
-                            "text": item.get("text", ""),
+                            "text": text,
                             "wrap": True,
-                            "weight": "Bolder",
-                            "size": "Large",
-                            "spacing": "Medium"
+                            "spacing": "Small"
                         })
-                    elif item_type == "paragraph":
-                        text = item.get("text", "")
-                        if not (text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:")):
-                            body_blocks.append({
-                                "type": "TextBlock",
-                                "text": text,
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
-                    elif item_type == "bullet_list":
-                        for list_item in item.get("items", []):
-                            body_blocks.append({
-                                "type": "TextBlock",
-                                "text": f"• {list_item}",
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
-                    elif item_type == "numbered_list":
-                        for i, list_item in enumerate(item.get("items", []), 1):
-                            body_blocks.append({
-                                "type": "TextBlock",
-                                "text": f"{i}. {list_item}",
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
-                    elif item_type == "code_block":
+                elif item_type == "bullet_list":
+                    for list_item in item.get("items", []):
                         body_blocks.append({
                             "type": "TextBlock",
-                            "text": f"```\n{item.get('code', '')}\n```",
+                            "text": f"• {list_item}",
                             "wrap": True,
-                            "fontType": "Monospace",
-                            "spacing": "Medium"
+                            "spacing": "Small"
                         })
-                # Add the show/hide source section (unchanged from your original)
-                # ... omitted for brevity, you can include your original code here ...
+                elif item_type == "numbered_list":
+                    for i, list_item in enumerate(item.get("items", []), 1):
+                        body_blocks.append({
+                            "type": "TextBlock",
+                            "text": f"{i}. {list_item}",
+                            "wrap": True,
+                            "spacing": "Small"
+                        })
+                elif item_type == "code_block":
+                    body_blocks.append({
+                        "type": "TextBlock",
+                        "text": f"```\n{item.get('code', '')}\n```",
+                        "wrap": True,
+                        "fontType": "Monospace",
+                        "spacing": "Medium"
+                    })
+            # Show/hide source block/buttons (add your existing code here)
+            # ...
 
-                # For debugging: add a footer
+            # Add a debug footer if truncated
+            if truncated:
                 body_blocks.append({
                     "type": "TextBlock",
-                    "text": f"DEBUG: {num_blocks} blocks, {num_list_items} list items. Lists truncated: {truncated}",
+                    "text": f"DEBUG: List truncated to {MAX_LIST_ITEMS} items per list to fit Teams limits.",
                     "wrap": True,
                     "size": "Small",
                     "weight": "Lighter",
                     "color": "Accent"
                 })
 
-                adaptive_card = {
-                    "type": "AdaptiveCard",
-                    "body": body_blocks,
-                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                    "version": "1.5"
-                }
+            adaptive_card = {
+                "type": "AdaptiveCard",
+                "body": body_blocks,
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "version": "1.5"
+            }
+
+            # Send debug info as a separate message (optional)
+            debug_msg = f"DEBUG: {num_blocks} blocks, {num_list_items} total list items. Truncated: {truncated}"
+            await turn_context.send_activity(Activity(type="message", text=debug_msg))
+
+            # Send the Adaptive Card
+            try:
                 message = Activity(
                     type="message",
                     attachments=[{
@@ -219,22 +205,20 @@ async def _bot_logic(turn_context: TurnContext):
                     }]
                 )
                 await turn_context.send_activity(message)
-                return
+            except Exception as card_error:
+                # Fallback: send plain text if card fails
+                await turn_context.send_activity(Activity(type="message", text=f"DEBUG: Adaptive Card failed: {card_error}\nShowing plain text answer."))
+                await turn_context.send_activity(Activity(type="message", text=answer_text[:2000]))
 
         except Exception as json_exc:
-            err_msg = f"JSON parsing/adaptive card error: {str(json_exc)}\n{traceback.format_exc()}"
-            print(err_msg)
-            await turn_context.send_activity(Activity(type="message", text=f"DEBUG: {err_msg}"))
-            # Fallback to plaintext
-            await turn_context.send_activity(Activity(type="message", text=f"Raw answer text:\n{answer_text[:1000]}"))
-
-        # --- Legacy fallback: send as plain text if JSON parsing fails ---
-        await turn_context.send_activity(Activity(type="message", text=answer_text[:4000]))
+            # Fallback: send plain text if JSON fails
+            await turn_context.send_activity(Activity(type="message", text=f"DEBUG: JSON/adaptive card parse failed: {json_exc}\nShowing plain text answer."))
+            await turn_context.send_activity(Activity(type="message", text=answer_text[:2000]))
 
     except Exception as e:
         error_message = f"An error occurred: {str(e)}\n{traceback.format_exc()}"
-        print(error_message)
         await turn_context.send_activity(Activity(type="message", text=error_message))
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=80)
