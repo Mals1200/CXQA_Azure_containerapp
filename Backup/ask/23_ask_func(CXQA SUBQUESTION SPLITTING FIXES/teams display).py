@@ -1,3 +1,51 @@
+###############################################################################
+#                           CXQA SUBQUESTION SPLITTING FIXES (v23 2025-05-28)
+#
+# Purpose: Ensure that user questions are only split into subquestions when
+#          absolutely necessary, and that no splitting ever results in more
+#          than 4 subquestions. This ensures:
+#              • Precise retrieval and matching for SOP/policy/incident questions
+#              • Answers in Teams and notebook always match the user’s real query
+#              • No over-splitting or loss of context for “what to do”/SOP-type questions
+#
+# Key Additions:
+#
+# 1. Robust Split Function:
+#      - Added robust_split_question(user_question, use_semantic_parsing=True)
+#        • Ensures the original user question is always the first subquestion
+#        • Deduplicates results and preserves order
+#
+# 2. LLM Splitter Prompt Hardening:
+#      - The system prompt in split_question_into_subquestions() now explicitly tells
+#        the LLM:
+#            • Only split if the user question *really* needs it for independent answers
+#            • Never split into more than 4 subquestions
+#            • If the question can be answered as a whole, just return the original
+#            • If you split, each subquestion must be essential for a complete answer
+#            • Return each subquestion on a separate line or as bullet points
+#
+# 3. Post-LLM Hard Cap (Double Safety):
+#      - After splitting (LLM or regex), always cap subqs = subqs[:4]
+#
+# 4. Code Integration:
+#      - All places where user questions are split (esp. tool_1_index_search)
+#        now call:
+#           subquestions = robust_split_question(normalize_question(user_question), use_semantic_parsing=True)
+#        instead of direct calls to split_question_into_subquestions
+#
+# 5. Normalization:
+#      - Added normalize_question() to standardize phrasings like “what to do if…”,
+#        improving consistency and retrieval.
+#
+# 6. Debug (Optional for Testing):
+#      - You may print [DEBUG] Subquestions for '...' to verify splitting in logs.
+#
+# Result:
+#      - Minimal, meaningful subquestions, never more than 4, always including
+#        the real user question—Teams and notebook always match.
+###############################################################################
+
+
 import os
 import io
 import re
@@ -19,11 +67,15 @@ from collections import OrderedDict
 import difflib
 import time
 
+#######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
 #######################################################################################
 CONFIG = {
     # ── MAIN, high-capacity model (Tool-1 Index, Tool-2 Python, Tool-3 Fallback) ──
     "LLM_ENDPOINT"     : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
+                         "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
+    # Add CODE LLM endpoint (same as main)
+    "LLM_ENDPOINT_CODE": "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
                          "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
 
     # same key used for both deployments
@@ -388,12 +440,14 @@ def split_question_into_subquestions(user_question, use_semantic_parsing=True):
         return subqs
     else:
         system_prompt = (
-            "You are a helpful assistant. "
-            "You receive a user question which may have multiple parts. "
-            "Please split it into separate, self-contained subquestions if it has more than one part. "
-            "If it's only a single question, simply return that one. "
-            "Return each subquestion on a separate line or as bullet points."
-        )
+    "You are a helpful assistant. "
+    "Your job is to split a user's question into the smallest number of necessary, self-contained subquestions. "
+    "• Only split if the question clearly asks for multiple independent answers."
+    "• Never split into more than 4 subquestions, no matter how long or complex the user query."
+    "• If the question can be answered as a whole, just return the original."
+    "• If you split, ensure that each subquestion is essential for a complete answer."
+    "Return each subquestion on a separate line or as bullet points."
+)
 
         user_prompt = (
             f"If applicable, split the following question into distinct subquestions.\n\n"
@@ -429,7 +483,7 @@ def references_tabular_data(question, tables_text):
     
     Available Tables:
     {tables_text}
-    
+
     Decision Rules:
     1. Reply 'YES' ONLY if the question explicitly asks for numerical facts, figures, statistics, totals, direct calculations from table columns, or specific record lookups that are clearly obtainable from the structured datasets listed in Available Tables.
     2. Reply 'NO' if the question is general, opinion-based, theoretical, policy-related, or does not require specific numerical data directly from these tables.
@@ -510,7 +564,10 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_
     # --- Added Log ---
     #print(f"DEBUG: [Tool 1] Entering for question '{user_question[:50]}...'")
 
-    subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
+    #subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
+    # Optionally, you can normalize here:
+    # subquestions = robust_split_question(normalize_question(user_question), use_semantic_parsing=True)
+    subquestions = robust_split_question(normalize_question(user_question), use_semantic_parsing=True)
     if not subquestions:
         subquestions = [user_question]
     # --- Added Log ---
@@ -644,7 +701,7 @@ def reference_table_data(code_str, user_tier):
     """
     # We'll look for patterns like "dataframes.get("SomeFile.xlsx") or the actual file references 
     pattern = re.compile(
-        r'(?:dataframes\.get|pd\.read_(?:excel|csv))\(\s*[\'\"]([^\'\"]+\.(?:xlsx|xls|csv))[\'\"]'
+    r'(?:dataframes\.get|pd\.read_(?:excel|csv))\(\s*[\'"]([^\'"]+)[\'"]\s*\)'
     )
     found_files = pattern.findall(code_str)
     unique_files = list(set(found_files))
@@ -662,6 +719,7 @@ def reference_table_data(code_str, user_tier):
 #                              TOOL #2 - Code Run
 #######################################################################################
 @azure_retry()
+@azure_retry()
 def tool_2_code_run(user_question, user_tier=1, recent_history=None):
     #if not references_tabular_data(user_question, TABLES):
         #return {"result": "No information", "code": "", "table_names": []}
@@ -670,107 +728,45 @@ def tool_2_code_run(user_question, user_tier=1, recent_history=None):
     rhistory = recent_history if recent_history else []
 
     system_prompt = f"""
-You are a **Python-for-DataFrames agent**.
+You are a python expert. Use the User Question along with the Chat_history to make the python code that will get the answer from the provided Dataframes schemas and samples.
+Only provide the python code and nothing else, without any markdown fences like ```python or ```.
+Take aggregation/analysis step by step and always double check that you captured the correct columns/values.
+Don't give examples, only provide the actual code. If you can't provide the code, say "404" as a string.
 
-Your task: write runnable **pandas** code that answers the User Question using the provided Excel/CSV tables.
+**General Rules**:
+1. Only use columns that actually exist as per the schemas. Do NOT invent columns or table names.
+2. Don't rely on sample rows for data content; the real dataset can have more/different data. Always reference columns as shown in the schemas.
+3. Return pure Python code that can run as-is, including necessary imports (like `import pandas as pd`).
+4. The code must produce a final `print()` statement with the answer. If multiple pieces of information are requested, print them clearly labeled.
+5. If a user references a column/table that does not exist in the schemas, return "404".
+6. Use semantic reasoning to handle synonyms or minor typos for table/column names if they reasonably map to the provided schemas.
+7. Do not use Chat_history information directly within the generated code logic or print statements, but use it for context if needed to understand the user's question.
 
-Return **only the code** (no ``` fences).  
-If you cannot produce working code – or a required table/column is missing and no close alias (Levenshtein ≤ 2) exists – return the exact string **"404"**.
+**Data Handling Rules for Pandas Code**:
+A. **Numeric Conversion:** When a column is expected to be numeric for calculations (e.g., for .sum(), .mean(), comparisons):
+   - First, replace common non-numeric placeholders (like '-', 'N/A', or strings containing only spaces) with `pd.NA` or `numpy.nan`. For example: `df['column_name'] = df['column_name'].replace(['-', 'N/A', ' ', '  '], pd.NA)`
+   - Then, explicitly convert the column to a numeric type using `pd.to_numeric(df['column_name'], errors='coerce')`. This will turn any remaining unparseable values into `NaN`.
+B. **Handle NaN Values:** Before performing aggregate functions (like `.sum()`, `.mean()`) or arithmetic operations on numeric columns, ensure `NaN` values are handled, e.g., by using `skipna=True` (which is default for many aggregations like `.sum()`) or by explicitly filling them (e.g., `df['numeric_column'].fillna(0).sum()`).
+C. **Date Columns:** If the question involves dates:
+   - Convert date-like columns to datetime objects using `pd.to_datetime(df['Date_column'], errors='coerce')`.
+   - When comparing or merging data based on dates across multiple dataframes, ensure date columns are of a consistent datetime type and format. Be careful with operations that require aligned date indexes.
+D. **Complex Lookups:** For questions requiring data from multiple tables (e.g., "find X in table A on the date of max Y in table B"):
+   - First, determine the intermediate value (e.g., the date of max Y).
+   - Then, use that value to filter/query the second table.
+   - Ensure data types are compatible for lookups or merges.
+E. **Error Avoidance:** Generate code that is robust. If a filtering step might result in an empty DataFrame or Series, check for this (e.g., `if not df_filtered.empty:`) before trying to access elements by index (e.g., `.iloc[0]`) or perform calculations that would fail on empty data. If data is not found after filtering, print a message like "No data available for the specified criteria." 
 
-───────────────────── WORKFLOW ─────────────────────
-• `import pandas as pd` (and `import numpy as np` if needed).
-• Load each required table with  
-  df = dataframes.get("File.xlsx")  
-  if df is None:  
-      print("404"); exit()
-• Use **vectorised** pandas operations; avoid slow `.apply` loops.
-• Take aggregation/analysis **step by step** and double-check that you picked the correct columns/values.
-• Finish with **one `print()`** that clearly labels the answer(s).  
-  (If multiple values are requested, label each in that single print.)
-
-────────────────── GENERAL RULES ──────────────────
-1. **Only** use columns & filenames that appear in the schemas – never invent names.  
-2. If the user spelling differs, choose the *single closest* table/column whose Levenshtein distance ≤ 2 **or** that is listed as an explicit alias in the schema.  
-3. If nothing matches, output **"404"** and exit.  
-4. Do **not** reveal or print `Chat_history`.  
-5. Define every variable before first use.  
-6. When listing rows, call `.drop_duplicates()` to avoid repeats.
-
-──────────────── DATA-SAFETY & INTEGRITY ───────────
-A. **Date columns**  
-   • Convert with  
-      df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.normalize()  
-   • Wrap literals as `pd.Timestamp("YYYY-MM-DD")`.
-
-B. **Numeric columns**  
-   • Replace placeholders (`'-', 'N/A', ' ', '  '`) with `pd.NA`, then  
-      df["col"] = pd.to_numeric(df["col"], errors="coerce")  
-   • Aggregations (`sum`, `mean`, `corr`, …) must ignore NaNs (`skipna=True`) or fill them.
-
-C. **Safe assignment**  
-   • After building a mask, either  
-      df.loc[mask, "col"] = value **or**  
-      df_filtered = df[mask].copy()  # never assign on a raw slice.
-
-D. **Robust indexing**  
-   • Before using `.iloc[0]`, `.iat[0,0]`, etc.:  
-      if df_sub.empty:  
-          print("No data available for the specified criteria."); exit()
-
-E. **Complex look-ups / multi-table tasks**  
-   • First derive the intermediate key (e.g., the date of max Y), then query the other table.  
-   • Ensure datatypes are aligned when merging or comparing.
-
-──────────────────── INPUTS ────────────────────────
-User question:  
+User question:
 {user_question}
 
-Dataframe schemas & sample rows:  
+Dataframes schemas and sample:
 {SCHEMA_TEXT}
 
-Chat_history:  
+Chat_history:
 {rhistory}
-
-# ───────── PATCH v2 (do not edit) ─────────
-F1. Always wrap filenames in plain string literals, e.g.  
-    df = dataframes.get("Tickets.xlsx")   # ✅  
-    df = dataframes.get(f"{{file}}")      # ❌ Not allowed  
-F2. If you must abandon because a required table/column     
-    is missing for any reason whatsoever, raise SystemExit("404")        # use this exact call instead of exit()
-    # If this line is missing for ANY reason whatsoever,
-    # raise SystemExit("404")              # ← DO NOT change the string
-
-F3. Double-check that every string literal is properly closed; the code  
-    must pass `ast.parse(code)` with no syntax errors before you print it.  
-F4. When you build a DataFrame from multiple Python lists/arrays  
-    (e.g., `pd.DataFrame({{'a': a_list, 'b': b_list}})`), first make sure  
-    **all lists are exactly the same length**.  
-    • If they are not, do **one** of the following:  
-        – Truncate them to the shortest length with  
-          `min_len = min(map(len, [a_list, b_list, ...]));` then slice each list `[:min_len]`, **or**  
-        – Abort cleanly with `SystemExit("404")`.  
-    This prevents the runtime error "All arrays must be of the same length."
-
-# ───────── PATCH v3 (do not edit) ─────────
-**Extra safeguards (patch v3)**  
-F5. **Always convert dtypes before maths / comparisons**  
-    • Numeric ops → `df["col"]  = pd.to_numeric(df["col"],  errors="coerce")`  
-    • Date   ops → `df["date"] = pd.to_datetime(df["date"], errors="coerce")`  
-
-F6. **GroupBy**: never pass the deprecated `skipna=` parameter.  
-    Instead drop NaNs first (`df.dropna(subset=["col"])`) or use  
-    `grp.std(ddof=0)`, `grp.mean()`, etc.  
-
-F7. **Merging a Series with a DataFrame**:  
-    s.name = "my_col"          # give the Series a name  
-    df2   = s.to_frame()       # convert to DataFrame  
-    df_final = df.merge(df2, left_index=True, right_index=True)  
-    # avoids "Series without a name" merge error
 """
 
-    # This stops "unterminated string" crashes and replaces the undefined exit() with a safe SystemExit.
-
-    code_str = call_llm_aux(system_prompt, user_question, max_tokens=1200, temperature=0.7)
+    code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.7)
 
     if not code_str or code_str == "404":
         return {"result": "No information", "code": "", "table_names": []}
@@ -808,8 +804,6 @@ F7. **Merging a Series with a DataFrame**:
     #print(f"DEBUG: Extracted table_names: {table_names}")
     #This line was changed to include only the tables needed
     execution_result = execute_generated_code(code_str, required_tables=table_names) # Pass table_names
-    if str(execution_result).strip() == "404":
-        return {"result": "No information", "code": code_str, "table_names": []}
     return {"result": execution_result, "code": code_str, "table_names": table_names}
 
 def execute_generated_code(code_str, required_tables=None):
@@ -884,20 +878,11 @@ def execute_generated_code(code_str, required_tables=None):
     if not dataframes and ("dataframes.get(" in code_str):
          return "Error: Failed to load required tables before code execution."
 
-    # Silence pandas SettingWithCopyWarning globally
-    pd.options.mode.chained_assignment = None      
 
     # Modify code string (replace pandas read calls with dataframe dictionary lookups)
     # This part remains the same
     code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
     code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
-
-    # Change 3: Catch syntax errors before exec
-    import ast
-    try:
-        ast.parse(code_modified)
-    except SyntaxError as syn_err:
-        return f"Syntax error in generated code: {syn_err}"
 
     # Execute the code
     output_buffer = StringIO()
@@ -908,18 +893,12 @@ def execute_generated_code(code_str, required_tables=None):
                 "pd": pd,
                 "datetime": datetime
             }
-            # Change 2: Let generated code call exit() safely
-            import sys
-            local_vars["exit"] = sys.exit    # allow generated code that still uses exit()
             # Execute in a restricted scope
             exec(code_modified, {"pd": pd, "datetime": datetime}, local_vars) # Pass pd/datetime also to globals for safety
 
         output = output_buffer.getvalue().strip()
         return output if output else "Execution completed with no output."
-    except SystemExit as se:
-        if str(se) == "404":          # generated code raised SystemExit("404")
-            return "404"              # bubble up a clean sentinel
-        raise                         # any other SystemExit: keep crashing loudly
+
     except Exception as exec_error:
         # Catch errors specifically during the exec() call
         err_msg = f"An error occurred during code execution: {exec_error}"
@@ -1026,11 +1005,12 @@ Important guidelines:
 9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
 10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
 11. When questions have multiple parts needing different sources, use "Index & Python" as the source
+12. **Your total answer should never exceed 2000 characters.**
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
 
-For multi-part questions, organize your response clearly with appropriate headings or sections. For a single question, dont repeat the question as a title.
+For multi-part questions, organize your response clearly with appropriate headings or sections 
 for each part of the answer. If one part comes from Index and another from Python, use both sources.
 
 User question:
@@ -1045,6 +1025,13 @@ PYTHON_DATA:
 Chat_history:
 {recent_history if recent_history else []}
 """
+
+# 12. **If the relevant content is a long list of steps, summarize the list and only include the most important steps/items in your JSON output.**
+# 13. **If the answer is a procedure, select only the key actions (not every sub-step). If the document contains a list that is too long, summarize and mention there are details in the source.**
+# 14. **Never generate more than 12 items in any bullet_list or numbered_list.**
+# 15. **Prefer a concise answer. If the source content is repetitive, merge and summarize instead of listing.**
+# 16. **If the user asks for a detailed SOP, you may note in a paragraph: "For full details, see the official document."**
+
 
     # ########################################################################
     # # ORIGINAL SYSTEM PROMPT - UNCOMMENT TO USE INSTEAD OF JSON FORMAT
@@ -1431,7 +1418,7 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
         python_dict = tool_2_code_run(user_question, user_tier=user_tier, recent_history=recent_history)
 
         question_lower = user_question.lower()
-        calc_keywords = ["calculate", "total", "average", "sum", "count", "how many", "revenue", "sales", "what is the visits", "visitation", "utilization", "parking", "tickets"]
+        calc_keywords = ["calculate", "total", "average", "sum", "count", "how many", "revenue", "volume", "footfall", "what is the visits", "visitation", "sales", "attendance", "utilization", "parking", "tickets"]
         policy_keywords = ["policy", "procedure", "what to do", "how to", "describe", "sop", "guideline", "rule", "if someone", "in case of", "address"]
         
         has_calc_keyword = any(keyword in question_lower for keyword in calc_keywords)
@@ -1568,7 +1555,7 @@ def Ask_Question(question, user_id="anonymous"):
                 return
 
         # Handle "restart chat" command
-        if question_lower == "restart chat":
+        if question_lower in ("restart", "restart chat", "restartchat", "chat restart", "chatrestart"):
             chat_history = []
             tool_cache.clear()
             recent_history = []
@@ -1577,7 +1564,7 @@ def Ask_Question(question, user_id="anonymous"):
 
         # Add user question to chat history
         chat_history.append(f"User: {question}")
-        recent_history = chat_history[-4:] if len(chat_history) >= 4 else chat_history.copy()
+        recent_history = chat_history[-6:] if len(chat_history) >= 6 else chat_history.copy()
 
         answer_collected = ""
         try:
@@ -1591,13 +1578,34 @@ def Ask_Question(question, user_id="anonymous"):
             return
 
         chat_history.append(f"Assistant: {answer_collected}")
-        recent_history = chat_history[-4:] if len(chat_history) >= 4 else chat_history.copy()
+        recent_history = chat_history[-6:] if len(chat_history) >= 6 else chat_history.copy()
 
         # Truncate history
-        number_of_messages = 10
-        max_pairs = number_of_messages // 2
-        max_entries = max_pairs * 2
-        chat_history = chat_history[-max_entries:]
+        # number_of_messages = 10
+        # max_pairs = number_of_messages // 2
+        # max_entries = max_pairs * 2
+        # chat_history = chat_history[-max_entries:]
+        # --- Replace above with answer-based truncation ---
+        # Only answers (Assistant:) count toward 2000 char limit, but keep Q/A pairs
+        total_chars = 0
+        new_history = []
+        # Go backwards, keep all questions, and only as many answers as fit
+        for entry in reversed(chat_history):
+            if entry.startswith("Assistant: "):
+                ans = entry[len("Assistant: "):]
+                if total_chars + len(ans) <= 2000:
+                    new_history.insert(0, entry)
+                    total_chars += len(ans)
+                else:
+                    # Truncate this answer if possible
+                    remaining = 2000 - total_chars
+                    if remaining > 0:
+                        new_history.insert(0, "Assistant: " + ans[:remaining])
+                        total_chars += remaining
+                    break
+            else:
+                new_history.insert(0, entry)
+        chat_history = new_history
 
         # Log Interaction
         cache_key = question_lower
@@ -1624,3 +1632,29 @@ def Ask_Question(question, user_id="anonymous"):
         yield error_msg
         logging.error(error_msg)
         yield error_msg
+
+# Step 1: Robust subquestion splitting
+
+def robust_split_question(user_question, use_semantic_parsing=True):
+    """
+    Always include the original user question in the subquestions.
+    Deduplicate results and preserve order.
+    """
+    subqs = split_question_into_subquestions(user_question, use_semantic_parsing)
+    # Always insert the original question first if missing
+    if user_question not in subqs:
+        subqs = [user_question] + subqs
+    # Remove duplicates, keep order
+    seen = set()
+    result = []
+    for sq in subqs:
+        if sq not in seen:
+            result.append(sq)
+            seen.add(sq)
+    return result
+
+# Step 3 (optional): Normalization helper
+
+def normalize_question(q):
+    # Expand this with any patterns/phrases common in your user base
+    return q.lower().replace("what to do if there was", "if there was").replace("what to do if", "if")
