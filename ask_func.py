@@ -1268,17 +1268,8 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
             final_text = prefix + file_info + suffix
         pass
 
-    # ---------- legacy fallback: always output JSON ----------
+    return final_text
 
-    # If the answer was not valid JSON, fallback to a JSON structure for Teams.
-    return json.dumps({
-        "content": [
-            {"type": "heading", "text": user_question or "Answer"},
-            {"type": "paragraph", "text": final_text}
-        ],
-        "source": "AI Generated",
-        "source_details": {}
-    })
 
 #######################################################################################
 #                           CLASSIFY TOPIC
@@ -1666,3 +1657,4 @@ def Ask_Question(question, user_id="anonymous"):
         yield error_msg
         logging.error(error_msg)
         yield error_msg
+
