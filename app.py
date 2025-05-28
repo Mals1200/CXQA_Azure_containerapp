@@ -171,14 +171,12 @@ async def _bot_logic(turn_context: TurnContext):
                     })
                 elif item_type == "paragraph":
                     text = item.get("text", "")
-                    # Only add to main body if NOT a referenced/calculated paragraph (case-insensitive)
-                    if not (text.strip().lower().startswith("referenced:") or text.strip().lower().startswith("calculated using:")):
-                        body_blocks.append({
-                            "type": "TextBlock",
-                            "text": text,
-                            "wrap": True,
-                            "spacing": "Small"
-                        })
+                    body_blocks.append({
+                        "type": "TextBlock",
+                        "text": text,
+                        "wrap": True,
+                        "spacing": "Small"
+                    })
                 elif item_type == "bullet_list":
                     items = item.get("items", [])
                     for list_item in items:
@@ -233,7 +231,6 @@ async def _bot_logic(turn_context: TurnContext):
                         "wrap": True,
                         "spacing": "Small"
                     })
-            # If file_names is empty, optionally show a message or just skip
             if table_names:
                 source_container["items"].append({
                     "type": "TextBlock",
@@ -251,6 +248,14 @@ async def _bot_logic(turn_context: TurnContext):
                         "wrap": True,
                         "spacing": "Small"
                     })
+            # Optional: Label if no files or tables referenced
+            if not file_names and not table_names:
+                source_container["items"].append({
+                    "type": "TextBlock",
+                    "text": "No files or tables referenced.",
+                    "wrap": True,
+                    "spacing": "Small"
+                })
             # Always add the source line at the bottom of the container, even if no files/tables
             source_container["items"].append({
                 "type": "TextBlock",
