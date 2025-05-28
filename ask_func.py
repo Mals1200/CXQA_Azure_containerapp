@@ -986,107 +986,107 @@ def final_answer_llm(user_question, index_dict, python_dict):
     # # JSON RESPONSE FORMAT - REMOVE COMMENTS TO ENABLE
     # # This block modifies the system prompt to output a well-structured JSON
     # ########################################################################
-    system_prompt = f"""
-You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
-1) Index data: (INDEX_DATA)
-2) Python data: (PYTHON_DATA)
-*) Always prioritize the Python result if the two are different.
+#     system_prompt = f"""
+# You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
+# 1) Index data: (INDEX_DATA)
+# 2) Python data: (PYTHON_DATA)
+# *) Always prioritize the Python result if the two are different.
 
-Your output must be formatted as a valid JSON string, with this structure:
-{{
-  "content": [
-    {{
-      "type": "heading",
-      "text": "Main answer heading/title here"
-    }},
-    {{
-      "type": "paragraph",
-      "text": "Normal paragraph text here"
-    }},
-    {{
-      "type": "bullet_list",
-      "items": [
-        "List item 1",
-        "List item 2",
-        "List item 3"
-      ]
-    }},
-    {{
-      "type": "numbered_list",
-      "items": [
-        "Numbered item 1",
-        "Numbered item 2"
-      ]
-    }}
-  ],
-  "source": "Source type (Index, Python, Index & Python, or AI Generated)"
-}}
+# Your output must be formatted as a valid JSON string, with this structure:
+# {{
+#   "content": [
+#     {{
+#       "type": "heading",
+#       "text": "Main answer heading/title here"
+#     }},
+#     {{
+#       "type": "paragraph",
+#       "text": "Normal paragraph text here"
+#     }},
+#     {{
+#       "type": "bullet_list",
+#       "items": [
+#         "List item 1",
+#         "List item 2",
+#         "List item 3"
+#       ]
+#     }},
+#     {{
+#       "type": "numbered_list",
+#       "items": [
+#         "Numbered item 1",
+#         "Numbered item 2"
+#       ]
+#     }}
+#   ],
+#   "source": "Source type (Index, Python, Index & Python, or AI Generated)"
+# }}
 
-Strict formatting rules:
-- **NEVER exceed 12 blocks** (a block is a heading, paragraph, bullet_list, numbered_list, or code_block).  
-- **If you have more content than fits in 12 blocks, summarize or select the most important information, and finish with a block saying:**  
-  "**Output truncated due to length. Ask for more details if needed.**"
-- **Each bullet/numbered list should have no more than 5 items.**  
-- **Each paragraph or text block should be under 300 characters** (be concise).
-- **No block should contain more than 900 characters** (split into multiple blocks if needed).
-- Use only these valid block types: "heading", "paragraph", "bullet_list", "numbered_list", "code_block".
+# Strict formatting rules:
+# - **NEVER exceed 12 blocks** (a block is a heading, paragraph, bullet_list, numbered_list, or code_block).  
+# - **If you have more content than fits in 12 blocks, summarize or select the most important information, and finish with a block saying:**  
+#   "**Output truncated due to length. Ask for more details if needed.**"
+# - **Each bullet/numbered list should have no more than 5 items.**  
+# - **Each paragraph or text block should be under 300 characters** (be concise).
+# - **No block should contain more than 900 characters** (split into multiple blocks if needed).
+# - Use only these valid block types: "heading", "paragraph", "bullet_list", "numbered_list", "code_block".
 
-Important guidelines:
-1. Format content using the above structure for clarity and Teams compatibility.
-2. If the user asks a two-part question needing both Index and Python data, set source to "Index & Python".
-3. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated".
-4. When questions have multiple parts needing different sources, use "Index & Python" as the source.
-5. If none of the data sources are relevant, indicate that in the first paragraph and set source to "AI Generated".
+# Important guidelines:
+# 1. Format content using the above structure for clarity and Teams compatibility.
+# 2. If the user asks a two-part question needing both Index and Python data, set source to "Index & Python".
+# 3. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated".
+# 4. When questions have multiple parts needing different sources, use "Index & Python" as the source.
+# 5. If none of the data sources are relevant, indicate that in the first paragraph and set source to "AI Generated".
 
-For multi-part questions, organize your response clearly with headings or sections for each part.  
-If you cannot fit all content, include only the most important information, and make it clear content was truncated.
+# For multi-part questions, organize your response clearly with headings or sections for each part.  
+# If you cannot fit all content, include only the most important information, and make it clear content was truncated.
 
-User question:
-{user_question}
+# User question:
+# {user_question}
 
-INDEX_DATA:
-{index_top_k}
+# INDEX_DATA:
+# {index_top_k}
 
-PYTHON_DATA:
-{python_result}
+# PYTHON_DATA:
+# {python_result}
 
-Chat_history:
-{recent_history if recent_history else []}
-"""
+# Chat_history:
+# {recent_history if recent_history else []}
+# """
 
 
     # ########################################################################
     # # ORIGINAL SYSTEM PROMPT - UNCOMMENT TO USE INSTEAD OF JSON FORMAT
     # ########################################################################
-    # system_prompt = f"""
-    # You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
-    # 1) Index data: (INDEX_DATA)
-    # 2) Python data: (PYTHON_DATA)
-    # *) Always Prioritise The python result if the 2 are different.
+    system_prompt = f"""
+    You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
+    1) Index data: (INDEX_DATA)
+    2) Python data: (PYTHON_DATA)
+    *) Always Prioritise The python result if the 2 are different.
     
-    # Use only these two sources to answer. If you find relevant info from both, answer using both. 
-    # At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
-    # - "Index" if only index data was used,
-    # - "Python" if only python data was used,
-    # - "Index & Python" if both were used,
-    # - or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
-    # - Present your answer in a clear, readable format.
+    Use only these two sources to answer. If you find relevant info from both, answer using both. 
+    At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
+    - "Index" if only index data was used,
+    - "Python" if only python data was used,
+    - "Index & Python" if both were used,
+    - or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
+    - Present your answer in a clear, readable format.
     
-    # Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
-    # Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
+    Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
+    Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
     
-    # User question:
-    # {user_question}
+    User question:
+    {user_question}
     
-    # INDEX_DATA:
-    # {index_top_k}
+    INDEX_DATA:
+    {index_top_k}
     
-    # PYTHON_DATA:
-    # {python_result}
+    PYTHON_DATA:
+    {python_result}
     
-    # Chat_history:
-    # {recent_history if recent_history else []}
-    # """
+    Chat_history:
+    {recent_history if recent_history else []}
+    """
 
     try:
         final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
