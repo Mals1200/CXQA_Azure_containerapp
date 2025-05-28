@@ -107,6 +107,9 @@ CONFIG = {
     # ── MAIN, high-capacity model (Tool-1 Index, Tool-2 Python, Tool-3 Fallback) ──
     "LLM_ENDPOINT"     : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
                          "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
+    # Add CODE LLM endpoint (same as main)
+    "LLM_ENDPOINT_CODE": "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
+                         "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
 
     # same key used for both deployments
     "LLM_API_KEY"      : "5EgVev7KCYaO758NWn5yL7f2iyrS4U3FaSI5lQhTx7RlePQ7QMESJQQJ99AKACHYHv6XJ3w3AAAAACOGoSfb",
@@ -114,10 +117,6 @@ CONFIG = {
     # ── AUXILIARY model (classifiers, splitters, etc.) ────────────────────────────
     "LLM_ENDPOINT_AUX" : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
                          "openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview",
-
-    # 1) Add CODE LLM endpoint (same as main LLM)
-    "LLM_ENDPOINT_CODE": "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
-                         "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
 
     # (unchanged settings below) ───────────────────────────────────────────────────
     "SEARCH_SERVICE_NAME": "cxqa-azureai-search",
@@ -1585,8 +1584,8 @@ def Ask_Question(question, user_id="anonymous"):
 
         # Add user question to chat history
         chat_history.append(f"User: {question}")
-        # 2) Use last 6 elements for recent_history
         recent_history = chat_history[-6:] if len(chat_history) >= 6 else chat_history.copy()
+
         answer_collected = ""
         try:
             for token in agent_answer(question, user_tier=user_tier, recent_history=recent_history):
@@ -1597,40 +1596,36 @@ def Ask_Question(question, user_id="anonymous"):
             logging.error(err_msg)
             yield f"\n\n{err_msg}"
             return
+
         chat_history.append(f"Assistant: {answer_collected}")
-        # 2) Use last 6 elements for recent_history
         recent_history = chat_history[-6:] if len(chat_history) >= 6 else chat_history.copy()
-        # 3) Truncate chat_history to 2000 characters (answers only, preserve list separation)
-        def truncate_chat_history(history, max_answer_chars=2000):
-            # Separate questions and answers
-            questions = [x for x in history if x.startswith("User:")]
-            answers = [x for x in history if x.startswith("Assistant:")]
-            # Truncate answers from the end until total chars <= max_answer_chars
-            total = 0
-            kept_answers = []
-            for ans in reversed(answers):
-                if total + len(ans) <= max_answer_chars:
-                    kept_answers.insert(0, ans)
-                    total += len(ans)
+
+        # Truncate history
+        # number_of_messages = 10
+        # max_pairs = number_of_messages // 2
+        # max_entries = max_pairs * 2
+        # chat_history = chat_history[-max_entries:]
+        # --- Replace above with answer-based truncation ---
+        # Only answers (Assistant:) count toward 2000 char limit, but keep Q/A pairs
+        total_chars = 0
+        new_history = []
+        # Go backwards, keep all questions, and only as many answers as fit
+        for entry in reversed(chat_history):
+            if entry.startswith("Assistant: "):
+                ans = entry[len("Assistant: "):]
+                if total_chars + len(ans) <= 2000:
+                    new_history.insert(0, entry)
+                    total_chars += len(ans)
                 else:
-                    # If adding this answer would exceed, try to trim it
-                    remaining = max_answer_chars - total
+                    # Truncate this answer if possible
+                    remaining = 2000 - total_chars
                     if remaining > 0:
-                        kept_answers.insert(0, ans[:remaining])
-                        total += remaining
+                        new_history.insert(0, "Assistant: " + ans[:remaining])
+                        total_chars += remaining
                     break
-            # Now, reconstruct the history, keeping all questions and only the kept answers
-            new_history = []
-            q_idx, a_idx = 0, 0
-            for entry in history:
-                if entry.startswith("User:"):
-                    new_history.append(entry)
-                    q_idx += 1
-                elif entry.startswith("Assistant:") and a_idx < len(kept_answers):
-                    new_history.append(kept_answers[a_idx])
-                    a_idx += 1
-            return new_history
-        chat_history = truncate_chat_history(chat_history, max_answer_chars=2000)
+            else:
+                new_history.insert(0, entry)
+        chat_history = new_history
 
         # Log Interaction
         cache_key = question_lower
@@ -1657,4 +1652,3 @@ def Ask_Question(question, user_id="anonymous"):
         yield error_msg
         logging.error(error_msg)
         yield error_msg
-
