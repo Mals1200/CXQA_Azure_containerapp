@@ -354,8 +354,15 @@ async def _bot_logic(turn_context: TurnContext):
             return
                 
         except (json.JSONDecodeError, KeyError, TypeError):
-            # Not JSON or not in our expected format, fall back to the regular processing
-            pass
+            # Send the error message as a response
+            error_message = (
+                f"**Sorry, there was a problem processing your answer:**\n\n"
+                f"> {user_message}\n\n"
+                f"**Error details:** {str(e)}"
+            )
+            print(f"[ERROR] {error_message}")
+            await turn_context.send_activity(Activity(type="message", text=error_message))
+            return
             
         # If we're here, the response wasn't valid JSON, so process normally
         if match:
@@ -470,8 +477,14 @@ async def _bot_logic(turn_context: TurnContext):
             await turn_context.send_activity(Activity(type="message", text=main_answer))
 
     except Exception as e:
-        error_message = f"An error occurred while processing your request: {str(e)}"
-        print(f"Error in bot logic: {e}")
+        # Compose a friendly answer showing the user's question and the error.
+        error_message = (
+            f"**Sorry, something went wrong with your question:**\n\n"
+            f"> {user_message}\n\n"
+            f"**Error:** {str(e)}"
+        )
+        print(f"[ERROR] {error_message}")
+        # Always send this to Teams as a simple markdown message
         await turn_context.send_activity(Activity(type="message", text=error_message))
 
 if __name__ == "__main__":
