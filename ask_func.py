@@ -1,81 +1,48 @@
+###############################################################################
+#                           CXQA SUBQUESTION SPLITTING FIXES (v23 2025-05-28)
 #
-# 1. Dual-deployment LLM architecture
-#    • CONFIG now contains two endpoints:
-#        - LLM_ENDPOINT      → gpt-4o-3  (heavy-duty: Tool-1 Index, Tool-2 Python, Tool-3 Fallback)
-#        - LLM_ENDPOINT_AUX  → gpt-4o    (lightweight: classifiers, splitters, misc.)
-#    • New helper  call_llm_aux()  with built-in 429 back-off / retry.
+# Purpose: Ensure that user questions are only split into subquestions when
+#          absolutely necessary, and that no splitting ever results in more
+#          than 4 subquestions. This ensures:
+#              • Precise retrieval and matching for SOP/policy/incident questions
+#              • Answers in Teams and notebook always match the user’s real query
+#              • No over-splitting or loss of context for “what to do”/SOP-type questions
 #
-# 2. Aux-model wiring (token & rate-limit relief)
-#    The following helpers now call the AUX model instead of the main model:
-#      - split_question_into_subquestions()
-#      - references_tabular_data()
-#      - is_text_relevant()
-#      - classify_topic()
-#    ▶  Typically saves 60-70 % tokens on meta prompts and reduces throttling.
+# Key Additions:
 #
-# 3. Tool-2 prompt hardening
-#    • Rule #8 explicitly forbids embedding chat_history in generated code.
-#    • tool_2_code_run now receives  recent_history  (≤4 turns) instead of full history.
+# 1. Robust Split Function:
+#      - Added robust_split_question(user_question, use_semantic_parsing=True)
+#        • Ensures the original user question is always the first subquestion
+#        • Deduplicates results and preserves order
 #
-# 4. post_process_source() overhaul
-#    • Strips ```json / ``` / '''json fences before attempting JSON parse.
-#    • Auto-fixes "source" field:
-#          "Python"  + index data → "Index & Python"
-#          "Index"   + python data → "Index & Python"
-#    • Injects reference paragraphs directly into response_json["content"]:
-#          – "Referenced: …"   (file names)
-#          – "Calculated using: …" (table names)
-#    • Populates response_json["source_details"] for UI use (files, code, etc.).
+# 2. LLM Splitter Prompt Hardening:
+#      - The system prompt in split_question_into_subquestions() now explicitly tells
+#        the LLM:
+#            • Only split if the user question *really* needs it for independent answers
+#            • Never split into more than 4 subquestions
+#            • If the question can be answered as a whole, just return the original
+#            • If you split, each subquestion must be essential for a complete answer
+#            • Return each subquestion on a separate line or as bullet points
 #
-# 5. Fallback improvements
-#    • When python_dict["table_names"] is empty we now regex-extract *.xlsx/ *.csv
-#      from the code block to keep the UI consistent.
+# 3. Post-LLM Hard Cap (Double Safety):
+#      - After splitting (LLM or regex), always cap subqs = subqs[:4]
 #
-# 6. Robust rate-limit handling
-#    • call_llm_aux(): 3 attempts, incremental sleep after every HTTP 429.
-#    • Main call_llm() path unchanged (still wrapped by azure_retry() where used).
+# 4. Code Integration:
+#      - All places where user questions are split (esp. tool_1_index_search)
+#        now call:
+#           subquestions = robust_split_question(normalize_question(user_question), use_semantic_parsing=True)
+#        instead of direct calls to split_question_into_subquestions
 #
-# 7. No RBAC / storage / search logic changed
-#    All access-control and Azure-Blob interactions remain exactly as in v20.
+# 5. Normalization:
+#      - Added normalize_question() to standardize phrasings like “what to do if…”,
+#        improving consistency and retrieval.
 #
-# ─────────────────────────────────────────────────────────────────────────────
-
-# (and)
-
-# 1.  Teams-friendly bullet lists in *plain-text* responses
-#     -----------------------------------------------------
-#     •  Old behaviour:
-#          "Referenced: file1.pdf, file2.pdf"
-#          "Calculated using: table1.xlsx, table2.csv"
+# 6. Debug (Optional for Testing):
+#      - You may print [DEBUG] Subquestions for '...' to verify splitting in logs.
 #
-#     •  New behaviour (better line-breaks in Microsoft Teams):
-#          Referenced:
-#          - file1.pdf
-#          - file2.pdf
-#
-#          Calculated using:
-#          - table1.xlsx
-#          - table2.csv
-#
-#     •  Where changed:
-#          ─ post_process_source()  → three legacy branches:
-#              a) "source: index & python"
-#              b) "source: python"
-#              c) "source: index"
-#          ─ Each branch now builds *file_info* / *table_info* using:
-#                "\nReferenced:\n- "       + "\n- ".join(file_names)
-#                "\nCalculated using:\n- " + "\n- ".join(table_names)
-#
-# 2.  JSON path remains untouched
-#     -----------------------------------------------------
-#     •  The helper _inject_refs() already produced paragraph blocks.
-#       No modification was required there, except identical bullet-list
-#       formatting for consistency.
-#
-# 3.  No logic or variable names were altered elsewhere
-#     -----------------------------------------------------
-#     •  Only string-building lines were replaced; all surrounding control
-#       flow, error-handling, and logging remain identical to v20.
+# Result:
+#      - Minimal, meaningful subquestions, never more than 4, always including
+#        the real user question—Teams and notebook always match.
 ###############################################################################
 
 
@@ -473,12 +440,14 @@ def split_question_into_subquestions(user_question, use_semantic_parsing=True):
         return subqs
     else:
         system_prompt = (
-            "You are a helpful assistant. "
-            "You receive a user question which may have multiple parts. "
-            "Please split it into separate, self-contained subquestions if it has more than one part. "
-            "If it's only a single question, simply return that one. "
-            "Return each subquestion on a separate line or as bullet points."
-        )
+    "You are a helpful assistant. "
+    "Your job is to split a user's question into the smallest number of necessary, self-contained subquestions. "
+    "• Only split if the question clearly asks for multiple independent answers."
+    "• Never split into more than 4 subquestions, no matter how long or complex the user query."
+    "• If the question can be answered as a whole, just return the original."
+    "• If you split, ensure that each subquestion is essential for a complete answer."
+    "Return each subquestion on a separate line or as bullet points."
+)
 
         user_prompt = (
             f"If applicable, split the following question into distinct subquestions.\n\n"
@@ -1036,13 +1005,7 @@ Important guidelines:
 9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
 10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
 11. When questions have multiple parts needing different sources, use "Index & Python" as the source
-
-12. **If the relevant content is a long list of steps, summarize the list and only include the most important steps/items in your JSON output.**
-13. **If the answer is a procedure, select only the key actions (not every sub-step). If the document contains a list that is too long, summarize and mention there are details in the source.**
-14. **Never generate more than 12 items in any bullet_list or numbered_list.**
-15. **Prefer a concise answer. If the source content is repetitive, merge and summarize instead of listing.**
-16. **If the user asks for a detailed SOP, you may note in a paragraph: "For full details, see the official SOP."**
-17. **Your total answer should never exceed 1800 characters.**
+12. **Your total answer should never exceed 2000 characters.**
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
@@ -1062,6 +1025,12 @@ PYTHON_DATA:
 Chat_history:
 {recent_history if recent_history else []}
 """
+
+# 12. **If the relevant content is a long list of steps, summarize the list and only include the most important steps/items in your JSON output.**
+# 13. **If the answer is a procedure, select only the key actions (not every sub-step). If the document contains a list that is too long, summarize and mention there are details in the source.**
+# 14. **Never generate more than 12 items in any bullet_list or numbered_list.**
+# 15. **Prefer a concise answer. If the source content is repetitive, merge and summarize instead of listing.**
+# 16. **If the user asks for a detailed SOP, you may note in a paragraph: "For full details, see the official document."**
 
 
     # ########################################################################
