@@ -21,7 +21,6 @@
 #
 # These changes make the assistant faster, more efficient, and easier to maintain.
 # =====================================================================================
-
 import os
 import io
 import re
@@ -1211,8 +1210,17 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
             final_text = prefix + file_info + suffix
         pass
 
-    return final_text
+    # ---------- legacy fallback: always output JSON ----------
 
+    # If the answer was not valid JSON, fallback to a JSON structure for Teams.
+    return json.dumps({
+        "content": [
+            {"type": "heading", "text": user_question or "Answer"},
+            {"type": "paragraph", "text": final_text}
+        ],
+        "source": "AI Generated",
+        "source_details": {}
+    })
 
 #######################################################################################
 #                           CLASSIFY TOPIC
