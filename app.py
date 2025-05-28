@@ -24,6 +24,7 @@ MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
 
+# Thread-safe conversation state management
 conversation_states = {}
 state_lock = Lock()
 
@@ -38,10 +39,11 @@ def get_conversation_state(conversation_id):
         return conversation_states[conversation_id]
 
 def cleanup_old_states():
+    """Clean up conversation states older than 24 hours"""
     with state_lock:
         current_time = asyncio.get_event_loop().time()
         for conv_id, state in list(conversation_states.items()):
-            if state['last_activity'] and (current_time - state['last_activity']) > 86400:
+            if state['last_activity'] and (current_time - state['last_activity']) > 86400:  # 24 hours
                 del conversation_states[conv_id]
 
 @app.route("/", methods=["GET"])
@@ -70,42 +72,65 @@ async def _bot_logic(turn_context: TurnContext):
     state = get_conversation_state(conversation_id)
     state['last_activity'] = asyncio.get_event_loop().time()
     
-    if len(conversation_states) > 100:
+    # Clean up old states periodically
+    if len(conversation_states) > 100:  # Only clean up if we have many states
         cleanup_old_states()
 
+    # Set the conversation state for this request
     import ask_func
     ask_func.chat_history = state['history']
     ask_func.tool_cache = state['cache']
 
     user_message = turn_context.activity.text or ""
 
-    user_id = "anonymous"
+    # --------------------------------------------------------------------
+    # Use 'TeamsInfo.get_member' to get userPrincipalName or email
+    # --------------------------------------------------------------------
+    user_id = "anonymous"  # fallback
     try:
+        # 'from_property.id' usually holds the "29:..." Teams user ID
         teams_user_id = turn_context.activity.from_property.id
+
+        # This call will attempt to fetch the user's profile from Teams
         teams_member = await TeamsInfo.get_member(turn_context, teams_user_id)
+        # If successful, you can read these fields:
+        #   teams_member.user_principal_name (often the email/UPN)
+        #   teams_member.email
+        #   teams_member.name
+        #   teams_member.id
         if teams_member and teams_member.user_principal_name:
             user_id = teams_member.user_principal_name
         elif teams_member and teams_member.email:
             user_id = teams_member.email
         else:
-            user_id = teams_user_id
+            user_id = teams_user_id  # fallback if we can't get an email
+
     except Exception as e:
+        # If get_member call fails (e.g., in a group chat scenario or permission issues),
+        # just fallback to the "29:..." ID or 'anonymous'
         user_id = turn_context.activity.from_property.id or "anonymous"
 
+    # Show "thinking" indicator
     typing_activity = Activity(type="typing")
     await turn_context.send_activity(typing_activity)
 
     try:
+        # Process the message
         ans_gen = Ask_Question(user_message, user_id=user_id)
         answer_text = "".join(ans_gen)
+        answer_text = answer_text[:1900]  # <--- Truncate for safety
 
+        # Update state
         state['history'] = ask_func.chat_history
         state['cache'] = ask_func.tool_cache
 
+        # Parse and format the response
         source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
         match = re.search(source_pattern, answer_text, flags=re.DOTALL)
 
+        # Try to parse the response as JSON first
         try:
+            # Remove code block markers if present
             cleaned_answer_text = answer_text.strip()
             if cleaned_answer_text.startswith('```json'):
                 cleaned_answer_text = cleaned_answer_text[7:].strip()
@@ -113,26 +138,15 @@ async def _bot_logic(turn_context: TurnContext):
                 cleaned_answer_text = cleaned_answer_text[3:].strip()
             if cleaned_answer_text.endswith('```'):
                 cleaned_answer_text = cleaned_answer_text[:-3].strip()
-            # No \n escaping! JSON must have real newlines.
+            # Fix: Replace real newlines with escaped newlines to allow JSON parsing
+            # This is necessary because the LLM may output real newlines inside string values, which is invalid in JSON
+            cleaned_answer_text = cleaned_answer_text.replace('\n', '\\n')
             response_json = json.loads(cleaned_answer_text)
-
-            # Safety logic - truncate all lists, cap card block count!
-            MAX_LIST_ITEMS = 5
-            MAX_CARD_BLOCKS = 30
-
+            # Check if this is our expected JSON format with content and source
             if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
+                # We have a structured JSON response!
                 content_items = response_json["content"]
                 source = response_json["source"]
-
-                # Truncate lists in-place
-                for item in content_items:
-                    if item.get("type") in ("bullet_list", "numbered_list"):
-                        items = item.get("items", [])
-                        if len(items) > MAX_LIST_ITEMS:
-                            item["items"] = items[:MAX_LIST_ITEMS] + [
-                                f"...and {len(items) - MAX_LIST_ITEMS} more steps. See SOP for full details."
-                            ]
-
                 # Build the adaptive card body
                 body_blocks = []
                 for item in content_items:
@@ -156,7 +170,8 @@ async def _bot_logic(turn_context: TurnContext):
                                 "spacing": "Small"
                             })
                     elif item_type == "bullet_list":
-                        for list_item in item.get("items", []):
+                        items = item.get("items", [])
+                        for list_item in items:
                             body_blocks.append({
                                 "type": "TextBlock",
                                 "text": f"• {list_item}",
@@ -164,7 +179,8 @@ async def _bot_logic(turn_context: TurnContext):
                                 "spacing": "Small"
                             })
                     elif item_type == "numbered_list":
-                        for i, list_item in enumerate(item.get("items", []), 1):
+                        items = item.get("items", [])
+                        for i, list_item in enumerate(items, 1):
                             body_blocks.append({
                                 "type": "TextBlock",
                                 "text": f"{i}. {list_item}",
@@ -179,7 +195,6 @@ async def _bot_logic(turn_context: TurnContext):
                             "fontType": "Monospace",
                             "spacing": "Medium"
                         })
-                # Source/Show/Hide buttons (unchanged)
                 source_container = {
                     "type": "Container",
                     "id": "sourceContainer",
@@ -187,7 +202,7 @@ async def _bot_logic(turn_context: TurnContext):
                     "style": "emphasis",
                     "bleed": True,
                     "maxHeight": "500px",
-                    "isScrollable": True,
+                    "isScrollable": True, 
                     "items": []
                 }
                 for item in content_items:
@@ -270,13 +285,6 @@ async def _bot_logic(turn_context: TurnContext):
                         }
                     ]
                 })
-
-                # FINAL BLOCK GUARD! If too many blocks, fallback to text only
-                if len(body_blocks) > MAX_CARD_BLOCKS:
-                    await turn_context.send_activity(Activity(type="message", text="DEBUG: Card too large, showing only plain text."))
-                    await turn_context.send_activity(Activity(type="message", text=answer_text[:2000]))
-                    return
-
                 adaptive_card = {
                     "type": "AdaptiveCard",
                     "body": body_blocks,
@@ -292,13 +300,9 @@ async def _bot_logic(turn_context: TurnContext):
                 )
                 await turn_context.send_activity(message)
                 return
-
-        except (json.JSONDecodeError, KeyError, TypeError) as e:
-            await turn_context.send_activity(Activity(type="message", text=f"DEBUG: JSON/card error: {e}\nShowing plain text answer."))
-            await turn_context.send_activity(Activity(type="message", text=answer_text[:2000]))
-            return
-
-        # If not JSON, fallback to main answer/source
+        except (json.JSONDecodeError, KeyError, TypeError):
+            pass
+            
         if match:
             main_answer = match.group(1).strip()
             source_line = match.group(2).strip()
@@ -381,12 +385,6 @@ async def _bot_logic(turn_context: TurnContext):
                     ]
                 })
 
-            # Block guard for plain answers too
-            if len(body_blocks) > MAX_CARD_BLOCKS:
-                await turn_context.send_activity(Activity(type="message", text="DEBUG: Card too large (plain), showing only plain text."))
-                await turn_context.send_activity(Activity(type="message", text=answer_text[:2000]))
-                return
-
             adaptive_card = {
                 "type": "AdaptiveCard",
                 "body": body_blocks,
@@ -402,7 +400,7 @@ async def _bot_logic(turn_context: TurnContext):
             )
             await turn_context.send_activity(message)
         else:
-            await turn_context.send_activity(Activity(type="message", text=main_answer[:2000]))
+            await turn_context.send_activity(Activity(type="message", text=main_answer))
 
     except Exception as e:
         error_message = f"An error occurred while processing your request: {str(e)}"
