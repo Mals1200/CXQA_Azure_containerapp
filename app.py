@@ -233,6 +233,7 @@ async def _bot_logic(turn_context: TurnContext):
                         "wrap": True,
                         "spacing": "Small"
                     })
+            # If file_names is empty, optionally show a message or just skip
             if table_names:
                 source_container["items"].append({
                     "type": "TextBlock",
@@ -250,7 +251,7 @@ async def _bot_logic(turn_context: TurnContext):
                         "wrap": True,
                         "spacing": "Small"
                     })
-            # Always add the source line at the bottom of the container
+            # Always add the source line at the bottom of the container, even if no files/tables
             source_container["items"].append({
                 "type": "TextBlock",
                 "text": f"Source: {source}",
@@ -306,6 +307,10 @@ async def _bot_logic(turn_context: TurnContext):
                 "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                 "version": "1.5"
             }
+            import pprint
+            print("\n==== ADAPTIVE CARD PAYLOAD ====")
+            pprint.pprint(adaptive_card)
+            print("================================\n")
             message = Activity(
                 type="message",
                 attachments=[{
