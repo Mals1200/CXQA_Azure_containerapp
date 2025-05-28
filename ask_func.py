@@ -1,26 +1,84 @@
-# =====================================================================================
-# CXQA Assistant - Recent Additions (Performance & Usability Improvements)
-# =====================================================================================
 #
-# 1. Persistent HTTP Session for API Calls
-#    - A single requests.Session() is used for all LLM API calls, reducing connection overhead
-#      and making API requests faster and more efficient.
+# 1. Dual-deployment LLM architecture
+#    • CONFIG now contains two endpoints:
+#        - LLM_ENDPOINT      → gpt-4o-3  (heavy-duty: Tool-1 Index, Tool-2 Python, Tool-3 Fallback)
+#        - LLM_ENDPOINT_AUX  → gpt-4o    (lightweight: classifiers, splitters, misc.)
+#    • New helper  call_llm_aux()  with built-in 429 back-off / retry.
 #
-# 2. Parallel Execution of Index and Python Tools
-#    - When both the index search (Tool 1) and Python code execution (Tool 2) are needed,
-#      they are run in parallel using ThreadPoolExecutor. This reduces total wait time for users.
+# 2. Aux-model wiring (token & rate-limit relief)
+#    The following helpers now call the AUX model instead of the main model:
+#      - split_question_into_subquestions()
+#      - references_tabular_data()
+#      - is_text_relevant()
+#      - classify_topic()
+#    ▶  Typically saves 60-70 % tokens on meta prompts and reduces throttling.
 #
-# 3. Lazy Loading and Caching of DataFrames
-#    - Only the specific data files referenced in the generated Python code are downloaded and loaded.
-#    - Once a file is loaded, it is stored in a global cache (_dataframe_cache) for reuse in the session.
-#    - This avoids unnecessary downloads and speeds up repeated queries involving the same data.
+# 3. Tool-2 prompt hardening
+#    • Rule #8 explicitly forbids embedding chat_history in generated code.
+#    • tool_2_code_run now receives  recent_history  (≤4 turns) instead of full history.
 #
-# 4. Removal of Timing Print Statements
-#    - All timing/debug print statements have been removed for production use.
-#    - The code remains optimized, but now runs quietly for end users.
+# 4. post_process_source() overhaul
+#    • Strips ```json / ``` / '''json fences before attempting JSON parse.
+#    • Auto-fixes "source" field:
+#          "Python"  + index data → "Index & Python"
+#          "Index"   + python data → "Index & Python"
+#    • Injects reference paragraphs directly into response_json["content"]:
+#          – "Referenced: …"   (file names)
+#          – "Calculated using: …" (table names)
+#    • Populates response_json["source_details"] for UI use (files, code, etc.).
 #
-# These changes make the assistant faster, more efficient, and easier to maintain.
-# =====================================================================================
+# 5. Fallback improvements
+#    • When python_dict["table_names"] is empty we now regex-extract *.xlsx/ *.csv
+#      from the code block to keep the UI consistent.
+#
+# 6. Robust rate-limit handling
+#    • call_llm_aux(): 3 attempts, incremental sleep after every HTTP 429.
+#    • Main call_llm() path unchanged (still wrapped by azure_retry() where used).
+#
+# 7. No RBAC / storage / search logic changed
+#    All access-control and Azure-Blob interactions remain exactly as in v20.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+# (and)
+
+# 1.  Teams-friendly bullet lists in *plain-text* responses
+#     -----------------------------------------------------
+#     •  Old behaviour:
+#          "Referenced: file1.pdf, file2.pdf"
+#          "Calculated using: table1.xlsx, table2.csv"
+#
+#     •  New behaviour (better line-breaks in Microsoft Teams):
+#          Referenced:
+#          - file1.pdf
+#          - file2.pdf
+#
+#          Calculated using:
+#          - table1.xlsx
+#          - table2.csv
+#
+#     •  Where changed:
+#          ─ post_process_source()  → three legacy branches:
+#              a) "source: index & python"
+#              b) "source: python"
+#              c) "source: index"
+#          ─ Each branch now builds *file_info* / *table_info* using:
+#                "\nReferenced:\n- "       + "\n- ".join(file_names)
+#                "\nCalculated using:\n- " + "\n- ".join(table_names)
+#
+# 2.  JSON path remains untouched
+#     -----------------------------------------------------
+#     •  The helper _inject_refs() already produced paragraph blocks.
+#       No modification was required there, except identical bullet-list
+#       formatting for consistency.
+#
+# 3.  No logic or variable names were altered elsewhere
+#     -----------------------------------------------------
+#     •  Only string-building lines were replaced; all surrounding control
+#       flow, error-handling, and logging remain identical to v20.
+###############################################################################
+
+
 import os
 import io
 import re
@@ -932,9 +990,9 @@ def final_answer_llm(user_question, index_dict, python_dict):
 You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
 1) Index data: (INDEX_DATA)
 2) Python data: (PYTHON_DATA)
-*) Always Prioritise The python result if the 2 are different.
+*) Always prioritize the Python result if the two are different.
 
-Your output must be formatted as a properly escaped JSON with the following structure:
+Your output must be formatted as a valid JSON string, with this structure:
 {{
   "content": [
     {{
@@ -964,24 +1022,24 @@ Your output must be formatted as a properly escaped JSON with the following stru
   "source": "Source type (Index, Python, Index & Python, or AI Generated)"
 }}
 
+Strict formatting rules:
+- **NEVER exceed 12 blocks** (a block is a heading, paragraph, bullet_list, numbered_list, or code_block).  
+- **If you have more content than fits in 12 blocks, summarize or select the most important information, and finish with a block saying:**  
+  "**Output truncated due to length. Ask for more details if needed.**"
+- **Each bullet/numbered list should have no more than 5 items.**  
+- **Each paragraph or text block should be under 300 characters** (be concise).
+- **No block should contain more than 900 characters** (split into multiple blocks if needed).
+- Use only these valid block types: "heading", "paragraph", "bullet_list", "numbered_list", "code_block".
+
 Important guidelines:
-1. Format your content appropriately based on the answer structure you want to convey limited to 1600 characters in total
-2. Use "heading" for titles and subtitles
-3. Use "paragraph" for normal text blocks
-4. Use "bullet_list" for unordered lists
-5. Use "numbered_list" for ordered/numbered lists
-6. Use "code_block" for any code snippets
-7. Make sure the JSON is valid and properly escaped
-8. Every section must have a "type" and appropriate content fields
-9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
-10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
-11. When questions have multiple parts needing different sources, use "Index & Python" as the source
+1. Format content using the above structure for clarity and Teams compatibility.
+2. If the user asks a two-part question needing both Index and Python data, set source to "Index & Python".
+3. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated".
+4. When questions have multiple parts needing different sources, use "Index & Python" as the source.
+5. If none of the data sources are relevant, indicate that in the first paragraph and set source to "AI Generated".
 
-Use only these two sources to answer. If you find relevant info from both, answer using both. 
-If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
-
-For multi-part questions, organize your response clearly with appropriate headings or sections 
-for each part of the answer. If one part comes from Index and another from Python, use both sources.
+For multi-part questions, organize your response clearly with headings or sections for each part.  
+If you cannot fit all content, include only the most important information, and make it clear content was truncated.
 
 User question:
 {user_question}
@@ -995,6 +1053,7 @@ PYTHON_DATA:
 Chat_history:
 {recent_history if recent_history else []}
 """
+
 
     # ########################################################################
     # # ORIGINAL SYSTEM PROMPT - UNCOMMENT TO USE INSTEAD OF JSON FORMAT
