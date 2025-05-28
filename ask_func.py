@@ -99,6 +99,7 @@ from functools import lru_cache, wraps
 from collections import OrderedDict
 import difflib
 import time
+import unicodedata
 
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
@@ -579,7 +580,7 @@ def is_text_relevant(question, snippet, question_needs_tables_too: bool): # Adde
 #######################################################################################
 # --- Modified tool_1_index_search with detailed logging ---
 @azure_retry()
-def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_tabular: bool = False):
+def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_tabular: bool = False, subqs=None):
     """
     Modified version: uses split_question_into_subquestions to handle multi-part queries.
     Then filters out docs the user has no access to, before final top_k selection.
@@ -592,10 +593,15 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_
     SEMANTIC_CONFIG_NAME = CONFIG["SEMANTIC_CONFIG_NAME"]
     CONTENT_FIELD = CONFIG["CONTENT_FIELD"]
 
-    # --- Added Log ---
-    #print(f"DEBUG: [Tool 1] Entering for question '{user_question[:50]}...'")
+    # PATCH: Use provided subqs if available, else split
+    if subqs is not None:
+        subquestions = subqs
+    else:
+        norm_q = robust_normalize(user_question)
+        subquestions = split_question_into_subquestions(norm_q, use_semantic_parsing=True)
+        if subquestions == [norm_q]:
+            subquestions = split_question_into_subquestions(norm_q, use_semantic_parsing=False)
 
-    subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
     if not subquestions:
         subquestions = [user_question]
     # --- Added Log ---
@@ -1392,17 +1398,13 @@ def Log_Interaction(
 #######################################################################################
 #                         GREETING HANDLING + AGENT ANSWER
 #######################################################################################
-def agent_answer(user_question, user_tier=1, recent_history=None):
+def agent_answer(user_question, user_tier=1, recent_history=None, normalized_question=None):
     if not user_question.strip():
         return
 
-    # is_entirely_greeting_or_punc definition remains the same
     def is_entirely_greeting_or_punc(phrase):
         greet_words = {
-            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "Good morning", "goodevening", "good evening",
-            "assalam", "hayo", "hola", "salam", "alsalam", "alsalamualaikum", "alsalam", "salam", "al salam", "assalamualaikum",
-            "greetings", "howdy", "what's up", "yo", "sup", "namaste", "shalom", "bonjour", "ciao", "konichiwa",
-            "ni hao", "marhaba", "ahlan", "sawubona", "hallo", "salut", "hola amigo", "hey there", "good day"
+            "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "Good morning", "goodevening", "good evening", "assalam", "hayo", "hola", "salam", "alsalam", "alsalamualaikum", "alsalam", "salam", "al salam", "assalamualaikum", "greetings", "howdy", "what's up", "yo", "sup", "namaste", "shalom", "bonjour", "ciao", "konichiwa", "ni hao", "marhaba", "ahlan", "sawubona", "hallo", "salut", "hola amigo", "hey there", "good day"
         }
         tokens = re.findall(r"[A-Za-z]+", phrase.lower())
         if not tokens:
@@ -1413,26 +1415,28 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
         return True
 
     user_question_stripped = user_question.strip()
+    norm_q = robust_normalize(user_question)
     if is_entirely_greeting_or_punc(user_question_stripped):
-        if len(chat_history) < 4: # Assuming chat_history is a global or properly scoped variable
+        if len(chat_history) < 4:
             yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         else:
             yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         return
 
-    cache_key = user_question_stripped.lower()
-    if cache_key in tool_cache: # Assuming tool_cache is a global or properly scoped variable
+    # Use normalized_question if provided, else normalize here
+    cache_key = normalized_question if normalized_question is not None else norm_q
+    if cache_key in tool_cache:
         logging.info(f"Cache hit for question: {user_question_stripped}")
-        yield tool_cache[cache_key][2] 
+        yield tool_cache[cache_key][2]
         return
     logging.info(f"Cache miss for question: {user_question_stripped}")
 
     # This flag is now central
-    question_needs_tables = references_tabular_data(user_question, TABLES) # TABLES needs to be defined globally
+    question_needs_tables = references_tabular_data(user_question, TABLES)
 
     index_dict = {"top_k": "No information", "file_names": []}
     python_dict = {"result": "No information", "code": "", "table_names": []}
-    run_tool_1 = True # Default to running Tool 1
+    run_tool_1 = True
 
     if question_needs_tables:
         logging.info("Question likely needs tabular data. Running Tool 2...")
@@ -1446,7 +1450,7 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
         has_policy_keyword = any(keyword in question_lower for keyword in policy_keywords)
         
         tool_2_succeeded = python_dict.get("result", "").strip().lower() not in ["", "no information"] and \
-                           not python_dict.get("result", "Error").lower().startswith("error") # Check for actual success
+                           not python_dict.get("result", "Error").lower().startswith("error")
 
         if has_calc_keyword and not has_policy_keyword and tool_2_succeeded:
             logging.info("Heuristic: Question is computational and Tool 2 succeeded; SKIPPING Tool 1.")
@@ -1459,8 +1463,17 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
 
     if run_tool_1:
         logging.info("Running Tool 1 (Index Search)...")
-        # Pass the flag to tool_1_index_search
-        index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier, question_primarily_tabular=question_needs_tables)
+        # PATCH: Use normalized question for splitting/search
+        print(f"Raw question: {repr(user_question)}")
+        print(f"Normalized: {repr(norm_q)}")
+        # Instead of: subqs = split_question_into_subquestions(user_question, use_semantic_parsing=True)
+        subqs = split_question_into_subquestions(norm_q, use_semantic_parsing=True)
+        if subqs == [norm_q]:
+            # If semantic split didn't work, try regex fallback
+            subqs = split_question_into_subquestions(norm_q, use_semantic_parsing=False)
+        print(f"Subquestions: {subqs}")
+        # Pass the normalized question and subqs to tool_1_index_search
+        index_dict = tool_1_index_search(norm_q, top_k=5, user_tier=user_tier, question_primarily_tabular=question_needs_tables, subqs=subqs)
     else:
         logging.info("Tool 1 was skipped.")
         # index_dict remains as default {"top_k": "No information", "file_names": []}
@@ -1477,9 +1490,6 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
          })
          yield error_json
          return
-
-    # Consider if clean_text is safe for JSON strings. Usually, it's not.
-    # raw_answer = clean_text(raw_answer) 
 
     try:
         final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict, user_question=user_question)
@@ -1554,10 +1564,12 @@ def Ask_Question(question, user_id="anonymous"):
             )
             return
 
-        question_lower = question.lower().strip()
+        # --- PATCH: Use robust_normalize for cache and logic ---
+        normalized_question = robust_normalize(question)
+        cache_key = normalized_question
 
         # Handle "export" command
-        if question_lower.startswith("export"):
+        if normalized_question.startswith("export"):
             try:
                 from Export_Agent import Call_Export
                 chat_history.append(f"User: {question}")
@@ -1576,7 +1588,7 @@ def Ask_Question(question, user_id="anonymous"):
                 return
 
         # Handle "restart chat" command
-        if question_lower in ("restart", "restart chat", "restartchat", "chat restart", "chatrestart"):
+        if normalized_question in ("restart", "restart chat", "restartchat", "chat restart", "chatrestart"):
             chat_history = []
             tool_cache.clear()
             recent_history = []
@@ -1589,7 +1601,7 @@ def Ask_Question(question, user_id="anonymous"):
 
         answer_collected = ""
         try:
-            for token in agent_answer(question, user_tier=user_tier, recent_history=recent_history):
+            for token in agent_answer(question, user_tier=user_tier, recent_history=recent_history, normalized_question=normalized_question):
                 yield token
                 answer_collected += token
         except Exception as e:
@@ -1629,7 +1641,6 @@ def Ask_Question(question, user_id="anonymous"):
         chat_history = new_history
 
         # Log Interaction
-        cache_key = question_lower
         if cache_key in tool_cache:
             index_dict, python_dict, _ = tool_cache[cache_key]
         else:
@@ -1653,3 +1664,11 @@ def Ask_Question(question, user_id="anonymous"):
         yield error_msg
         logging.error(error_msg)
         yield error_msg
+
+def robust_normalize(q):
+    q = unicodedata.normalize('NFKC', q)
+    q = q.replace("'", "'").replace("'", "'").replace('"', '"').replace('"', '"')
+    q = re.sub(r'\s+', ' ', q)
+    q = q.strip().lower()
+    q = ''.join(c for c in q if not unicodedata.category(c).startswith('C'))  # remove control chars
+    return q
