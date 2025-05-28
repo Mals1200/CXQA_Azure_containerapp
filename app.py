@@ -305,11 +305,33 @@ async def _bot_logic(turn_context: TurnContext):
                     }
                 ]
             })
-            # Debug print for body_blocks before building the card
+            # Enforce a maximum number of blocks for Teams Adaptive Card
+            MAX_BLOCKS = 40
+            if len(body_blocks) > MAX_BLOCKS:
+                body_blocks = body_blocks[:MAX_BLOCKS]
+                body_blocks.append({
+                    "type": "TextBlock",
+                    "text": "**Output truncated due to length. Ask a more specific question for full details.**",
+                    "wrap": True,
+                    "weight": "Bolder",
+                    "color": "Attention",
+                    "spacing": "Medium"
+                })
+            # Always include a heading if none exists
+            if not any(b.get("type") == "TextBlock" and b.get("weight") == "Bolder" for b in body_blocks):
+                body_blocks.insert(0, {
+                    "type": "TextBlock",
+                    "text": user_message,
+                    "weight": "Bolder",
+                    "size": "Large",
+                    "wrap": True,
+                    "spacing": "Medium"
+                })
+            # Debug print for body_blocks and adaptive_card before sending
             import pprint
-            print("\n==== BODY BLOCKS ====")
+            print("\n==== ADAPTIVE CARD PAYLOAD ====")
+            print("Blocks in card:", len(body_blocks))
             pprint.pprint(body_blocks)
-            print("====================\n")
             # Create and send the adaptive card
             adaptive_card = {
                 "type": "AdaptiveCard",
