@@ -1,18 +1,16 @@
 import os
 import asyncio
 from threading import Lock
-import re
-import json
-
 from flask import Flask, request, jsonify, Response
 from botbuilder.core import (
     BotFrameworkAdapter,
     BotFrameworkAdapterSettings,
-    TurnContext
+    TurnContext,
 )
 from botbuilder.schema import Activity
 from botbuilder.core.teams import TeamsInfo
 
+# Import your backend function
 from ask_func import Ask_Question, chat_history
 
 app = Flask(__name__)
@@ -23,6 +21,7 @@ MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
 
+# Thread-safe conversation state management
 conversation_states = {}
 state_lock = Lock()
 
@@ -65,11 +64,14 @@ async def _bot_logic(turn_context: TurnContext):
     conversation_id = turn_context.activity.conversation.id
     state = get_conversation_state(conversation_id)
     state['last_activity'] = asyncio.get_event_loop().time()
+
     if len(conversation_states) > 100:
         cleanup_old_states()
+
     import ask_func
     ask_func.chat_history = state['history']
     ask_func.tool_cache = state['cache']
+
     user_message = turn_context.activity.text or ""
     user_id = "anonymous"
     try:
@@ -81,30 +83,25 @@ async def _bot_logic(turn_context: TurnContext):
             user_id = teams_member.email
         else:
             user_id = teams_user_id
-    except Exception as e:
+    except Exception:
         user_id = turn_context.activity.from_property.id or "anonymous"
 
-    typing_activity = Activity(type="typing")
-    await turn_context.send_activity(typing_activity)
+    # Show thinking indicator
+    await turn_context.send_activity(Activity(type="typing"))
 
     try:
         ans_gen = Ask_Question(user_message, user_id=user_id)
-        answer_text = "".join(ans_gen)
-
-        # Fallback if the answer is empty or just whitespace
-        if not answer_text.strip():
-            answer_text = "**Sorry, I could not generate an answer.**"
-
-        # Always respond as plain text (markdown works in Teams)
-        # Try to parse as JSON and pretty-print if possible, otherwise just send as is
-        try:
-            json_obj = json.loads(answer_text)
-            formatted = "```\n" + json.dumps(json_obj, indent=2, ensure_ascii=False) + "\n```"
-            await turn_context.send_activity(Activity(type="message", text=formatted))
-        except Exception:
-            # Not JSON, just send as plain text
-            await turn_context.send_activity(Activity(type="message", text=answer_text))
-
+        got_output = False
+        for answer_text in ans_gen:
+            got_output = True
+            output = answer_text.strip() if answer_text else ""
+            if not output:
+                output = "**Sorry, I could not generate an answer.**"
+            print(f"[DEBUG] Sending to Teams:\n{output}\n{'='*60}")
+            await turn_context.send_activity(Activity(type="message", text=output))
+        if not got_output:
+            print("[DEBUG] No answer was yielded at all, sending fallback.")
+            await turn_context.send_activity(Activity(type="message", text="**Sorry, there was no answer output at all.**"))
     except Exception as e:
         error_message = (
             f"**Sorry, something went wrong with your question:**\n\n"
