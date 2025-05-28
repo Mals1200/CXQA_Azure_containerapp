@@ -300,6 +300,11 @@ async def _bot_logic(turn_context: TurnContext):
                     }
                 ]
             })
+            # Debug print for body_blocks before building the card
+            import pprint
+            print("\n==== BODY BLOCKS ====")
+            pprint.pprint(body_blocks)
+            print("====================\n")
             # Create and send the adaptive card
             adaptive_card = {
                 "type": "AdaptiveCard",
@@ -307,7 +312,6 @@ async def _bot_logic(turn_context: TurnContext):
                 "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                 "version": "1.5"
             }
-            import pprint
             print("\n==== ADAPTIVE CARD PAYLOAD ====")
             pprint.pprint(adaptive_card)
             print("================================\n")
