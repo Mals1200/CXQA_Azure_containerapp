@@ -595,7 +595,10 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_
     # --- Added Log ---
     #print(f"DEBUG: [Tool 1] Entering for question '{user_question[:50]}...'")
 
-    subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
+    #subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
+    # Optionally, you can normalize here:
+    # subquestions = robust_split_question(normalize_question(user_question), use_semantic_parsing=True)
+    subquestions = robust_split_question(normalize_question(user_question), use_semantic_parsing=True)
     if not subquestions:
         subquestions = [user_question]
     # --- Added Log ---
@@ -1660,3 +1663,29 @@ def Ask_Question(question, user_id="anonymous"):
         yield error_msg
         logging.error(error_msg)
         yield error_msg
+
+# Step 1: Robust subquestion splitting
+
+def robust_split_question(user_question, use_semantic_parsing=True):
+    """
+    Always include the original user question in the subquestions.
+    Deduplicate results and preserve order.
+    """
+    subqs = split_question_into_subquestions(user_question, use_semantic_parsing)
+    # Always insert the original question first if missing
+    if user_question not in subqs:
+        subqs = [user_question] + subqs
+    # Remove duplicates, keep order
+    seen = set()
+    result = []
+    for sq in subqs:
+        if sq not in seen:
+            result.append(sq)
+            seen.add(sq)
+    return result
+
+# Step 3 (optional): Normalization helper
+
+def normalize_question(q):
+    # Expand this with any patterns/phrases common in your user base
+    return q.lower().replace("what to do if there was", "if there was").replace("what to do if", "if")
