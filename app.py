@@ -1,9 +1,5 @@
-# version 11b 
-# ((Hyperlink file names))
-# Made it display the files sources for the compounded questions:
-    # Referenced: <Files>                <-------Hyperlink to sharepoint
-    # Calculated using: <Tables>         <-------Hyperlink to sharepoint
-# still the url is fixed to one file. (NEEDS WORK!)
+# version 11c
+# Max-safe output, always delivers something, truncates if needed.
 
 import os
 import asyncio
@@ -19,7 +15,6 @@ from botbuilder.core import (
     TurnContext
 )
 from botbuilder.schema import Activity
-# *** Important: import TeamsInfo ***
 from botbuilder.core.teams import TeamsInfo
 
 from ask_func import Ask_Question, chat_history
@@ -32,9 +27,21 @@ MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
 
-# Thread-safe conversation state management
 conversation_states = {}
 state_lock = Lock()
+
+# === Teams/Adaptive Card Limits ===
+MAX_TEAMS_MSG_LENGTH = 3900  # ~4k is safe, leave margin for formatting
+MAX_BLOCKS = 40              # Adaptive Card block limit (safe)
+
+def split_message(text, max_len=MAX_TEAMS_MSG_LENGTH):
+    """Splits long strings into Teams-safe chunks."""
+    parts = []
+    while text:
+        part = text[:max_len]
+        parts.append(part)
+        text = text[max_len:]
+    return parts
 
 def get_conversation_state(conversation_id):
     with state_lock:
@@ -47,11 +54,10 @@ def get_conversation_state(conversation_id):
         return conversation_states[conversation_id]
 
 def cleanup_old_states():
-    """Clean up conversation states older than 24 hours"""
     with state_lock:
         current_time = asyncio.get_event_loop().time()
         for conv_id, state in list(conversation_states.items()):
-            if state['last_activity'] and (current_time - state['last_activity']) > 86400:  # 24 hours
+            if state['last_activity'] and (current_time - state['last_activity']) > 86400:
                 del conversation_states[conv_id]
 
 @app.route("/", methods=["GET"])
@@ -79,65 +85,46 @@ async def _bot_logic(turn_context: TurnContext):
     conversation_id = turn_context.activity.conversation.id
     state = get_conversation_state(conversation_id)
     state['last_activity'] = asyncio.get_event_loop().time()
-    
-    # Clean up old states periodically
-    if len(conversation_states) > 100:  # Only clean up if we have many states
+
+    if len(conversation_states) > 100:
         cleanup_old_states()
 
-    # Set the conversation state for this request
+    # Set state for ask_func
     import ask_func
     ask_func.chat_history = state['history']
     ask_func.tool_cache = state['cache']
 
     user_message = turn_context.activity.text or ""
 
-    # --------------------------------------------------------------------
-    # Use 'TeamsInfo.get_member' to get userPrincipalName or email
-    # --------------------------------------------------------------------
-    user_id = "anonymous"  # fallback
+    user_id = "anonymous"
     try:
-        # 'from_property.id' usually holds the "29:..." Teams user ID
         teams_user_id = turn_context.activity.from_property.id
-
-        # This call will attempt to fetch the user's profile from Teams
         teams_member = await TeamsInfo.get_member(turn_context, teams_user_id)
-        # If successful, you can read these fields:
-        #   teams_member.user_principal_name (often the email/UPN)
-        #   teams_member.email
-        #   teams_member.name
-        #   teams_member.id
         if teams_member and teams_member.user_principal_name:
             user_id = teams_member.user_principal_name
         elif teams_member and teams_member.email:
             user_id = teams_member.email
         else:
-            user_id = teams_user_id  # fallback if we can't get an email
-
-    except Exception as e:
-        # If get_member call fails (e.g., in a group chat scenario or permission issues),
-        # just fallback to the "29:..." ID or 'anonymous'
+            user_id = teams_user_id
+    except Exception:
         user_id = turn_context.activity.from_property.id or "anonymous"
 
-    # Show "thinking" indicator
     typing_activity = Activity(type="typing")
     await turn_context.send_activity(typing_activity)
 
     try:
-        # Process the message
         ans_gen = Ask_Question(user_message, user_id=user_id)
         answer_text = "".join(ans_gen)
 
-        # Update state
         state['history'] = ask_func.chat_history
         state['cache'] = ask_func.tool_cache
 
-        # Parse and format the response
-        source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
-        match = re.search(source_pattern, answer_text, flags=re.DOTALL)
+        # Hard cap on giant answers (prevents rare Teams failures)
+        if len(answer_text) > 30000:
+            answer_text = answer_text[:29800] + "\n\n**Output truncated due to Teams/app limits. Please ask a more specific question.**"
 
-        # Try to parse the response as JSON first
+        # Try to parse JSON for Adaptive Card
         try:
-            # Remove code block markers if present
             cleaned_answer_text = answer_text.strip()
             if cleaned_answer_text.startswith('```json'):
                 cleaned_answer_text = cleaned_answer_text[7:].strip()
@@ -146,74 +133,94 @@ async def _bot_logic(turn_context: TurnContext):
             if cleaned_answer_text.endswith('```'):
                 cleaned_answer_text = cleaned_answer_text[:-3].strip()
             response_json = json.loads(cleaned_answer_text)
-            # Check if this is our expected JSON format with content and source
             if not (isinstance(response_json, dict) and "content" in response_json and "source" in response_json):
-                # fallback: send as markdown, don't try to build a card
-                await turn_context.send_activity(Activity(type="message", text=answer_text))
-                return
+                raise Exception("JSON response format not recognized")
             content_items = response_json["content"]
             source = response_json["source"]
             source_details = response_json.get("source_details", {})
             file_names = source_details.get("file_names", []) or []
             table_names = source_details.get("table_names", []) or []
-            # Build the adaptive card body
+
+            # -- Adaptive Card: enforce block and char limits --
             body_blocks = []
+            block_count = 0
+            card_char_count = 0
             for item in content_items:
+                if block_count >= MAX_BLOCKS or card_char_count >= MAX_TEAMS_MSG_LENGTH:
+                    break
                 item_type = item.get("type", "")
+                txt = item.get("text", "")
+                # Each block is ~80 chars for header/paragraph, less for bullets
                 if item_type == "heading":
                     body_blocks.append({
                         "type": "TextBlock",
-                        "text": item.get("text", ""),
+                        "text": txt[:400],  # Safety: cut super-long titles
                         "wrap": True,
                         "weight": "Bolder",
                         "size": "Large",
                         "spacing": "Medium"
                     })
                 elif item_type == "paragraph":
-                    text = item.get("text", "")
-                    # Only add to main body if NOT a referenced/calculated paragraph (case-insensitive)
-                    if not (text.strip().lower().startswith("referenced:") or text.strip().lower().startswith("calculated using:")):
-                        body_blocks.append({
-                            "type": "TextBlock",
-                            "text": text,
-                            "wrap": True,
-                            "spacing": "Small"
-                        })
+                    body_blocks.append({
+                        "type": "TextBlock",
+                        "text": txt[:1200],
+                        "wrap": True,
+                        "spacing": "Small"
+                    })
                 elif item_type == "bullet_list":
                     items = item.get("items", [])
                     for list_item in items:
+                        if block_count >= MAX_BLOCKS or card_char_count >= MAX_TEAMS_MSG_LENGTH:
+                            break
                         body_blocks.append({
                             "type": "TextBlock",
-                            "text": f"• {list_item}",
+                            "text": f"• {list_item}"[:1200],
                             "wrap": True,
                             "spacing": "Small"
                         })
+                        block_count += 1
+                        card_char_count += len(list_item)
                 elif item_type == "numbered_list":
                     items = item.get("items", [])
                     for i, list_item in enumerate(items, 1):
+                        if block_count >= MAX_BLOCKS or card_char_count >= MAX_TEAMS_MSG_LENGTH:
+                            break
                         body_blocks.append({
                             "type": "TextBlock",
-                            "text": f"{i}. {list_item}",
+                            "text": f"{i}. {list_item}"[:1200],
                             "wrap": True,
                             "spacing": "Small"
                         })
+                        block_count += 1
+                        card_char_count += len(list_item)
                 elif item_type == "code_block":
+                    code_text = item.get("code", "")
                     body_blocks.append({
                         "type": "TextBlock",
-                        "text": f"```\n{item.get('code', '')}\n```",
+                        "text": f"```\n{code_text[:2000]}\n```",
                         "wrap": True,
                         "fontType": "Monospace",
                         "spacing": "Medium"
                     })
-            # Create the source section using file_names and table_names from source_details
+                block_count += 1
+                card_char_count += len(txt)
+            # Truncate with a note if needed
+            if block_count >= MAX_BLOCKS or card_char_count >= MAX_TEAMS_MSG_LENGTH:
+                body_blocks.append({
+                    "type": "TextBlock",
+                    "text": "**Output truncated to fit Teams/Adaptive Card limits.**",
+                    "wrap": True,
+                    "weight": "Bolder",
+                    "color": "Attention"
+                })
+
+            # Source section (always visible, not toggled for reliability)
             source_container = {
                 "type": "Container",
-                "id": "sourceContainer",
-                "isVisible": False,
                 "style": "emphasis",
                 "bleed": True,
                 "maxHeight": "500px",
-                "isScrollable": True, 
+                "isScrollable": True,
                 "items": []
             }
             if file_names:
@@ -250,7 +257,6 @@ async def _bot_logic(turn_context: TurnContext):
                         "wrap": True,
                         "spacing": "Small"
                     })
-            # Always add the source line at the bottom of the container
             source_container["items"].append({
                 "type": "TextBlock",
                 "text": f"Source: {source}",
@@ -260,46 +266,7 @@ async def _bot_logic(turn_context: TurnContext):
                 "spacing": "Medium",
             })
             body_blocks.append(source_container)
-            # Add the show/hide source buttons
-            body_blocks.append({
-                "type": "ColumnSet",
-                "columns": [
-                    {
-                        "type": "Column",
-                        "id": "showSourceBtn",
-                        "items": [
-                            {
-                                "type": "ActionSet",
-                                "actions": [
-                                    {
-                                        "type": "Action.ToggleVisibility",
-                                        "title": "Show Source",
-                                        "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        "type": "Column",
-                        "id": "hideSourceBtn",
-                        "isVisible": False,
-                        "items": [
-                            {
-                                "type": "ActionSet",
-                                "actions": [
-                                    {
-                                        "type": "Action.ToggleVisibility",
-                                        "title": "Hide Source",
-                                        "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                ]
-            })
-            # Create and send the adaptive card
+
             adaptive_card = {
                 "type": "AdaptiveCard",
                 "body": body_blocks,
@@ -314,124 +281,17 @@ async def _bot_logic(turn_context: TurnContext):
                 }]
             )
             await turn_context.send_activity(message)
-            # Successfully processed JSON, so return early
             return
-                
-        except (json.JSONDecodeError, KeyError, TypeError):
-            # Not JSON or not in our expected format, fall back to the regular processing
-            pass
-            
-        # If we're here, the response wasn't valid JSON, so process normally
-        if match:
-            main_answer = match.group(1).strip()
-            source_line = match.group(2).strip()
-            appended_details = match.group(3) if match.group(3) else ""
-        else:
-            main_answer = answer_text
-            source_line = ""
-            appended_details = ""
 
-        if source_line:
-            # Create simple text blocks without complex formatting
-            body_blocks = [{
-                "type": "TextBlock",
-                "text": main_answer,
-                "wrap": True
-            }]
-            
-            # Create the collapsible source container
-            if source_line or appended_details:
-                # Create a container that will be toggled
-                source_container = {
-                    "type": "Container",
-                    "id": "sourceContainer",
-                    "isVisible": False,
-                    "style": "emphasis",
-                    "bleed": True,
-                    "maxHeight": "500px",
-                    "isScrollable": True, 
-                    "items": [
-                        {
-                            "type": "TextBlock",
-                            "text": source_line,
-                            "wrap": True,
-                            "weight": "Bolder",
-                            "color": "Accent",
-                            "spacing": "Medium",
-                        }
-                    ]
-                }
-                
-                # Add source details if it exists
-                if appended_details:
-                    source_container["items"].append({
-                        "type": "TextBlock",
-                        "text": appended_details.strip(),
-                        "wrap": True,
-                        "spacing": "Small"
-                    })
-                    
-                body_blocks.append(source_container)
-                
-                body_blocks.append({
-                    "type": "ColumnSet",
-                    "columns": [
-                        {
-                            "type": "Column",
-                            "id": "showSourceBtn",
-                            "items": [
-                                {
-                                    "type": "ActionSet",
-                                    "actions": [
-                                        {
-                                            "type": "Action.ToggleVisibility",
-                                            "title": "Show Source",
-                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                        }
-                                    ]
-                                }
-                            ]
-                        },
-                        {
-                            "type": "Column",
-                            "id": "hideSourceBtn",
-                            "isVisible": False,
-                            "items": [
-                                {
-                                    "type": "ActionSet",
-                                    "actions": [
-                                        {
-                                            "type": "Action.ToggleVisibility",
-                                            "title": "Hide Source",
-                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                        }
-                                    ]
-                                }
-                            ]
-                        }
-                    ]
-                })
-
-
-            adaptive_card = {
-                "type": "AdaptiveCard",
-                "body": body_blocks,
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "version": "1.5"
-            }
-            
-            message = Activity(
-                type="message",
-                attachments=[{
-                    "contentType": "application/vnd.microsoft.card.adaptive",
-                    "content": adaptive_card
-                }]
-            )
-            await turn_context.send_activity(message)
-        else:
-            # For simple responses without source, send formatted markdown directly
-            # Teams supports some markdown in regular messages
-            await turn_context.send_activity(Activity(type="message", text=main_answer))
+        except Exception:
+            # If JSON fails, fallback to plain text and split if needed
+            parts = split_message(answer_text)
+            for i, msg_part in enumerate(parts):
+                footer = ""
+                if i == len(parts) - 1 and len(parts) > 1:
+                    footer = "\n\n**Output truncated to fit Microsoft Teams limits.**"
+                await turn_context.send_activity(Activity(type="message", text=msg_part + footer))
+            return
 
     except Exception as e:
         error_message = f"An error occurred while processing your request: {str(e)}"
