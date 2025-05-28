@@ -1033,13 +1033,7 @@ Important guidelines:
 9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
 10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
 11. When questions have multiple parts needing different sources, use "Index & Python" as the source
-
-12. **If the relevant content is a long list of steps, summarize the list and only include the most important steps/items in your JSON output.**
-13. **If the answer is a procedure, select only the key actions (not every sub-step). If the document contains a list that is too long, summarize and mention there are details in the source.**
-14. **Never generate more than 12 items in any bullet_list or numbered_list.**
-15. **Prefer a concise answer. If the source content is repetitive, merge and summarize instead of listing.**
-16. **If the user asks for a detailed SOP, you may note in a paragraph: "For full details, see the official SOP."**
-17. **Your total answer should never exceed 1000 characters.**
+12. **Your total answer should never exceed 1800 characters.**
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
@@ -1059,7 +1053,6 @@ PYTHON_DATA:
 Chat_history:
 {recent_history if recent_history else []}
 """
-
 
     # ########################################################################
     # # ORIGINAL SYSTEM PROMPT - UNCOMMENT TO USE INSTEAD OF JSON FORMAT
