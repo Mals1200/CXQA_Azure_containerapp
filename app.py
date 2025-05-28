@@ -1,6 +1,3 @@
-# version 11c
-# Max-safe output, always delivers something, truncates if needed.
-
 import os
 import asyncio
 from threading import Lock
@@ -30,19 +27,6 @@ adapter = BotFrameworkAdapter(adapter_settings)
 conversation_states = {}
 state_lock = Lock()
 
-# === Teams/Adaptive Card Limits ===
-MAX_TEAMS_MSG_LENGTH = 3900  # ~4k is safe, leave margin for formatting
-MAX_BLOCKS = 40              # Adaptive Card block limit (safe)
-
-def split_message(text, max_len=MAX_TEAMS_MSG_LENGTH):
-    """Splits long strings into Teams-safe chunks."""
-    parts = []
-    while text:
-        part = text[:max_len]
-        parts.append(part)
-        text = text[max_len:]
-    return parts
-
 def get_conversation_state(conversation_id):
     with state_lock:
         if conversation_id not in conversation_states:
@@ -68,7 +52,6 @@ def home():
 def messages():
     if "application/json" not in request.headers.get("Content-Type", ""):
         return Response(status=415)
-
     body = request.json
     activity = Activity().deserialize(body)
     auth_header = request.headers.get("Authorization", "")
@@ -78,18 +61,15 @@ def messages():
         loop.run_until_complete(adapter.process_activity(activity, auth_header, _bot_logic))
     finally:
         loop.close()
-
     return Response(status=200)
 
 async def _bot_logic(turn_context: TurnContext):
     conversation_id = turn_context.activity.conversation.id
     state = get_conversation_state(conversation_id)
     state['last_activity'] = asyncio.get_event_loop().time()
-
     if len(conversation_states) > 100:
         cleanup_old_states()
 
-    # Set state for ask_func
     import ask_func
     ask_func.chat_history = state['history']
     ask_func.tool_cache = state['cache']
@@ -115,15 +95,12 @@ async def _bot_logic(turn_context: TurnContext):
     try:
         ans_gen = Ask_Question(user_message, user_id=user_id)
         answer_text = "".join(ans_gen)
-
         state['history'] = ask_func.chat_history
         state['cache'] = ask_func.tool_cache
 
-        # Hard cap on giant answers (prevents rare Teams failures)
-        if len(answer_text) > 30000:
-            answer_text = answer_text[:29800] + "\n\n**Output truncated due to Teams/app limits. Please ask a more specific question.**"
+        source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
+        match = re.search(source_pattern, answer_text, flags=re.DOTALL)
 
-        # Try to parse JSON for Adaptive Card
         try:
             cleaned_answer_text = answer_text.strip()
             if cleaned_answer_text.startswith('```json'):
@@ -133,90 +110,114 @@ async def _bot_logic(turn_context: TurnContext):
             if cleaned_answer_text.endswith('```'):
                 cleaned_answer_text = cleaned_answer_text[:-3].strip()
             response_json = json.loads(cleaned_answer_text)
+
             if not (isinstance(response_json, dict) and "content" in response_json and "source" in response_json):
-                raise Exception("JSON response format not recognized")
+                await turn_context.send_activity(Activity(type="message", text=answer_text))
+                return
+
+            # --- Robust block limit and truncation for Teams ---
             content_items = response_json["content"]
             source = response_json["source"]
             source_details = response_json.get("source_details", {})
             file_names = source_details.get("file_names", []) or []
             table_names = source_details.get("table_names", []) or []
 
-            # -- Adaptive Card: enforce block and char limits --
             body_blocks = []
+            MAX_BLOCKS = 20
+            MAX_LIST_ITEMS = 6
+            MAX_TEXT_LENGTH = 700
+
+            def split_long_text(text):
+                parts = []
+                while len(text) > MAX_TEXT_LENGTH:
+                    idx = text.rfind('.', 0, MAX_TEXT_LENGTH)
+                    if idx < 0:
+                        idx = MAX_TEXT_LENGTH
+                    parts.append(text[:idx].strip())
+                    text = text[idx:].strip()
+                if text:
+                    parts.append(text)
+                return parts
+
             block_count = 0
-            card_char_count = 0
             for item in content_items:
-                if block_count >= MAX_BLOCKS or card_char_count >= MAX_TEAMS_MSG_LENGTH:
+                if block_count >= MAX_BLOCKS - 2:  # Reserve space for source and button
                     break
                 item_type = item.get("type", "")
-                txt = item.get("text", "")
-                # Each block is ~80 chars for header/paragraph, less for bullets
                 if item_type == "heading":
                     body_blocks.append({
                         "type": "TextBlock",
-                        "text": txt[:400],  # Safety: cut super-long titles
+                        "text": item.get("text", ""),
                         "wrap": True,
                         "weight": "Bolder",
                         "size": "Large",
                         "spacing": "Medium"
                     })
+                    block_count += 1
                 elif item_type == "paragraph":
-                    body_blocks.append({
-                        "type": "TextBlock",
-                        "text": txt[:1200],
-                        "wrap": True,
-                        "spacing": "Small"
-                    })
+                    for t in split_long_text(item.get("text", "")):
+                        body_blocks.append({
+                            "type": "TextBlock",
+                            "text": t,
+                            "wrap": True,
+                            "spacing": "Small"
+                        })
+                        block_count += 1
+                        if block_count >= MAX_BLOCKS - 2:
+                            break
                 elif item_type == "bullet_list":
-                    items = item.get("items", [])
+                    items = item.get("items", [])[:MAX_LIST_ITEMS]
                     for list_item in items:
-                        if block_count >= MAX_BLOCKS or card_char_count >= MAX_TEAMS_MSG_LENGTH:
-                            break
                         body_blocks.append({
                             "type": "TextBlock",
-                            "text": f"• {list_item}"[:1200],
+                            "text": f"• {list_item}",
                             "wrap": True,
                             "spacing": "Small"
                         })
                         block_count += 1
-                        card_char_count += len(list_item)
+                        if block_count >= MAX_BLOCKS - 2:
+                            break
                 elif item_type == "numbered_list":
-                    items = item.get("items", [])
+                    items = item.get("items", [])[:MAX_LIST_ITEMS]
                     for i, list_item in enumerate(items, 1):
-                        if block_count >= MAX_BLOCKS or card_char_count >= MAX_TEAMS_MSG_LENGTH:
-                            break
                         body_blocks.append({
                             "type": "TextBlock",
-                            "text": f"{i}. {list_item}"[:1200],
+                            "text": f"{i}. {list_item}",
                             "wrap": True,
                             "spacing": "Small"
                         })
                         block_count += 1
-                        card_char_count += len(list_item)
+                        if block_count >= MAX_BLOCKS - 2:
+                            break
                 elif item_type == "code_block":
-                    code_text = item.get("code", "")
-                    body_blocks.append({
-                        "type": "TextBlock",
-                        "text": f"```\n{code_text[:2000]}\n```",
-                        "wrap": True,
-                        "fontType": "Monospace",
-                        "spacing": "Medium"
-                    })
-                block_count += 1
-                card_char_count += len(txt)
-            # Truncate with a note if needed
-            if block_count >= MAX_BLOCKS or card_char_count >= MAX_TEAMS_MSG_LENGTH:
+                    code_txt = item.get('code', '')
+                    for t in split_long_text(code_txt):
+                        body_blocks.append({
+                            "type": "TextBlock",
+                            "text": f"```\n{t}\n```",
+                            "wrap": True,
+                            "fontType": "Monospace",
+                            "spacing": "Medium"
+                        })
+                        block_count += 1
+                        if block_count >= MAX_BLOCKS - 2:
+                            break
+
+            if len(content_items) > MAX_BLOCKS - 2 or block_count >= MAX_BLOCKS - 2:
                 body_blocks.append({
                     "type": "TextBlock",
-                    "text": "**Output truncated to fit Teams/Adaptive Card limits.**",
+                    "text": "**Output truncated due to Teams display limits. Ask for more details if needed.**",
                     "wrap": True,
                     "weight": "Bolder",
-                    "color": "Attention"
+                    "color": "Attention",
+                    "spacing": "Medium"
                 })
 
-            # Source section (always visible, not toggled for reliability)
+            # --- Source section ---
             source_container = {
                 "type": "Container",
+                "id": "sourceContainer",
+                "isVisible": False,
                 "style": "emphasis",
                 "bleed": True,
                 "maxHeight": "500px",
@@ -266,6 +267,44 @@ async def _bot_logic(turn_context: TurnContext):
                 "spacing": "Medium",
             })
             body_blocks.append(source_container)
+            body_blocks.append({
+                "type": "ColumnSet",
+                "columns": [
+                    {
+                        "type": "Column",
+                        "id": "showSourceBtn",
+                        "items": [
+                            {
+                                "type": "ActionSet",
+                                "actions": [
+                                    {
+                                        "type": "Action.ToggleVisibility",
+                                        "title": "Show Source",
+                                        "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "type": "Column",
+                        "id": "hideSourceBtn",
+                        "isVisible": False,
+                        "items": [
+                            {
+                                "type": "ActionSet",
+                                "actions": [
+                                    {
+                                        "type": "Action.ToggleVisibility",
+                                        "title": "Hide Source",
+                                        "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            })
 
             adaptive_card = {
                 "type": "AdaptiveCard",
@@ -283,15 +322,111 @@ async def _bot_logic(turn_context: TurnContext):
             await turn_context.send_activity(message)
             return
 
-        except Exception:
-            # If JSON fails, fallback to plain text and split if needed
-            parts = split_message(answer_text)
-            for i, msg_part in enumerate(parts):
-                footer = ""
-                if i == len(parts) - 1 and len(parts) > 1:
-                    footer = "\n\n**Output truncated to fit Microsoft Teams limits.**"
-                await turn_context.send_activity(Activity(type="message", text=msg_part + footer))
+        except Exception as e:
+            # fallback: regular markdown message with truncation if very long
+            if len(answer_text) > 4000:
+                answer_text = answer_text[:3950] + "\n\n**Output truncated due to Teams message size limit.**"
+            await turn_context.send_activity(Activity(type="message", text=answer_text))
             return
+
+        # If not valid JSON, fallback to markdown as above
+        if match:
+            main_answer = match.group(1).strip()
+            source_line = match.group(2).strip()
+            appended_details = match.group(3) if match.group(3) else ""
+        else:
+            main_answer = answer_text
+            source_line = ""
+            appended_details = ""
+
+        if source_line:
+            blocks = [{
+                "type": "TextBlock",
+                "text": main_answer,
+                "wrap": True
+            }]
+            if source_line or appended_details:
+                source_container = {
+                    "type": "Container",
+                    "id": "sourceContainer",
+                    "isVisible": False,
+                    "style": "emphasis",
+                    "bleed": True,
+                    "maxHeight": "500px",
+                    "isScrollable": True,
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": source_line,
+                            "wrap": True,
+                            "weight": "Bolder",
+                            "color": "Accent",
+                            "spacing": "Medium",
+                        }
+                    ]
+                }
+                if appended_details:
+                    source_container["items"].append({
+                        "type": "TextBlock",
+                        "text": appended_details.strip(),
+                        "wrap": True,
+                        "spacing": "Small"
+                    })
+                blocks.append(source_container)
+                blocks.append({
+                    "type": "ColumnSet",
+                    "columns": [
+                        {
+                            "type": "Column",
+                            "id": "showSourceBtn",
+                            "items": [
+                                {
+                                    "type": "ActionSet",
+                                    "actions": [
+                                        {
+                                            "type": "Action.ToggleVisibility",
+                                            "title": "Show Source",
+                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
+                                        }
+                                    ]
+                                }
+                            ]
+                        },
+                        {
+                            "type": "Column",
+                            "id": "hideSourceBtn",
+                            "isVisible": False,
+                            "items": [
+                                {
+                                    "type": "ActionSet",
+                                    "actions": [
+                                        {
+                                            "type": "Action.ToggleVisibility",
+                                            "title": "Hide Source",
+                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                })
+            adaptive_card = {
+                "type": "AdaptiveCard",
+                "body": blocks,
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "version": "1.5"
+            }
+            message = Activity(
+                type="message",
+                attachments=[{
+                    "contentType": "application/vnd.microsoft.card.adaptive",
+                    "content": adaptive_card
+                }]
+            )
+            await turn_context.send_activity(message)
+        else:
+            await turn_context.send_activity(Activity(type="message", text=main_answer))
 
     except Exception as e:
         error_message = f"An error occurred while processing your request: {str(e)}"
