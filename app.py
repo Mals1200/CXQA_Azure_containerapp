@@ -1,3 +1,10 @@
+# version 11b 
+# ((Hyperlink file names))
+# Made it display the files sources for the compounded questions:
+    # Referenced: <Files>                <-------Hyperlink to sharepoint
+    # Calculated using: <Tables>         <-------Hyperlink to sharepoint
+# still the url is fixed to one file. (NEEDS WORK!)
+
 import os
 import asyncio
 from threading import Lock
@@ -12,6 +19,7 @@ from botbuilder.core import (
     TurnContext
 )
 from botbuilder.schema import Activity
+# *** Important: import TeamsInfo ***
 from botbuilder.core.teams import TeamsInfo
 
 from ask_func import Ask_Question, chat_history
@@ -118,7 +126,6 @@ async def _bot_logic(turn_context: TurnContext):
         # Process the message
         ans_gen = Ask_Question(user_message, user_id=user_id)
         answer_text = "".join(ans_gen)
-        answer_text = answer_text[:1900]  # <--- Truncate for safety
 
         # Update state
         state['history'] = ask_func.chat_history
@@ -149,6 +156,10 @@ async def _bot_logic(turn_context: TurnContext):
                 source = response_json["source"]
                 # Build the adaptive card body
                 body_blocks = []
+                #referenced_paragraphs = []
+                #calculated_paragraphs = []
+                #other_paragraphs = []
+                # Process each content item based on its type
                 for item in content_items:
                     item_type = item.get("type", "")
                     if item_type == "heading":
@@ -162,6 +173,7 @@ async def _bot_logic(turn_context: TurnContext):
                         })
                     elif item_type == "paragraph":
                         text = item.get("text", "")
+                        # Only add to main body if not a reference/calculated paragraph
                         if not (text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:")):
                             body_blocks.append({
                                 "type": "TextBlock",
@@ -195,6 +207,15 @@ async def _bot_logic(turn_context: TurnContext):
                             "fontType": "Monospace",
                             "spacing": "Medium"
                         })
+                # Add all non-source paragraphs to the main body
+                # for text in other_paragraphs:
+                #     body_blocks.append({
+                #         "type": "TextBlock",
+                #         "text": text,
+                #         "wrap": True,
+                #         "spacing": "Small"
+                #     })
+                # Create the source section
                 source_container = {
                     "type": "Container",
                     "id": "sourceContainer",
@@ -205,11 +226,13 @@ async def _bot_logic(turn_context: TurnContext):
                     "isScrollable": True, 
                     "items": []
                 }
+                # Add Referenced/Calculated paragraphs to the collapsible section if present
                 for item in content_items:
                     if item.get("type", "") == "paragraph":
                         text = item.get("text", "")
                         if text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:"):
                             lines = text.split("\n")
+                            # Add the heading ("Referenced:" or "Calculated using:")
                             if lines:
                                 source_container["items"].append({
                                     "type": "TextBlock",
@@ -218,6 +241,7 @@ async def _bot_logic(turn_context: TurnContext):
                                     "spacing": "Small",
                                     "weight": "Bolder"
                                 })
+                            # For each file/table, add a markdown link as a TextBlock
                             for line in lines[1:]:
                                 if line.strip().startswith("-"):
                                     fname = line.strip()[1:].strip()
@@ -232,12 +256,15 @@ async def _bot_logic(turn_context: TurnContext):
                                             "spacing": "Small"
                                         })
                                 else:
+                                    # If not a file line, just add as text
                                     source_container["items"].append({
                                         "type": "TextBlock",
                                         "text": line,
                                         "wrap": True,
                                         "spacing": "Small"
                                     })
+                # Remove file_names/table_names and code/file blocks from the collapsible section
+                # Always add the source line at the bottom of the container
                 source_container["items"].append({
                     "type": "TextBlock",
                     "text": f"Source: {source}",
@@ -247,6 +274,7 @@ async def _bot_logic(turn_context: TurnContext):
                     "spacing": "Medium",
                 })
                 body_blocks.append(source_container)
+                # Add the show/hide source buttons
                 body_blocks.append({
                     "type": "ColumnSet",
                     "columns": [
@@ -285,6 +313,7 @@ async def _bot_logic(turn_context: TurnContext):
                         }
                     ]
                 })
+                # Create and send the adaptive card
                 adaptive_card = {
                     "type": "AdaptiveCard",
                     "body": body_blocks,
@@ -299,10 +328,14 @@ async def _bot_logic(turn_context: TurnContext):
                     }]
                 )
                 await turn_context.send_activity(message)
+                # Successfully processed JSON, so return early
                 return
+                
         except (json.JSONDecodeError, KeyError, TypeError):
+            # Not JSON or not in our expected format, fall back to the regular processing
             pass
             
+        # If we're here, the response wasn't valid JSON, so process normally
         if match:
             main_answer = match.group(1).strip()
             source_line = match.group(2).strip()
@@ -313,12 +346,16 @@ async def _bot_logic(turn_context: TurnContext):
             appended_details = ""
 
         if source_line:
+            # Create simple text blocks without complex formatting
             body_blocks = [{
                 "type": "TextBlock",
                 "text": main_answer,
                 "wrap": True
             }]
+            
+            # Create the collapsible source container
             if source_line or appended_details:
+                # Create a container that will be toggled
                 source_container = {
                     "type": "Container",
                     "id": "sourceContainer",
@@ -338,6 +375,8 @@ async def _bot_logic(turn_context: TurnContext):
                         }
                     ]
                 }
+                
+                # Add source details if it exists
                 if appended_details:
                     source_container["items"].append({
                         "type": "TextBlock",
@@ -345,7 +384,9 @@ async def _bot_logic(turn_context: TurnContext):
                         "wrap": True,
                         "spacing": "Small"
                     })
+                    
                 body_blocks.append(source_container)
+                
                 body_blocks.append({
                     "type": "ColumnSet",
                     "columns": [
@@ -385,12 +426,14 @@ async def _bot_logic(turn_context: TurnContext):
                     ]
                 })
 
+
             adaptive_card = {
                 "type": "AdaptiveCard",
                 "body": body_blocks,
                 "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                 "version": "1.5"
             }
+            
             message = Activity(
                 type="message",
                 attachments=[{
@@ -400,6 +443,8 @@ async def _bot_logic(turn_context: TurnContext):
             )
             await turn_context.send_activity(message)
         else:
+            # For simple responses without source, send formatted markdown directly
+            # Teams supports some markdown in regular messages
             await turn_context.send_activity(Activity(type="message", text=main_answer))
 
     except Exception as e:
