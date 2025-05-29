@@ -1,18 +1,9 @@
 ###############################################################################
-#                           V23C FIXES (v23 2025-05-28)
-# (2025-05-29)
-# stricter splitting rules.
-# Adds more advanced logic and LLM prompt engineering:
-# Includes strong rules for when NOT to split (time periods, conditionals, related concepts).
-# Normalizes questions before splitting.
-# Always includes the original question as the first subquestion.
-# Fallbacks to regex splitting if LLM not used.
-# Adds deduplication and basic semantic validation (length, must-have verbs/nouns).
-# Explicit time/conditional checks (months, "based on", etc.) to prevent false splits.
-# Strict 2-subquestion max from LLM (total 3 including original).
-# Cleans up and normalizes LLM outputs.
-# Special handling for Teams: Ensures you never get an empty list or too many splits.
-# Easily extendable for more patterns or edge cases.
+#                           CXQA SUBQUESTION SPLITTING FIXES (v23c 2025-05-29)
+# limited the json to 2000 characters only and fewer
+# only split to max 3
+# the 3 LLM's Final answering, and tool_2.
+# in tool_2 execution more semantic rules
 ###############################################################################
 
 
@@ -36,6 +27,7 @@ from functools import lru_cache, wraps
 from collections import OrderedDict
 import difflib
 import time
+from datetime import datetime
 
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
@@ -81,6 +73,11 @@ logging.getLogger("azure").setLevel(logging.WARNING)
 chat_history = []
 recent_history = []
 tool_cache = {}
+
+# retrieving todays date
+
+def get_todays_date():
+    return datetime.now().strftime("%d/%m/%Y")
 
 # Add retry decorator for Azure API calls
 def azure_retry(max_attempts=3, delay=2):
@@ -785,11 +782,11 @@ Don't give examples, only provide the actual code. If you can't provide the code
 
 **General Rules**:
 1. Only use columns that actually exist as per the schemas. Do NOT invent columns or table names.
-2. Don't rely on sample rows for data content; the real dataset can have more/different data. Always reference columns as shown in the schemas.
-3. Return pure Python code that can run as-is, including necessary imports (like `import pandas as pd`).
-4. The code must produce a final `print()` statement with the answer. If multiple pieces of information are requested, print them clearly labeled.
-5. If a user references a column/table that does not exist in the schemas, return "404".
-6. Use semantic reasoning to handle synonyms or minor typos for table/column names if they reasonably map to the provided schemas.
+2. Use semantic reasoning to handle synonyms, minor typos or punctuation for table/column names if they reasonably map to the provided schemas.
+3. Don't rely on sample rows for data content; the real dataset can have more/different data. Always reference columns as shown in the schemas.
+4. Return pure Python code that can run as-is, including necessary imports (like `import pandas as pd`).
+5. The code must produce a final `print()` statement with the answer. If multiple pieces of information are requested, print them clearly labeled.
+6. If a user references a column/table that does not exist in the schemas, return "404".
 7. Do not use Chat_history information directly within the generated code logic or print statements, but use it for context if needed to understand the user's question.
 
 **Data Handling Rules for Pandas Code**:
@@ -814,6 +811,9 @@ Dataframes schemas and sample:
 
 Chat_history:
 {rhistory}
+
+Todays date (dd/mm/yyy):
+{get_todays_date()}
 """
 
     code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.7)
@@ -1074,6 +1074,9 @@ PYTHON_DATA:
 
 Chat_history:
 {recent_history if recent_history else []}
+
+Todays date (dd/mm/yyy):
+{get_todays_date()}
 """
 
 # 12. **If the relevant content is a long list of steps, summarize the list and only include the most important steps/items in your JSON output.**
