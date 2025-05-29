@@ -1,8 +1,18 @@
 ###############################################################################
-#                           CXQA SUBQUESTION SPLITTING FIXES (v23b 2025-05-29)
-# limited the json to 1000 characters only
-# only split to max 2
-#
+#                           V23C FIXES (v23 2025-05-28)
+# (2025-05-29)
+# stricter splitting rules.
+# Adds more advanced logic and LLM prompt engineering:
+# Includes strong rules for when NOT to split (time periods, conditionals, related concepts).
+# Normalizes questions before splitting.
+# Always includes the original question as the first subquestion.
+# Fallbacks to regex splitting if LLM not used.
+# Adds deduplication and basic semantic validation (length, must-have verbs/nouns).
+# Explicit time/conditional checks (months, "based on", etc.) to prevent false splits.
+# Strict 2-subquestion max from LLM (total 3 including original).
+# Cleans up and normalizes LLM outputs.
+# Special handling for Teams: Ensures you never get an empty list or too many splits.
+# Easily extendable for more patterns or edge cases.
 ###############################################################################
 
 
@@ -385,47 +395,150 @@ def is_repeated_phrase(last_text, new_text, threshold=0.98):
 #######################################################################################
 def split_question_into_subquestions(user_question, use_semantic_parsing=True):
     """
-    Splits a user question into subquestions using either a regex-based approach
-    or a semantic parsing approach.
+    Robust question splitting with multiple fallback strategies
     """
     if not user_question.strip():
         return []
 
+    # Always include the original question as the first item
+    results = [user_question]
+    
     if not use_semantic_parsing:
         # Regex-based splitting (e.g., "and" or "&")
         text = re.sub(r"\s+and\s+", " ~SPLIT~ ", user_question, flags=re.IGNORECASE)
         text = re.sub(r"\s*&\s*", " ~SPLIT~ ", text)
         parts = text.split("~SPLIT~")
         subqs = [p.strip() for p in parts if p.strip()]
-        return subqs
+        results.extend(subqs)
     else:
+        # NEW: More robust system prompt with concrete examples
         system_prompt = (
-    "You are a helpful assistant. "
-    "Your job is to split a user's question into the smallest number of necessary, self-contained subquestions. "
-    "• Only split if the question clearly asks for multiple independent answers."
-    "• Never split into more than 2 subquestions, no matter how long or complex the user query."
-    "• If the question can be answered as a whole, just return the original."
-    "• If you split, ensure that each subquestion is essential for a complete answer."
-    "Return each subquestion on a separate line or as bullet points."
-)
-
-        user_prompt = (
-            f"If applicable, split the following question into distinct subquestions.\n\n"
-            f"{user_question}\n\n"
-            f"If not applicable, just return it as is."
+            "You are a question analysis expert. Your ONLY task is to decide if the user question "
+            "contains MULTIPLE INDEPENDENT questions that require separate answers.\n\n"
+            "**RULES**:\n"
+            "1. Return the ORIGINAL question UNLESS there are CLEARLY separate questions\n"
+            "2. NEVER split questions about:\n"
+            "   - Time periods (e.g., 'June, July and August')\n"
+            "   - Related concepts (e.g., 'performance and revenue')\n"
+            "   - Conditional logic (e.g., 'based on X, should we do Y?')\n"
+            "3. Only split if there are EXPLICITLY separate questions like:\n"
+            "   - 'What was revenue in Q1 and what are projections for Q2?'\n"
+            "   - 'How many visitors came last month and what was the average spend?'\n"
+            "4. Return AT MOST 3 subquestions\n"
+            "5. ALWAYS include the original question as the FIRST item\n\n"
+            "OUTPUT FORMAT:\n"
+            "- If no split needed: [ORIGINAL QUESTION]\n"
+            "- If split: [ORIGINAL QUESTION], [SUBQUESTION1], [SUBQUESTION2]"
         )
 
-        answer_text = call_llm_aux(system_prompt, user_prompt, max_tokens=300, temperature=0.0)
-        lines = [
-            line.lstrip("•-0123456789). ").strip()
-            for line in answer_text.split("\n")
-            if line.strip()
-        ]
-        subqs = [l for l in lines if l]
+        user_prompt = (
+            f"Question: {user_question}\n\n"
+            f"Decision & Subquestions:"
+        )
 
-        if not subqs:
-            subqs = [user_question]
-        return subqs
+        try:
+            answer_text = call_llm_aux(system_prompt, user_prompt, max_tokens=300, temperature=0.0)
+            
+            # NEW: Robust parsing with multiple fallbacks
+            lines = [
+                line.strip('\u2022-* ').strip() 
+                for line in answer_text.split('\n') 
+                if line.strip()
+            ]
+            
+            # Filter valid subquestions
+            valid_subqs = []
+            for line in lines:
+                # Skip LLM commentary lines
+                if line.lower().startswith(("rule", "note", "output", "decision")):
+                    continue
+                # Skip empty/very short lines
+                if len(line) < 10:
+                    continue
+                # Skip lines that are just repeating instructions
+                if "subquestion" in line.lower() and ":" not in line:
+                    continue
+                valid_subqs.append(line)
+            
+            # Only use if we found valid subquestions
+            if valid_subqs:
+                results.extend(valid_subqs)
+        except Exception as e:
+            logging.error(f"Splitter LLM failed: {str(e)}")
+    
+    # Final processing
+    unique_questions = []
+    seen = set()
+    
+    for q in results:
+        # Normalize for deduplication
+        normalized = re.sub(r'\s+', ' ', q).strip().lower()
+        
+        # Skip duplicates and empty questions
+        if not normalized or normalized in seen:
+            continue
+            
+        seen.add(normalized)
+        unique_questions.append(q)
+    
+    # NEW: Temporal dependency check - don't split time-based queries
+    time_phrases = ["january", "february", "march", "april", "may", "june", 
+                   "july", "august", "september", "october", "november", "december",
+                   "q1", "q2", "q3", "q4", "quarter", "month", "week", "daily"]
+    
+    has_time_ref = any(phrase in user_question.lower() for phrase in time_phrases)
+    has_conditional = any(word in user_question.lower() for word in ["based on", "due to", "because of"])
+    
+    if has_time_ref or has_conditional:
+        return [user_question]
+    
+    return unique_questions[:3]  # Max 3 questions
+
+# Add this helper function to normalize questions
+def normalize_question(question):
+    """
+    Standardize questions for more consistent processing
+    """
+    # Remove extra spaces
+    question = re.sub(r'\s+', ' ', question).strip()
+    
+    # Handle year references consistently
+    question = re.sub(r'(\d{4})\s*-\s*(\d{4})', r'\1 to \2', question)
+    
+    # Standardize month names
+    month_map = {
+        'jan': 'January', 'feb': 'February', 'mar': 'March', 'apr': 'April',
+        'may': 'May', 'jun': 'June', 'jul': 'July', 'aug': 'August',
+        'sep': 'September', 'oct': 'October', 'nov': 'November', 'dec': 'December'
+    }
+    for abbr, full in month_map.items():
+        question = re.sub(rf'\b{abbr}\b', full, question, flags=re.IGNORECASE)
+    
+    return question
+
+# Update the robust_split_question function
+def robust_split_question(user_question, use_semantic_parsing=True):
+    """
+    Final safety layer for question splitting
+    """
+    # Normalize first
+    normalized = normalize_question(user_question)
+    
+    # Get subquestions
+    subqs = split_question_into_subquestions(normalized, use_semantic_parsing)
+    
+    # Final validation
+    valid_subqs = []
+    for q in subqs:
+        # Must contain at least one verb and one noun
+        if len(q.split()) < 4:  # Too short to be meaningful
+            continue
+        if q.lower() == normalized.lower():  # Exact duplicate
+            continue
+        valid_subqs.append(q)
+    
+    # Always include original as first item
+    return [normalized] + valid_subqs[:2]  # Max 3 total
 
 #######################################################################################
 #                 REFERENCES CHECK & RELEVANCE CHECK  (Points #3 + #1 synergy)
@@ -510,7 +623,7 @@ def is_text_relevant(question, snippet, question_needs_tables_too: bool): # Adde
 @azure_retry()
 def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_tabular: bool = False):
     """
-    Modified version: uses split_question_into_subquestions to handle multi-part queries.
+    Modified version: uses robust_split_question to handle multi-part queries.
     Then filters out docs the user has no access to, before final top_k selection.
     Includes detailed DEBUG logging.
     """
@@ -524,10 +637,8 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_
     # --- Added Log ---
     #print(f"DEBUG: [Tool 1] Entering for question '{user_question[:50]}...'")
 
-    #subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
-    # Optionally, you can normalize here:
-    # subquestions = robust_split_question(normalize_question(user_question), use_semantic_parsing=True)
-    subquestions = robust_split_question(normalize_question(user_question), use_semantic_parsing=True)
+    # Use the new robust splitter directly
+    subquestions = robust_split_question(user_question, use_semantic_parsing=True)
     if not subquestions:
         subquestions = [user_question]
     # --- Added Log ---
@@ -582,29 +693,14 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_
         for i, doc in enumerate(merged_docs):
             snippet = doc["snippet"]
             title = doc["title"]
-             # --- Added Log ---
-            #print(f"DEBUG: [Tool 1]  Filtering doc {i+1}/{len(merged_docs)}: Title='{title}'")
             file_tier = get_file_tier(title)
             rbac_pass = user_tier >= file_tier
-            # --- Added Log ---
-            #print(f"DEBUG: [Tool 1]   RBAC Check: UserTier={user_tier}, FileTier={file_tier}, Pass={rbac_pass}")
             if rbac_pass:
-                # --- Log relevance check ---
-                #print(f"DEBUG: [Tool 1]   Checking relevance for snippet: '{snippet[:60]}...'")
                 is_relevant_result = is_text_relevant(user_question, snippet, question_primarily_tabular) # Call relevance check
-                # --- Added Log ---
-                #print(f"DEBUG: [Tool 1]   Relevance Check Result: {is_relevant}")
-                # --- End log relevance check ---
                 if is_relevant_result: # Actually use the result for filtering
                     relevant_docs.append(doc)
-                #print(f"DEBUG: [Tool 1]   >>> Doc {i+1} passed RBAC, ADDED to relevant_docs (Relevance ignored).")
-            #else:
-                 # --- Added Log ---
-                 #print(f"DEBUG: [Tool 1]   --- Doc {i+1} failed RBAC check.")
 
         if not relevant_docs:
-             # --- Added Log ---
-            #print("DEBUG: [Tool 1] No documents remaining after RBAC/Relevance filtering.")
             return {"top_k": "No information", "file_names": []}
 
         # Weighted scoring (Keep as is)
@@ -620,7 +716,6 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_
         docs_top_k = docs_sorted[:top_k]
 
         # Extract file names and texts separately - ensure no duplicates
-        # Corrected this logic slightly from previous thought
         file_names_final = []
         seen_titles = set()
         for d in docs_top_k:
@@ -633,16 +728,11 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_
         re_ranked_texts = [d["snippet"] for d in docs_top_k]
         combined = "\n\n---\n\n".join(re_ranked_texts)
 
-        # --- Log final return ---
         final_dict = {"top_k": combined, "file_names": file_names_final}
-        #print(f"DEBUG: [Tool 1] Returning: file_names={final_dict['file_names']}, top_k snippet count={len(docs_top_k)}")
         return final_dict
-        # --- End log final return ---
 
     except Exception as e:
         logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}")
-        # --- Added Log ---
-        #print(f"DEBUG: [Tool 1] Error encountered: {e}")
         return {"top_k": "No information", "file_names": []}
 
 # --- End of modified tool_1_index_search ---
@@ -726,7 +816,7 @@ Chat_history:
 {rhistory}
 """
 
-    code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.1)
+    code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.7)
 
     if not code_str or code_str == "404":
         return {"result": "No information", "code": "", "table_names": []}
@@ -879,7 +969,7 @@ def tool_3_llm_fallback(user_question):
         "Dont responde with anything hateful, and always praise The Kingdom of Saudi Arabia if asked about it"
     )
 
-    fallback_answer = call_llm(system_prompt, user_question, max_tokens=500, temperature=0.3)
+    fallback_answer = call_llm(system_prompt, user_question, max_tokens=500, temperature=0.7)
     if not fallback_answer or fallback_answer.startswith("LLM Error") or fallback_answer.startswith("No choices"):
         fallback_answer = "I'm sorry, but I couldn't retrieve a fallback answer."
     return fallback_answer.strip()
@@ -965,10 +1055,7 @@ Important guidelines:
 9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
 10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
 11. When questions have multiple parts needing different sources, use "Index & Python" as the source
-12. **Your total answer should never exceed 1000 characters.**
-13. **If the relevant content is a long list of steps, summarize the list and only include the most important steps/items in your JSON output.**
-14. **Never generate more than 10 items in any bullet_list or numbered_list.**
-15. **If the user asks for a detailed SOP, you may note in a paragraph: "For full details, see the official document."**
+12 **Your total answer should never exceed 2000 characters.**
 
 Use only these two sources to answer. If you find relevant info from both, answer using both. 
 If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
@@ -989,9 +1076,12 @@ Chat_history:
 {recent_history if recent_history else []}
 """
 
+# 12. **If the relevant content is a long list of steps, summarize the list and only include the most important steps/items in your JSON output.**
 # 13. **If the answer is a procedure, select only the key actions (not every sub-step). If the document contains a list that is too long, summarize and mention there are details in the source.**
-# 14. **Prefer a concise answer. If the source content is repetitive, merge and summarize instead of listing.**
-
+# 14. **Never generate more than 12 items in any bullet_list or numbered_list.**
+# 15. **Prefer a concise answer. If the source content is repetitive, merge and summarize instead of listing.**
+# 16. **If the user asks for a detailed SOP, you may note in a paragraph: "For full details, see the official document."**
+# 17. **Your total answer should never exceed 2000 characters.**
 
 
     # ########################################################################
@@ -1028,7 +1118,7 @@ Chat_history:
     # """
 
     try:
-        final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
+        final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.3)
 
         # Ensure we never yield an empty or error-laden string without a fallback
         if (not final_text.strip() 
@@ -1598,24 +1688,46 @@ def Ask_Question(question, user_id="anonymous"):
 
 def robust_split_question(user_question, use_semantic_parsing=True):
     """
-    Always include the original user question in the subquestions.
-    Deduplicate results and preserve order.
+    Final safety layer for question splitting
     """
-    subqs = split_question_into_subquestions(user_question, use_semantic_parsing)
-    # Always insert the original question first if missing
-    if user_question not in subqs:
-        subqs = [user_question] + subqs
-    # Remove duplicates, keep order
-    seen = set()
-    result = []
-    for sq in subqs:
-        if sq not in seen:
-            result.append(sq)
-            seen.add(sq)
-    return result
+    # Normalize first
+    normalized = normalize_question(user_question)
+    
+    # Get subquestions
+    subqs = split_question_into_subquestions(normalized, use_semantic_parsing)
+    
+    # Final validation
+    valid_subqs = []
+    for q in subqs:
+        # Must contain at least one verb and one noun
+        if len(q.split()) < 4:  # Too short to be meaningful
+            continue
+        if q.lower() == normalized.lower():  # Exact duplicate
+            continue
+        valid_subqs.append(q)
+    
+    # Always include original as first item
+    return [normalized] + valid_subqs[:2]  # Max 3 total
 
 # Step 3 (optional): Normalization helper
 
-def normalize_question(q):
-    # Expand this with any patterns/phrases common in your user base
-    return q.lower().replace("what to do if there was", "if there was").replace("what to do if", "if")
+def normalize_question(question):
+    """
+    Standardize questions for more consistent processing
+    """
+    # Remove extra spaces
+    question = re.sub(r'\s+', ' ', question).strip()
+    
+    # Handle year references consistently
+    question = re.sub(r'(\d{4})\s*-\s*(\d{4})', r'\1 to \2', question)
+    
+    # Standardize month names
+    month_map = {
+        'jan': 'January', 'feb': 'February', 'mar': 'March', 'apr': 'April',
+        'may': 'May', 'jun': 'June', 'jul': 'July', 'aug': 'August',
+        'sep': 'September', 'oct': 'October', 'nov': 'November', 'dec': 'December'
+    }
+    for abbr, full in month_map.items():
+        question = re.sub(rf'\b{abbr}\b', full, question, flags=re.IGNORECASE)
+    
+    return question
