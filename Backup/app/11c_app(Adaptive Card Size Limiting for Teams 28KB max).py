@@ -1,4 +1,11 @@
-# version 11c
+# version 11c with Adaptive Card Size Limiting for Teams (28KB max)
+# ((Hyperlink file names))
+# Made it display the files sources for the compounded questions:
+#     Referenced: <Files>                <-------Hyperlink to sharepoint
+#     Calculated using: <Tables>         <-------Hyperlink to sharepoint
+# Adaptive Card output is automatically truncated if it exceeds 28KB.
+# If truncated, user gets a simple error card instead of no answer.
+# (still the url is fixed to one file. NEEDS WORK!)
 
 import os
 import asyncio
@@ -14,16 +21,9 @@ from botbuilder.core import (
     TurnContext
 )
 from botbuilder.schema import Activity
-# *** Important: import TeamsInfo ***
 from botbuilder.core.teams import TeamsInfo
 
 from ask_func import Ask_Question, chat_history
-
-sharepoint_links = {
-    "File1.xlsx": "9B3CA3CD-5044-45C7-8A82-0604A1675F46",
-    "File2.xlsx": "3A1BCF12-1234-5678-ABCD-987654321000",
-    # Add more mappings as needed
-}
 
 app = Flask(__name__)
 
@@ -32,6 +32,9 @@ MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 
 adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
+
+# Teams Adaptive Card byte limit (official: 28KB)
+MAX_TEAMS_CARD_BYTES = 28 * 1024  # 28KB
 
 # Thread-safe conversation state management
 conversation_states = {}
@@ -48,11 +51,10 @@ def get_conversation_state(conversation_id):
         return conversation_states[conversation_id]
 
 def cleanup_old_states():
-    """Clean up conversation states older than 24 hours"""
     with state_lock:
         current_time = asyncio.get_event_loop().time()
         for conv_id, state in list(conversation_states.items()):
-            if state['last_activity'] and (current_time - state['last_activity']) > 86400:  # 24 hours
+            if state['last_activity'] and (current_time - state['last_activity']) > 86400:
                 del conversation_states[conv_id]
 
 @app.route("/", methods=["GET"])
@@ -76,75 +78,69 @@ def messages():
 
     return Response(status=200)
 
+def adaptive_card_size_ok(card_dict):
+    # Returns True if JSON serialized card is <= 28KB
+    card_json = json.dumps(card_dict, ensure_ascii=False)
+    return len(card_json.encode("utf-8")) <= MAX_TEAMS_CARD_BYTES
+
+def make_fallback_card():
+    return {
+        "type": "AdaptiveCard",
+        "body": [
+            {
+                "type": "TextBlock",
+                "text": (
+                    "Sorry, the answer is too large to display in Microsoft Teams. "
+                    "Please refine your question or check the official source document."
+                ),
+                "wrap": True,
+                "weight": "Bolder",
+                "color": "Attention"
+            }
+        ],
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "version": "1.5"
+    }
+
 async def _bot_logic(turn_context: TurnContext):
     conversation_id = turn_context.activity.conversation.id
     state = get_conversation_state(conversation_id)
     state['last_activity'] = asyncio.get_event_loop().time()
-    
-    # Clean up old states periodically
-    if len(conversation_states) > 100:  # Only clean up if we have many states
+    if len(conversation_states) > 100:
         cleanup_old_states()
 
-    # Set the conversation state for this request
     import ask_func
     ask_func.chat_history = state['history']
     ask_func.tool_cache = state['cache']
 
     user_message = turn_context.activity.text or ""
 
-    # --------------------------------------------------------------------
-    # Use 'TeamsInfo.get_member' to get userPrincipalName or email
-    # --------------------------------------------------------------------
-    user_id = "anonymous"  # fallback
+    user_id = "anonymous"
     try:
-        # 'from_property.id' usually holds the "29:..." Teams user ID
         teams_user_id = turn_context.activity.from_property.id
-
-        # This call will attempt to fetch the user's profile from Teams
         teams_member = await TeamsInfo.get_member(turn_context, teams_user_id)
-        # If successful, you can read these fields:
-        #   teams_member.user_principal_name (often the email/UPN)
-        #   teams_member.email
-        #   teams_member.name
-        #   teams_member.id
         if teams_member and teams_member.user_principal_name:
             user_id = teams_member.user_principal_name
         elif teams_member and teams_member.email:
             user_id = teams_member.email
         else:
-            user_id = teams_user_id  # fallback if we can't get an email
-
-    except Exception as e:
-        # If get_member call fails (e.g., in a group chat scenario or permission issues),
-        # just fallback to the "29:..." ID or 'anonymous'
+            user_id = teams_user_id
+    except Exception:
         user_id = turn_context.activity.from_property.id or "anonymous"
 
-    # Show "thinking" indicator
     typing_activity = Activity(type="typing")
     await turn_context.send_activity(typing_activity)
 
     try:
-        # Process the message
         ans_gen = Ask_Question(user_message, user_id=user_id)
-        answer_chunks = list(ans_gen) # I update this
-        answer_text = "".join(answer_chunks).strip()
-        # Fallback if nothing was returned
-        if not answer_text:
-            print("WARNING: Ask_Question yielded no output")
-            await turn_context.send_activity(Activity(type="message", text="Sorry, I couldn't find an answer to your question."))
-            return
-
-        # Update state
+        answer_text = "".join(ans_gen)
         state['history'] = ask_func.chat_history
         state['cache'] = ask_func.tool_cache
 
-        # Parse and format the response
         source_pattern = r"(.*?)\s*(Source:.*?)(---SOURCE_DETAILS---.*)?$"
         match = re.search(source_pattern, answer_text, flags=re.DOTALL)
 
-        # Try to parse the response as JSON first
         try:
-            # Remove code block markers if present
             cleaned_answer_text = answer_text.strip()
             if cleaned_answer_text.startswith('```json'):
                 cleaned_answer_text = cleaned_answer_text[7:].strip()
@@ -152,21 +148,12 @@ async def _bot_logic(turn_context: TurnContext):
                 cleaned_answer_text = cleaned_answer_text[3:].strip()
             if cleaned_answer_text.endswith('```'):
                 cleaned_answer_text = cleaned_answer_text[:-3].strip()
-            # Fix: Replace real newlines with escaped newlines to allow JSON parsing
-            # This is necessary because the LLM may output real newlines inside string values, which is invalid in JSON
             cleaned_answer_text = cleaned_answer_text.replace('\n', '\\n')
             response_json = json.loads(cleaned_answer_text)
-            # Check if this is our expected JSON format with content and source
             if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
-                # We have a structured JSON response!
                 content_items = response_json["content"]
                 source = response_json["source"]
-                # Build the adaptive card body
                 body_blocks = []
-                #referenced_paragraphs = []
-                #calculated_paragraphs = []
-                #other_paragraphs = []
-                # Process each content item based on its type
                 for item in content_items:
                     item_type = item.get("type", "")
                     if item_type == "heading":
@@ -180,7 +167,6 @@ async def _bot_logic(turn_context: TurnContext):
                         })
                     elif item_type == "paragraph":
                         text = item.get("text", "")
-                        # Only add to main body if not a reference/calculated paragraph
                         if not (text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:")):
                             body_blocks.append({
                                 "type": "TextBlock",
@@ -214,15 +200,6 @@ async def _bot_logic(turn_context: TurnContext):
                             "fontType": "Monospace",
                             "spacing": "Medium"
                         })
-                # Add all non-source paragraphs to the main body
-                # for text in other_paragraphs:
-                #     body_blocks.append({
-                #         "type": "TextBlock",
-                #         "text": text,
-                #         "wrap": True,
-                #         "spacing": "Small"
-                #     })
-                # Create the source section
                 source_container = {
                     "type": "Container",
                     "id": "sourceContainer",
@@ -230,16 +207,14 @@ async def _bot_logic(turn_context: TurnContext):
                     "style": "emphasis",
                     "bleed": True,
                     "maxHeight": "500px",
-                    "isScrollable": True, 
+                    "isScrollable": True,
                     "items": []
                 }
-                # Add Referenced/Calculated paragraphs to the collapsible section if present
                 for item in content_items:
                     if item.get("type", "") == "paragraph":
                         text = item.get("text", "")
                         if text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:"):
                             lines = text.split("\n")
-                            # Add the heading ("Referenced:" or "Calculated using:")
                             if lines:
                                 source_container["items"].append({
                                     "type": "TextBlock",
@@ -248,43 +223,25 @@ async def _bot_logic(turn_context: TurnContext):
                                     "spacing": "Small",
                                     "weight": "Bolder"
                                 })
-                            # For each file/table, add a markdown link as a TextBlock
                             for line in lines[1:]:
-                                 if line.strip().startswith("-"):
+                                if line.strip().startswith("-"):
                                     fname = line.strip()[1:].strip()
                                     if fname:
-            # Lookup the sourcedoc GUID from the mapping
-                                        sourcedoc_guid = sharepoint_links.get(fname)
-                                        if sourcedoc_guid:
-                                            url = (
-                                                    f"https://dgda.sharepoint.com/:x:/r/sites/CXQAData/_layouts/15/"
-                                                    f"Doc.aspx?sourcedoc=%7B{sourcedoc_guid}%7D&file={urllib.parse.quote(fname)}"
-                                                    "&action=default&mobileredirect=true"
-                                                )
-                                            print(f"DEBUG: Adding file link: {fname} -> {url}")
-                                            source_container["items"].append({
+                                        sharepoint_base = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
+                                        url = sharepoint_base.format(urllib.parse.quote(fname))
+                                        source_container["items"].append({
                                             "type": "TextBlock",
                                             "text": f"[{fname}]({url})",
                                             "wrap": True,
                                             "spacing": "Small"
-                                            })
-                                        else:
-                                            print(f"WARNING: No sourcedoc mapping found for {fname}")
-                                            source_container["items"].append({
-                                            "type": "TextBlock",
-                                            "text": fname,
-                                            "wrap": True,
-                                            "spacing": "Small"
-                                            })
-                                    else:
-                                        source_container["items"].append({
+                                        })
+                                else:
+                                    source_container["items"].append({
                                         "type": "TextBlock",
                                         "text": line,
                                         "wrap": True,
                                         "spacing": "Small"
-                                        })
-                # Remove file_names/table_names and code/file blocks from the collapsible section
-                # Always add the source line at the bottom of the container
+                                    })
                 source_container["items"].append({
                     "type": "TextBlock",
                     "text": f"Source: {source}",
@@ -294,7 +251,6 @@ async def _bot_logic(turn_context: TurnContext):
                     "spacing": "Medium",
                 })
                 body_blocks.append(source_container)
-                # Add the show/hide source buttons
                 body_blocks.append({
                     "type": "ColumnSet",
                     "columns": [
@@ -333,13 +289,15 @@ async def _bot_logic(turn_context: TurnContext):
                         }
                     ]
                 })
-                # Create and send the adaptive card
                 adaptive_card = {
                     "type": "AdaptiveCard",
                     "body": body_blocks,
                     "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                     "version": "1.5"
                 }
+                # SIZE CHECK for Teams
+                if not adaptive_card_size_ok(adaptive_card):
+                    adaptive_card = make_fallback_card()
                 message = Activity(
                     type="message",
                     attachments=[{
@@ -348,14 +306,10 @@ async def _bot_logic(turn_context: TurnContext):
                     }]
                 )
                 await turn_context.send_activity(message)
-                # Successfully processed JSON, so return early
                 return
-                
         except (json.JSONDecodeError, KeyError, TypeError):
-            # Not JSON or not in our expected format, fall back to the regular processing
             pass
-            
-        # If we're here, the response wasn't valid JSON, so process normally
+
         if match:
             main_answer = match.group(1).strip()
             source_line = match.group(2).strip()
@@ -366,16 +320,12 @@ async def _bot_logic(turn_context: TurnContext):
             appended_details = ""
 
         if source_line:
-            # Create simple text blocks without complex formatting
             body_blocks = [{
                 "type": "TextBlock",
                 "text": main_answer,
                 "wrap": True
             }]
-            
-            # Create the collapsible source container
             if source_line or appended_details:
-                # Create a container that will be toggled
                 source_container = {
                     "type": "Container",
                     "id": "sourceContainer",
@@ -383,7 +333,7 @@ async def _bot_logic(turn_context: TurnContext):
                     "style": "emphasis",
                     "bleed": True,
                     "maxHeight": "500px",
-                    "isScrollable": True, 
+                    "isScrollable": True,
                     "items": [
                         {
                             "type": "TextBlock",
@@ -395,8 +345,6 @@ async def _bot_logic(turn_context: TurnContext):
                         }
                     ]
                 }
-                
-                # Add source details if it exists
                 if appended_details:
                     source_container["items"].append({
                         "type": "TextBlock",
@@ -404,9 +352,7 @@ async def _bot_logic(turn_context: TurnContext):
                         "wrap": True,
                         "spacing": "Small"
                     })
-                    
                 body_blocks.append(source_container)
-                
                 body_blocks.append({
                     "type": "ColumnSet",
                     "columns": [
@@ -445,15 +391,15 @@ async def _bot_logic(turn_context: TurnContext):
                         }
                     ]
                 })
-
-
             adaptive_card = {
                 "type": "AdaptiveCard",
                 "body": body_blocks,
                 "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                 "version": "1.5"
             }
-            
+            # SIZE CHECK for Teams
+            if not adaptive_card_size_ok(adaptive_card):
+                adaptive_card = make_fallback_card()
             message = Activity(
                 type="message",
                 attachments=[{
@@ -463,8 +409,6 @@ async def _bot_logic(turn_context: TurnContext):
             )
             await turn_context.send_activity(message)
         else:
-            # For simple responses without source, send formatted markdown directly
-            # Teams supports some markdown in regular messages
             await turn_context.send_activity(Activity(type="message", text=main_answer))
 
     except Exception as e:
