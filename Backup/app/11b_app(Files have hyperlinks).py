@@ -246,7 +246,7 @@ async def _bot_logic(turn_context: TurnContext):
                                 if line.strip().startswith("-"):
                                     fname = line.strip()[1:].strip()
                                     if fname:
-                                        sharepoint_base = "https://dgda.sharepoint.com/:x:/r/sites/CXQAData/_layouts/15/Doc.aspx?sourcedoc=%7B9B3CA3CD-5044-45C7-8A82-0604A1675F46%7D&file={}&action=default&mobileredirect=true"
+                                        sharepoint_base = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
                                         url = sharepoint_base.format(urllib.parse.quote(fname))
                                         print(f"DEBUG: Adding file link: {fname} -> {url}")
                                         source_container["items"].append({
