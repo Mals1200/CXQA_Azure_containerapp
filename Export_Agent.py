@@ -1,10 +1,11 @@
-# Version 4b
-# call SOP has more efficient prompt & has a better layout:
-    # The logo and art images are centered
-    # Can manipulate the art image using ratios and scalinf
-    # The prompt is more effiecient and uses less tokens.
-
-
+# =============================================================
+# version-5: JSON handeling
+#
+# - Added a robust extract_first_json helper to extract the first valid JSON object from LLM output, even if wrapped in code fences or extra text.
+# - Replaced all regex-based or naive JSON extraction in Call_CHART and Call_SOP with this new helper.
+# - Added required key validation after extraction for both chart and SOP exports, returning a clear error if any required keys are missing.
+# - Left a note in Call_DOC: Since the document export expects structured text (not JSON), no extraction is applied there, but you can adapt this if you later expect JSON for documents.
+# =============================================================
 import re
 import requests
 import json
@@ -129,10 +130,10 @@ Data:
 - Answer: {latest_answer}
 - History: {chat_history_str}"""
 
-        endpoint = "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/openai/deployments/gpt-4o-2/chat/completions?api-version=2025-01-01-preview"
+        endpoint = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview"
         headers = {
             "Content-Type": "application/json",
-            "api-key": "5EgVev7KCYaO758NWn5yL7f2iyrS4U3FaSI5lQhTx7RlePQ7QMESJQQJ99AKACHYHv6XJ3w3AAAAACOGoSfb"
+            "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
         }
 
         payload = {
@@ -401,18 +402,13 @@ Data:
         if chart_response.strip() == "Information is not suitable for a chart":
             return "Information is not suitable for a chart"
 
-        match = re.search(r'(\{.*\})', chart_response, re.DOTALL)
-        if match:
-            json_str = match.group(1)
-        else:
+        # Use robust JSON extraction
+        chart_data = extract_first_json(chart_response)
+        if not chart_data:
             return "Invalid chart data format: No JSON object found"
-
-        try:
-            chart_data = json.loads(json_str)
-            if not all(k in chart_data for k in ['chart_type', 'title', 'categories', 'series']):
-                raise ValueError("Missing required keys in chart data: 'chart_type', 'title', 'categories', or 'series'.")
-        except Exception as e:
-            return f"Invalid chart data format: {str(e)}"
+        required_keys = ['chart_type', 'title', 'categories', 'series']
+        if not all(k in chart_data for k in required_keys):
+            return "Invalid chart data format: Missing required keys."
 
         # Create chart image
         img_buffer = create_chart_image(chart_data)
@@ -742,11 +738,17 @@ User_description:
     if len(raw_json) < 20:
         return "Error: Generated content too short or invalid"
 
-    # 2) Parse the JSON into a dict
-    try:
-        sop_data = json.loads(raw_json)
-    except json.JSONDecodeError as e:
-        return f"Error: GPT output wasn't valid JSON. Details: {str(e)}"
+    # 2) Parse the JSON into a dict using robust extraction
+    sop_data = extract_first_json(raw_json)
+    if not sop_data:
+        return "Error: GPT output wasn't valid JSON."
+    required_sop_keys = [
+        "title", "table_of_contents", "overview", "scope", "policy", "provisions",
+        "definitions", "process_responsibilities", "process", "procedures",
+        "related_docs", "sop_form", "sop_log"
+    ]
+    if not all(k in sop_data for k in required_sop_keys):
+        return "Error: SOP JSON missing required fields."
 
     # 3) Prepare our data fields from the JSON
     # We'll call them with .get() so if something is missing, it's blank.
@@ -1061,3 +1063,34 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
 
     # Fallback
     return "Not enough Information to perform export."
+
+# --- Robust JSON Extraction Helper ---
+def extract_first_json(text):
+    """
+    Extracts the first valid JSON object found in the text.
+    Strips code fences and extra text.
+    """
+    # Remove triple backticks/code fences
+    text = re.sub(r"^```[a-zA-Z0-9]*\\s*", "", text)
+    text = re.sub(r"\\s*```$", "", text)
+    text = text.strip()
+
+    # Try to find the first {...} block that is valid JSON
+    brace_stack = []
+    start_idx = None
+    for idx, char in enumerate(text):
+        if char == '{':
+            if not brace_stack:
+                start_idx = idx
+            brace_stack.append('{')
+        elif char == '}':
+            if brace_stack:
+                brace_stack.pop()
+                if not brace_stack and start_idx is not None:
+                    json_candidate = text[start_idx:idx+1]
+                    try:
+                        obj = json.loads(json_candidate)
+                        return obj
+                    except Exception:
+                        continue
+    return None  # Not found
