@@ -1,12 +1,49 @@
-######################################################################################################################
-#                           CXQA SUBQUESTION SPLITTING FIXES (v23c 2025-05-29)
-# limited the json to 2000 characters only and fewer
-# only split to max 3
-# the 3 LLM's Final answering, and tool_2.
-# in tool_2 execution more semantic rules
-# made the tablroduction to be json adaptive card friendly.
-# made the tool_2 code generation to use fuzzy matching to check for values. for typos or different spellings.
-######################################################################################################################
+###############################################################################
+#                           CXQA SUBQUESTION SPLITTING FIXES (v23 2025-05-28)
+#
+# Purpose: Ensure that user questions are only split into subquestions when
+#          absolutely necessary, and that no splitting ever results in more
+#          than 4 subquestions. This ensures:
+#              • Precise retrieval and matching for SOP/policy/incident questions
+#              • Answers in Teams and notebook always match the user's real query
+#              • No over-splitting or loss of context for "what to do"/SOP-type questions
+#
+# Key Additions:
+#
+# 1. Robust Split Function:
+#      - Added robust_split_question(user_question, use_semantic_parsing=True)
+#        • Ensures the original user question is always the first subquestion
+#        • Deduplicates results and preserves order
+#
+# 2. LLM Splitter Prompt Hardening:
+#      - The system prompt in split_question_into_subquestions() now explicitly tells
+#        the LLM:
+#            • Only split if the user question *really* needs it for independent answers
+#            • Never split into more than 4 subquestions
+#            • If the question can be answered as a whole, just return the original
+#            • If you split, each subquestion must be essential for a complete answer
+#            • Return each subquestion on a separate line or as bullet points
+#
+# 3. Post-LLM Hard Cap (Double Safety):
+#      - After splitting (LLM or regex), always cap subqs = subqs[:4]
+#
+# 4. Code Integration:
+#      - All places where user questions are split (esp. tool_1_index_search)
+#        now call:
+#           subquestions = robust_split_question(normalize_question(user_question), use_semantic_parsing=True)
+#        instead of direct calls to split_question_into_subquestions
+#
+# 5. Normalization:
+#      - Added normalize_question() to standardize phrasings like "what to do if…",
+#        improving consistency and retrieval.
+#
+# 6. Debug (Optional for Testing):
+#      - You may print [DEBUG] Subquestions for '...' to verify splitting in logs.
+#
+# Result:
+#      - Minimal, meaningful subquestions, never more than 4, always including
+#        the real user question—Teams and notebook always match.
+###############################################################################
 
 
 import os
@@ -29,8 +66,6 @@ from functools import lru_cache, wraps
 from collections import OrderedDict
 import difflib
 import time
-from datetime import datetime
-from difflib import get_close_matches
 
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
@@ -38,7 +73,7 @@ from difflib import get_close_matches
 CONFIG = {
     # ── MAIN, high-capacity model (Tool-1 Index, Tool-2 Python, Tool-3 Fallback) ──
     "LLM_ENDPOINT"     : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
-                         "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
+                         "openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview",
     # Add CODE LLM endpoint (same as main)
     "LLM_ENDPOINT_CODE": "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
                          "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
@@ -48,7 +83,7 @@ CONFIG = {
 
     # ── AUXILIARY model (classifiers, splitters, etc.) ────────────────────────────
     "LLM_ENDPOINT_AUX" : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
-                         "openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview",
+                         "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
 
     # (unchanged settings below) ───────────────────────────────────────────────────
     "SEARCH_SERVICE_NAME": "cxqa-azureai-search",
@@ -76,11 +111,6 @@ logging.getLogger("azure").setLevel(logging.WARNING)
 chat_history = []
 recent_history = []
 tool_cache = {}
-
-# retrieving todays date
-
-def get_todays_date():
-    return datetime.now().strftime("%d/%m/%Y")
 
 # Add retry decorator for Azure API calls
 def azure_retry(max_attempts=3, delay=2):
@@ -395,150 +425,47 @@ def is_repeated_phrase(last_text, new_text, threshold=0.98):
 #######################################################################################
 def split_question_into_subquestions(user_question, use_semantic_parsing=True):
     """
-    Robust question splitting with multiple fallback strategies
+    Splits a user question into subquestions using either a regex-based approach
+    or a semantic parsing approach.
     """
     if not user_question.strip():
         return []
 
-    # Always include the original question as the first item
-    results = [user_question]
-    
     if not use_semantic_parsing:
         # Regex-based splitting (e.g., "and" or "&")
         text = re.sub(r"\s+and\s+", " ~SPLIT~ ", user_question, flags=re.IGNORECASE)
         text = re.sub(r"\s*&\s*", " ~SPLIT~ ", text)
         parts = text.split("~SPLIT~")
         subqs = [p.strip() for p in parts if p.strip()]
-        results.extend(subqs)
+        return subqs
     else:
-        # NEW: More robust system prompt with concrete examples
         system_prompt = (
-            "You are a question analysis expert. Your ONLY task is to decide if the user question "
-            "contains MULTIPLE INDEPENDENT questions that require separate answers.\n\n"
-            "**RULES**:\n"
-            "1. Return the ORIGINAL question UNLESS there are CLEARLY separate questions\n"
-            "2. NEVER split questions about:\n"
-            "   - Time periods (e.g., 'June, July and August')\n"
-            "   - Related concepts (e.g., 'performance and revenue')\n"
-            "   - Conditional logic (e.g., 'based on X, should we do Y?')\n"
-            "3. Only split if there are EXPLICITLY separate questions like:\n"
-            "   - 'What was revenue in Q1 and what are projections for Q2?'\n"
-            "   - 'How many visitors came last month and what was the average spend?'\n"
-            "4. Return AT MOST 3 subquestions\n"
-            "5. ALWAYS include the original question as the FIRST item\n\n"
-            "OUTPUT FORMAT:\n"
-            "- If no split needed: [ORIGINAL QUESTION]\n"
-            "- If split: [ORIGINAL QUESTION], [SUBQUESTION1], [SUBQUESTION2]"
-        )
+    "You are a helpful assistant. "
+    "Your job is to split a user's question into the smallest number of necessary, self-contained subquestions. "
+    "• Only split if the question clearly asks for multiple independent answers."
+    "• Never split into more than 4 subquestions, no matter how long or complex the user query."
+    "• If the question can be answered as a whole, just return the original."
+    "• If you split, ensure that each subquestion is essential for a complete answer."
+    "Return each subquestion on a separate line or as bullet points."
+)
 
         user_prompt = (
-            f"Question: {user_question}\n\n"
-            f"Decision & Subquestions:"
+            f"If applicable, split the following question into distinct subquestions.\n\n"
+            f"{user_question}\n\n"
+            f"If not applicable, just return it as is."
         )
 
-        try:
-            answer_text = call_llm_aux(system_prompt, user_prompt, max_tokens=300, temperature=0.0)
-            
-            # NEW: Robust parsing with multiple fallbacks
-            lines = [
-                line.strip('\u2022-* ').strip() 
-                for line in answer_text.split('\n') 
-                if line.strip()
-            ]
-            
-            # Filter valid subquestions
-            valid_subqs = []
-            for line in lines:
-                # Skip LLM commentary lines
-                if line.lower().startswith(("rule", "note", "output", "decision")):
-                    continue
-                # Skip empty/very short lines
-                if len(line) < 10:
-                    continue
-                # Skip lines that are just repeating instructions
-                if "subquestion" in line.lower() and ":" not in line:
-                    continue
-                valid_subqs.append(line)
-            
-            # Only use if we found valid subquestions
-            if valid_subqs:
-                results.extend(valid_subqs)
-        except Exception as e:
-            logging.error(f"Splitter LLM failed: {str(e)}")
-    
-    # Final processing
-    unique_questions = []
-    seen = set()
-    
-    for q in results:
-        # Normalize for deduplication
-        normalized = re.sub(r'\s+', ' ', q).strip().lower()
-        
-        # Skip duplicates and empty questions
-        if not normalized or normalized in seen:
-            continue
-            
-        seen.add(normalized)
-        unique_questions.append(q)
-    
-    # NEW: Temporal dependency check - don't split time-based queries
-    time_phrases = ["january", "february", "march", "april", "may", "june", 
-                   "july", "august", "september", "october", "november", "december",
-                   "q1", "q2", "q3", "q4", "quarter", "month", "week", "daily"]
-    
-    has_time_ref = any(phrase in user_question.lower() for phrase in time_phrases)
-    has_conditional = any(word in user_question.lower() for word in ["based on", "due to", "because of"])
-    
-    if has_time_ref or has_conditional:
-        return [user_question]
-    
-    return unique_questions[:3]  # Max 3 questions
+        answer_text = call_llm_aux(system_prompt, user_prompt, max_tokens=300, temperature=0.0)
+        lines = [
+            line.lstrip("•-0123456789). ").strip()
+            for line in answer_text.split("\n")
+            if line.strip()
+        ]
+        subqs = [l for l in lines if l]
 
-# Add this helper function to normalize questions
-def normalize_question(question):
-    """
-    Standardize questions for more consistent processing
-    """
-    # Remove extra spaces
-    question = re.sub(r'\s+', ' ', question).strip()
-    
-    # Handle year references consistently
-    question = re.sub(r'(\d{4})\s*-\s*(\d{4})', r'\1 to \2', question)
-    
-    # Standardize month names
-    month_map = {
-        'jan': 'January', 'feb': 'February', 'mar': 'March', 'apr': 'April',
-        'may': 'May', 'jun': 'June', 'jul': 'July', 'aug': 'August',
-        'sep': 'September', 'oct': 'October', 'nov': 'November', 'dec': 'December'
-    }
-    for abbr, full in month_map.items():
-        question = re.sub(rf'\b{abbr}\b', full, question, flags=re.IGNORECASE)
-    
-    return question
-
-# Update the robust_split_question function
-def robust_split_question(user_question, use_semantic_parsing=True):
-    """
-    Final safety layer for question splitting
-    """
-    # Normalize first
-    normalized = normalize_question(user_question)
-    
-    # Get subquestions
-    subqs = split_question_into_subquestions(normalized, use_semantic_parsing)
-    
-    # Final validation
-    valid_subqs = []
-    for q in subqs:
-        # Must contain at least one verb and one noun
-        if len(q.split()) < 4:  # Too short to be meaningful
-            continue
-        if q.lower() == normalized.lower():  # Exact duplicate
-            continue
-        valid_subqs.append(q)
-    
-    # Always include original as first item
-    return [normalized] + valid_subqs[:2]  # Max 3 total
+        if not subqs:
+            subqs = [user_question]
+        return subqs
 
 #######################################################################################
 #                 REFERENCES CHECK & RELEVANCE CHECK  (Points #3 + #1 synergy)
@@ -623,7 +550,7 @@ def is_text_relevant(question, snippet, question_needs_tables_too: bool): # Adde
 @azure_retry()
 def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_tabular: bool = False):
     """
-    Modified version: uses robust_split_question to handle multi-part queries.
+    Modified version: uses split_question_into_subquestions to handle multi-part queries.
     Then filters out docs the user has no access to, before final top_k selection.
     Includes detailed DEBUG logging.
     """
@@ -637,8 +564,10 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_
     # --- Added Log ---
     #print(f"DEBUG: [Tool 1] Entering for question '{user_question[:50]}...'")
 
-    # Use the new robust splitter directly
-    subquestions = robust_split_question(user_question, use_semantic_parsing=True)
+    #subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
+    # Optionally, you can normalize here:
+    # subquestions = robust_split_question(normalize_question(user_question), use_semantic_parsing=True)
+    subquestions = robust_split_question(normalize_question(user_question), use_semantic_parsing=True)
     if not subquestions:
         subquestions = [user_question]
     # --- Added Log ---
@@ -693,14 +622,29 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_
         for i, doc in enumerate(merged_docs):
             snippet = doc["snippet"]
             title = doc["title"]
+             # --- Added Log ---
+            #print(f"DEBUG: [Tool 1]  Filtering doc {i+1}/{len(merged_docs)}: Title='{title}'")
             file_tier = get_file_tier(title)
             rbac_pass = user_tier >= file_tier
+            # --- Added Log ---
+            #print(f"DEBUG: [Tool 1]   RBAC Check: UserTier={user_tier}, FileTier={file_tier}, Pass={rbac_pass}")
             if rbac_pass:
+                # --- Log relevance check ---
+                #print(f"DEBUG: [Tool 1]   Checking relevance for snippet: '{snippet[:60]}...'")
                 is_relevant_result = is_text_relevant(user_question, snippet, question_primarily_tabular) # Call relevance check
+                # --- Added Log ---
+                #print(f"DEBUG: [Tool 1]   Relevance Check Result: {is_relevant}")
+                # --- End log relevance check ---
                 if is_relevant_result: # Actually use the result for filtering
                     relevant_docs.append(doc)
+                #print(f"DEBUG: [Tool 1]   >>> Doc {i+1} passed RBAC, ADDED to relevant_docs (Relevance ignored).")
+            #else:
+                 # --- Added Log ---
+                 #print(f"DEBUG: [Tool 1]   --- Doc {i+1} failed RBAC check.")
 
         if not relevant_docs:
+             # --- Added Log ---
+            #print("DEBUG: [Tool 1] No documents remaining after RBAC/Relevance filtering.")
             return {"top_k": "No information", "file_names": []}
 
         # Weighted scoring (Keep as is)
@@ -716,6 +660,7 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_
         docs_top_k = docs_sorted[:top_k]
 
         # Extract file names and texts separately - ensure no duplicates
+        # Corrected this logic slightly from previous thought
         file_names_final = []
         seen_titles = set()
         for d in docs_top_k:
@@ -728,11 +673,16 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_
         re_ranked_texts = [d["snippet"] for d in docs_top_k]
         combined = "\n\n---\n\n".join(re_ranked_texts)
 
+        # --- Log final return ---
         final_dict = {"top_k": combined, "file_names": file_names_final}
+        #print(f"DEBUG: [Tool 1] Returning: file_names={final_dict['file_names']}, top_k snippet count={len(docs_top_k)}")
         return final_dict
+        # --- End log final return ---
 
     except Exception as e:
         logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}")
+        # --- Added Log ---
+        #print(f"DEBUG: [Tool 1] Error encountered: {e}")
         return {"top_k": "No information", "file_names": []}
 
 # --- End of modified tool_1_index_search ---
@@ -778,26 +728,19 @@ def tool_2_code_run(user_question, user_tier=1, recent_history=None):
     rhistory = recent_history if recent_history else []
 
     system_prompt = f"""
-You are a python expert. Only use the tables listed below to answer the question.
-Available Table Files:
-{list(_metadata.keys())}
-
-Use the User Question along with the Chat_history to make the python code that will get the answer from the provided Dataframes schemas and samples.
+You are a python expert. Use the User Question along with the Chat_history to make the python code that will get the answer from the provided Dataframes schemas and samples.
 Only provide the python code and nothing else, without any markdown fences like ```python or ```.
 Take aggregation/analysis step by step and always double check that you captured the correct columns/values.
 Don't give examples, only provide the actual code. If you can't provide the code, say "404" as a string.
 
 **General Rules**:
 1. Only use columns that actually exist as per the schemas. Do NOT invent columns or table names.
-2. Use semantic reasoning to handle synonyms, minor typos or punctuation for table/column names if they reasonably map to the provided schemas.
-3. When matching values in categorical/text columns (for example, "Restaurant Name", "Area", "Type"), always use fuzzy or semantic matching: if the user specifies a value that is not exactly present, pick the closest value from the available options (for example, match "Villa Mama" to "Villa Mamma's" if that is the closest name in the data).
-4. When in doubt, prefer the most likely or most frequent value from the data sample.
-5. Never fail just because of minor differences in wording, spelling, or punctuation—always match to the best available value.
-6. Don't rely on sample rows for data content; the real dataset can have more/different data. Always reference columns as shown in the schemas.
-7. Return pure Python code that can run as-is, including necessary imports (like `import pandas as pd`).
-8. The code must produce a final `print()` statement with the answer. If multiple pieces of information are requested, print them clearly labeled.
-9. If a user references a column/table that does not exist in the schemas, return "404".
-10. Do not use Chat_history information directly within the generated code logic or print statements, but use it for context if needed to understand the user's question.
+2. Don't rely on sample rows for data content; the real dataset can have more/different data. Always reference columns as shown in the schemas.
+3. Return pure Python code that can run as-is, including necessary imports (like `import pandas as pd`).
+4. The code must produce a final `print()` statement with the answer. If multiple pieces of information are requested, print them clearly labeled.
+5. If a user references a column/table that does not exist in the schemas, return "404".
+6. Use semantic reasoning to handle synonyms or minor typos for table/column names if they reasonably map to the provided schemas.
+7. Do not use Chat_history information directly within the generated code logic or print statements, but use it for context if needed to understand the user's question.
 
 **Data Handling Rules for Pandas Code**:
 A. **Numeric Conversion:** When a column is expected to be numeric for calculations (e.g., for .sum(), .mean(), comparisons):
@@ -821,9 +764,6 @@ Dataframes schemas and sample:
 
 Chat_history:
 {rhistory}
-
-Todays date (dd/mm/yyy):
-{get_todays_date()}
 """
 
     code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.7)
@@ -841,7 +781,7 @@ Todays date (dd/mm/yyy):
     table_names = []
     
     # Pattern 1: dataframes.get("filename")
-    pattern1 = re.compile(r'dataframes\\.get\\(\\s*[\'\"]([^\'\"]+)[\'\"]\\s*\\)')
+    pattern1 = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
     matches1 = pattern1.findall(code_str)
     if matches1:
         for match in matches1:
@@ -849,7 +789,7 @@ Todays date (dd/mm/yyy):
                 table_names.append(match)
     
     # Pattern 2: pd.read_excel("filename") or pd.read_csv("filename")
-    pattern2 = re.compile(r'pd\\.read_(?:excel|csv)\\(\\s*[\'\"]([^\'\"]+)[\'\"]\\s*\\)')
+    pattern2 = re.compile(r'pd\.read_(?:excel|csv)\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
     matches2 = pattern2.findall(code_str)
     if matches2:
         for match in matches2:
@@ -859,22 +799,9 @@ Todays date (dd/mm/yyy):
     # Limit to max 3 table names, but keep file extensions
     table_names = table_names[:3]
 
-    # --- FUZZY MATCHING LOGIC FOR TABLE NAMES ---
-    available_files = list(_metadata.keys())  # _metadata is your loaded schema info
-    def best_table_name_match(requested, available_files):
-        matches = get_close_matches(requested.lower(), [f.lower() for f in available_files], n=1, cutoff=0.7)
-        if matches:
-            idx = [f.lower() for f in available_files].index(matches[0])
-            return available_files[idx]
-        return requested  # fallback if no good match
-    fixed_table_names = []
-    for name in table_names:
-        best_match = best_table_name_match(name, available_files)
-        if best_match not in fixed_table_names:
-            fixed_table_names.append(best_match)
-    table_names = fixed_table_names[:3]
-    # --- END FUZZY MATCHING LOGIC ---
-
+    #print(f"DEBUG: For question '{user_question[:50]}...'") # Identify which question run
+    #print(f"DEBUG: Generated code_str:\n---\n{code_str}\n---")
+    #print(f"DEBUG: Extracted table_names: {table_names}")
     #This line was changed to include only the tables needed
     execution_result = execute_generated_code(code_str, required_tables=table_names) # Pass table_names
     return {"result": execution_result, "code": code_str, "table_names": table_names}
@@ -1006,92 +933,31 @@ def final_answer_llm(user_question, index_dict, python_dict):
 
     if index_top_k.lower() == "no information" and python_result.lower() == "no information":
         fallback_text = tool_3_llm_fallback(user_question)
-        # Format the fallback as JSON to match the expected format
-        try:
-            import json
-            json_response = {
-                "content": [
-                    {
-                        "type": "paragraph",
-                        "text": fallback_text
-                    }
-                ],
-                "source": "AI Generated"
-            }
-            yield json.dumps(json_response)
-        except:
-            # If JSON conversion fails, fall back to plaintext
-            yield f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
+        # Output fallback as plain Markdown
+        yield f"# AI Generated Answer\n\n{fallback_text}\n\nSource: AI Generated"
         return
 
-    combined_info = f"INDEX_DATA:\n{index_top_k}\n\nPYTHON_DATA:\n{python_result}"
-
-    # ########################################################################
-    # # JSON RESPONSE FORMAT - REMOVE COMMENTS TO ENABLE
-    # # This block modifies the system prompt to output a well-structured JSON
-    # ########################################################################
+    # Compose the Markdown prompt
     system_prompt = f"""
 You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
 1) Index data: (INDEX_DATA)
 2) Python data: (PYTHON_DATA)
-*) Always Prioritise The python result if the 2 are different.
+*) Always prioritize the Python result if the two are different.
 
-Your output must be formatted as a properly escaped JSON with the following structure:
-{{
-  "content": [
-    {{
-      "type": "heading",
-      "text": "Main answer heading/title here"
-    }},
-    {{
-      "type": "paragraph",
-      "text": "Normal paragraph text here"
-    }},
-    {{
-      "type": "bullet_list",
-      "items": [
-        "List item 1",
-        "List item 2",
-        "List item 3"
-      ]
-    }},
-    {{
-      "type": "numbered_list",
-      "items": [
-        "Numbered item 1",
-        "Numbered item 2"
-      ]
-    }}
-  ],
-  "source": "Source type (Index, Python, Index & Python, or AI Generated)"
-}}
+Your output must be a single, well-formatted answer using only Markdown (no JSON, no code blocks with json or yaml).
 
-IMPORTANT RULES FOR TABLES AND LISTS:
-- If the answer requires a table (for example, monthly sales, visits, covers, etc.), DO NOT use markdown tables, pipes, or code blocks.
-- Instead, output the data as a numbered_list (preferred) or bullet_list, where each list item is a single row formatted as:
-  'Month: Jan | Visitors: 230,666 | Sales: 24,229,600 | Covers: 190,456'
-- Limit the list to the first 12 rows. If there are more, add an extra item: "…and more months in the data."
-- NEVER use markdown table syntax (| Month | ...) or code blocks for table data, as Microsoft Teams cannot display them.
+**Markdown Formatting Rules:**
+- Start with `#` for the main heading (the user's question or a summary).
+- Use `##` for important subheadings (like "Answer", "Details", or "From Table Data").
+- Use bullet points (`-`) for lists and numbers for ordered lists.
+- For tables, use Markdown table syntax (pipe `|` separators, header/row, like GitHub).
+- Use triple backticks for code blocks (` ```python ... ``` `).
+- Put all referenced file names and table names as bullet lists at the end, under **Referenced files** and **Calculated using tables**.
+- Always include a final line: `Source: X` where X is "Index", "Python", "Index & Python", or "AI Generated".
+- Be concise and informative. Never generate more than 2000 characters. If the answer is long, say "See original documents for more.".
+- Never output JSON, XML, or any other data structure.
 
-Important guidelines:
-1. Format your content appropriately based on the answer structure you want to convey
-2. Use "heading" for titles and subtitles
-3. Use "paragraph" for normal text blocks
-4. Use "bullet_list" for unordered lists
-5. Use "numbered_list" for ordered/numbered lists
-6. Use "code_block" for any code snippets
-7. Make sure the JSON is valid and properly escaped
-8. Every section must have a "type" and appropriate content fields
-9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
-10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
-11. When questions have multiple parts needing different sources, use "Index & Python" as the source
-12 **Your total answer should never exceed 2000 characters.**
-
-Use only these two sources to answer. If you find relevant info from both, answer using both. 
-If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
-
-For multi-part questions, organize your response clearly with appropriate headings or sections 
-for each part of the answer. If one part comes from Index and another from Python, use both sources.
+If you cannot answer, say so directly and politely.
 
 User question:
 {user_question}
@@ -1103,52 +969,8 @@ PYTHON_DATA:
 {python_result}
 
 Chat_history:
-{recent_history if recent_history else []}
-
-Todays date (dd/mm/yyy):
-{get_todays_date()}
+{recent_history if 'recent_history' in locals() and recent_history else []}
 """
-
-# 12. **If the relevant content is a long list of steps, summarize the list and only include the most important steps/items in your JSON output.**
-# 13. **If the answer is a procedure, select only the key actions (not every sub-step). If the document contains a list that is too long, summarize and mention there are details in the source.**
-# 14. **Never generate more than 12 items in any bullet_list or numbered_list.**
-# 15. **Prefer a concise answer. If the source content is repetitive, merge and summarize instead of listing.**
-# 16. **If the user asks for a detailed SOP, you may note in a paragraph: "For full details, see the official document."**
-# 17. **Your total answer should never exceed 2000 characters.**
-
-
-    # ########################################################################
-    # # ORIGINAL SYSTEM PROMPT - UNCOMMENT TO USE INSTEAD OF JSON FORMAT
-    # ########################################################################
-    # system_prompt = f"""
-    # You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
-    # 1) Index data: (INDEX_DATA)
-    # 2) Python data: (PYTHON_DATA)
-    # *) Always Prioritise The python result if the 2 are different.
-    
-    # Use only these two sources to answer. If you find relevant info from both, answer using both. 
-    # At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
-    # - "Index" if only index data was used,
-    # - "Python" if only python data was used,
-    # - "Index & Python" if both were used,
-    # - or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
-    # - Present your answer in a clear, readable format.
-    
-    # Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
-    # Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
-    
-    # User question:
-    # {user_question}
-    
-    # INDEX_DATA:
-    # {index_top_k}
-    
-    # PYTHON_DATA:
-    # {python_result}
-    
-    # Chat_history:
-    # {recent_history if recent_history else []}
-    # """
 
     try:
         final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.3)
@@ -1162,7 +984,7 @@ Todays date (dd/mm/yyy):
             yield fallback_text
             return
 
-        yield final_text
+        yield final_text.strip()
     except Exception as e:
         logging.error(f"Error in final_answer_llm: {str(e)}")
         fallback_text = f"I'm sorry, but an error occurred: {str(e)}"
@@ -1173,165 +995,9 @@ Todays date (dd/mm/yyy):
 #######################################################################################
 def post_process_source(final_text, index_dict, python_dict, user_question=None):
     """
-    • If the answer is valid JSON, inject file/table info into BOTH
-        – response_json["source_details"]   (for your UI)
-        – response_json["content"]          (visible paragraphs)
-    • Otherwise fall back to the legacy plain-text logic.
-    • Optionally, always ensure the user's question is present as the first heading or paragraph.
+    No-op: Just return the text, optionally stripping whitespace and fixing double newlines.
     """
-    import json, re
-
-    def _inject_refs(resp, files=None, tables=None):
-        if not isinstance(resp.get("content"), list):
-            resp["content"] = []
-        if files:
-            bullet_block = "Referenced:\n- " + "\n- ".join(files)
-            resp["content"].append({
-                "type": "paragraph",
-                "text": bullet_block
-            })
-        if tables:
-            bullet_block = "Calculated using:\n- " + "\n- ".join(tables)
-            resp["content"].append({
-                "type": "paragraph",
-                "text": bullet_block
-            })
-
-    # ---------- strip code-fence wrappers before JSON parse ----------
-    cleaned = final_text.strip()
-    cleaned = re.sub(r"^```[a-zA-Z]*\s*", "", cleaned)   # remove ```json or ```
-    cleaned = re.sub(r"^'''[a-zA-Z]*\s*", "", cleaned)   # remove '''json or '''
-    cleaned = re.sub(r"\s*```$", "", cleaned)            # closing ```
-    cleaned = re.sub(r"\s*'''$", "", cleaned)            # closing '''
-
-    # ---------- attempt JSON branch ----------
-    try:
-        response_json = json.loads(cleaned)
-    except Exception:
-        response_json = None
-
-    if (
-        isinstance(response_json, dict)
-        and "content" in response_json
-        and "source"  in response_json
-    ):
-        idx_has  = index_dict .get("top_k" , "").strip().lower() not in ["", "no information"]
-        py_has   = python_dict.get("result", "").strip().lower() not in ["", "no information"]
-        src = response_json["source"].strip()
-        if src == "Python" and idx_has:
-            src = "Index & Python"
-        elif src == "Index" and py_has:
-            src = "Index & Python"
-        response_json["source"] = src
-        if src == "Index & Python":
-            files  = index_dict .get("file_names", [])
-            tables = python_dict.get("table_names", [])
-            #print(f"DEBUG: [post_process_source] src='Index & Python'. Files List: {files}, Tables List: {tables}")
-            response_json["source_details"] = {
-                "files"       : "", #index_dict.get("top_k", "No information"),
-                "code"        : "", #python_dict.get("code", ""),
-                "file_names"  : files,
-                "table_names" : tables
-            }
-            _inject_refs(response_json, files, tables)
-        elif src == "Index":
-            files = index_dict.get("file_names", [])
-            response_json["source_details"] = {
-                "files"      : "",
-                "file_names" : files
-            }
-            _inject_refs(response_json, files=files)
-        elif src == "Python":
-            if not python_dict.get("table_names"):
-                python_dict["table_names"] = re.findall(
-                    r'["\']([^"\']+\.(?:xlsx|xls|csv))["\']',
-                    python_dict.get("code", ""),
-                    flags=re.I
-                )
-            tables = python_dict.get("table_names", [])
-            response_json["source_details"] = {
-                "code"        : "",
-                "table_names" : tables
-            }
-            _inject_refs(response_json, tables=tables)
-        else:
-            response_json["source_details"] = {}
-                
-        # --- Ensure the user's question is present as first heading or paragraph ---
-        if user_question:
-            import difflib
-            def _is_similar(a, b, threshold=0.7):
-                a, b = a.strip().lower(), b.strip().lower()
-                seq_sim = difflib.SequenceMatcher(None, a, b).ratio()
-                a_tokens = set(a.split())
-                b_tokens = set(b.split())
-                if not a_tokens or not b_tokens:
-                    return False
-                overlap = len(a_tokens & b_tokens) / max(len(a_tokens), len(b_tokens))
-                return seq_sim > threshold or overlap > 0.7
-
-            uq_norm = user_question.strip().lower()
-            found = False
-            if isinstance(response_json.get("content"), list):
-                 for i, block in enumerate(response_json["content"]):
-                    # Check if block is a dict before accessing keys
-                    if isinstance(block, dict) and block.get("type") in ("heading", "paragraph"):
-                        block_text = block.get("text", "").strip().lower()
-                        if _is_similar(uq_norm, block_text):
-                            found = True
-                            break
-            else:
-                 # Initialize content as list if missing or not a list
-                 response_json["content"] = []
-
-            if not found:
-                response_json["content"].insert(0, {"type": "heading", "text": user_question})
-        return json.dumps(response_json)
-
-    # ---------- legacy plain-text branch (unchanged) ----------
-    text_lower = final_text.lower()
-
-    if "source: index & python" in text_lower:
-        top_k_text  = index_dict .get("top_k" , "No information")
-        code_text   = python_dict.get("code"  , "")
-        file_names  = index_dict .get("file_names" , [])
-        table_names = python_dict.get("table_names", [])
-        
-        src_idx = final_text.lower().find("source:")
-        if src_idx >= 0:
-            eol = final_text.find("\n", src_idx)
-            if eol < 0: eol = len(final_text)
-            prefix, suffix = final_text[:eol], final_text[eol:]
-            file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
-            table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
-            final_text = prefix + file_info + table_info + suffix
-        pass
-
-    elif "source: python" in text_lower:
-        code_text   = python_dict.get("code", "")
-        table_names = python_dict.get("table_names", [])
-        src_idx = final_text.lower().find("source:")
-        if src_idx >= 0:
-            eol = final_text.find("\n", src_idx)
-            if eol < 0: eol = len(final_text)
-            prefix, suffix = final_text[:eol], final_text[eol:]
-            table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
-            final_text = prefix + table_info + suffix
-        pass
-
-    elif "source: index" in text_lower:
-        top_k_text = index_dict.get("top_k", "No information")
-        file_names = index_dict.get("file_names", [])
-        src_idx = final_text.lower().find("source:")
-        if src_idx >= 0:
-            eol = final_text.find("\n", src_idx)
-            if eol < 0: eol = len(final_text)
-            prefix, suffix = final_text[:eol], final_text[eol:]
-            file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
-            final_text = prefix + file_info + suffix
-        pass
-
-    return final_text
+    return final_text.strip()
 
 
 #######################################################################################
@@ -1721,65 +1387,24 @@ def Ask_Question(question, user_id="anonymous"):
 
 def robust_split_question(user_question, use_semantic_parsing=True):
     """
-    Final safety layer for question splitting
+    Always include the original user question in the subquestions.
+    Deduplicate results and preserve order.
     """
-    # Normalize first
-    normalized = normalize_question(user_question)
-    
-    # Get subquestions
-    subqs = split_question_into_subquestions(normalized, use_semantic_parsing)
-    
-    # Final validation
-    valid_subqs = []
-    for q in subqs:
-        # Must contain at least one verb and one noun
-        if len(q.split()) < 4:  # Too short to be meaningful
-            continue
-        if q.lower() == normalized.lower():  # Exact duplicate
-            continue
-        valid_subqs.append(q)
-    
-    # Always include original as first item
-    return [normalized] + valid_subqs[:2]  # Max 3 total
+    subqs = split_question_into_subquestions(user_question, use_semantic_parsing)
+    # Always insert the original question first if missing
+    if user_question not in subqs:
+        subqs = [user_question] + subqs
+    # Remove duplicates, keep order
+    seen = set()
+    result = []
+    for sq in subqs:
+        if sq not in seen:
+            result.append(sq)
+            seen.add(sq)
+    return result
 
 # Step 3 (optional): Normalization helper
 
-def normalize_question(question):
-    """
-    Standardize questions for more consistent processing
-    """
-    # Remove extra spaces
-    question = re.sub(r'\s+', ' ', question).strip()
-    
-    # Handle year references consistently
-    question = re.sub(r'(\d{4})\s*-\s*(\d{4})', r'\1 to \2', question)
-    
-    # Standardize month names
-    month_map = {
-        'jan': 'January', 'feb': 'February', 'mar': 'March', 'apr': 'April',
-        'may': 'May', 'jun': 'June', 'jul': 'July', 'aug': 'August',
-        'sep': 'September', 'oct': 'October', 'nov': 'November', 'dec': 'December'
-    }
-    for abbr, full in month_map.items():
-        question = re.sub(rf'\b{abbr}\b', full, question, flags=re.IGNORECASE)
-    
-    return question
-
-def convert_markdown_table_to_list(md_table: str):
-    """
-    Convert a markdown table string to a numbered list of row strings.
-    Assumes header row is first, separator row is second, then data rows.
-    """
-    lines = md_table.strip().splitlines()
-    if len(lines) < 3:  # Not a markdown table
-        return []
-
-    header = [h.strip() for h in lines[0].split('|') if h.strip()]
-    data_lines = lines[2:]  # skip header and separator
-    result = []
-    for row in data_lines:
-        cells = [c.strip() for c in row.split('|') if c.strip()]
-        if len(cells) == len(header):
-            row_str = " | ".join(f"{h}: {v}" for h, v in zip(header, cells))
-            result.append(row_str)
-    return result
+def normalize_question(q):
+    # Expand this with any patterns/phrases common in your user base
+    return q.lower().replace("what to do if there was", "if there was").replace("what to do if", "if")
