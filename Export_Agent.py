@@ -13,6 +13,8 @@ import io
 import threading
 import time
 from datetime import datetime
+import logging
+import ast
 
 #SOP imports######
 import fitz  # PyMuPDF
@@ -317,7 +319,7 @@ Data:
                 {"role": "user", "content": chart_prompt}
             ],
             "max_tokens": 1000,
-            "temperature": 0.3
+            "temperature": 0.0
         }
 
         result_json = openai_call_with_retry(endpoint, headers, payload, max_attempts=3, backoff=5, timeout=30)
@@ -395,6 +397,8 @@ Data:
     ##################################################
     try:
         chart_response = generate_chart_data()
+        logging.error("RAW LLM OUTPUT: %r", chart_response)
+        # print("RAW LLM OUTPUT:", chart_response)  # Uncomment for console debugging
 
         if chart_response.startswith("API_ERROR:"):
             return f"OpenAI Error: {chart_response[10:]}"
@@ -405,7 +409,8 @@ Data:
         # Use robust JSON extraction
         chart_data = extract_first_json(chart_response)
         if not chart_data:
-            return "Invalid chart data format: No JSON object found"
+            logging.error("LLM output does not contain JSON: %r", chart_response)
+            return f"Invalid chart data format: No JSON object found. Raw output: {chart_response[:300]}"
         required_keys = ['chart_type', 'title', 'categories', 'series']
         if not all(k in chart_data for k in required_keys):
             return "Invalid chart data format: Missing required keys."
@@ -1067,30 +1072,33 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
 # --- Robust JSON Extraction Helper ---
 def extract_first_json(text):
     """
-    Extracts the first valid JSON object found in the text.
-    Strips code fences and extra text.
+    Extract the first valid JSON object found in the text, even if the LLM puts code fences, extra lines, or uses single quotes.
     """
-    # Remove triple backticks/code fences
-    text = re.sub(r"^```[a-zA-Z0-9]*\\s*", "", text)
-    text = re.sub(r"\\s*```$", "", text)
+    # Remove code fences and leading/trailing whitespace
+    text = re.sub(r"^```[a-zA-Z0-9]*\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
     text = text.strip()
 
-    # Try to find the first {...} block that is valid JSON
-    brace_stack = []
-    start_idx = None
-    for idx, char in enumerate(text):
-        if char == '{':
-            if not brace_stack:
-                start_idx = idx
-            brace_stack.append('{')
-        elif char == '}':
-            if brace_stack:
-                brace_stack.pop()
-                if not brace_stack and start_idx is not None:
-                    json_candidate = text[start_idx:idx+1]
-                    try:
-                        obj = json.loads(json_candidate)
-                        return obj
-                    except Exception:
-                        continue
-    return None  # Not found
+    # Look for first {...}
+    first_curly = text.find('{')
+    last_curly = text.rfind('}')
+    if first_curly == -1 or last_curly == -1 or last_curly < first_curly:
+        return None
+    candidate = text[first_curly:last_curly+1]
+    # Try json.loads first
+    try:
+        return json.loads(candidate)
+    except Exception:
+        pass
+    # Try ast.literal_eval (if the LLM used single quotes)
+    try:
+        return ast.literal_eval(candidate)
+    except Exception:
+        pass
+    # As a last resort, replace single quotes with double and try again
+    candidate_fixed = candidate.replace("'", '"')
+    try:
+        return json.loads(candidate_fixed)
+    except Exception:
+        pass
+    return None
