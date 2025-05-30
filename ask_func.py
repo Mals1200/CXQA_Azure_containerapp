@@ -1,10 +1,12 @@
-###############################################################################
+######################################################################################################################
 #                           CXQA SUBQUESTION SPLITTING FIXES (v23c 2025-05-29)
 # limited the json to 2000 characters only and fewer
 # only split to max 3
 # the 3 LLM's Final answering, and tool_2.
 # in tool_2 execution more semantic rules
-###############################################################################
+# made the tablroduction to be json adaptive card friendly.
+# made the tool_2 code generation to use fuzzy matching to check for values. for typos or different spellings.
+######################################################################################################################
 
 
 import os
@@ -28,6 +30,7 @@ from collections import OrderedDict
 import difflib
 import time
 from datetime import datetime
+from difflib import get_close_matches
 
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
@@ -775,7 +778,11 @@ def tool_2_code_run(user_question, user_tier=1, recent_history=None):
     rhistory = recent_history if recent_history else []
 
     system_prompt = f"""
-You are a python expert. Use the User Question along with the Chat_history to make the python code that will get the answer from the provided Dataframes schemas and samples.
+You are a python expert. Only use the tables listed below to answer the question.
+Available Table Files:
+{list(_metadata.keys())}
+
+Use the User Question along with the Chat_history to make the python code that will get the answer from the provided Dataframes schemas and samples.
 Only provide the python code and nothing else, without any markdown fences like ```python or ```.
 Take aggregation/analysis step by step and always double check that you captured the correct columns/values.
 Don't give examples, only provide the actual code. If you can't provide the code, say "404" as a string.
@@ -783,11 +790,14 @@ Don't give examples, only provide the actual code. If you can't provide the code
 **General Rules**:
 1. Only use columns that actually exist as per the schemas. Do NOT invent columns or table names.
 2. Use semantic reasoning to handle synonyms, minor typos or punctuation for table/column names if they reasonably map to the provided schemas.
-3. Don't rely on sample rows for data content; the real dataset can have more/different data. Always reference columns as shown in the schemas.
-4. Return pure Python code that can run as-is, including necessary imports (like `import pandas as pd`).
-5. The code must produce a final `print()` statement with the answer. If multiple pieces of information are requested, print them clearly labeled.
-6. If a user references a column/table that does not exist in the schemas, return "404".
-7. Do not use Chat_history information directly within the generated code logic or print statements, but use it for context if needed to understand the user's question.
+3. When matching values in categorical/text columns (for example, "Restaurant Name", "Area", "Type"), always use fuzzy or semantic matching: if the user specifies a value that is not exactly present, pick the closest value from the available options (for example, match "Villa Mama" to "Villa Mamma's" if that is the closest name in the data).
+4. When in doubt, prefer the most likely or most frequent value from the data sample.
+5. Never fail just because of minor differences in wording, spelling, or punctuation—always match to the best available value.
+6. Don't rely on sample rows for data content; the real dataset can have more/different data. Always reference columns as shown in the schemas.
+7. Return pure Python code that can run as-is, including necessary imports (like `import pandas as pd`).
+8. The code must produce a final `print()` statement with the answer. If multiple pieces of information are requested, print them clearly labeled.
+9. If a user references a column/table that does not exist in the schemas, return "404".
+10. Do not use Chat_history information directly within the generated code logic or print statements, but use it for context if needed to understand the user's question.
 
 **Data Handling Rules for Pandas Code**:
 A. **Numeric Conversion:** When a column is expected to be numeric for calculations (e.g., for .sum(), .mean(), comparisons):
@@ -831,7 +841,7 @@ Todays date (dd/mm/yyy):
     table_names = []
     
     # Pattern 1: dataframes.get("filename")
-    pattern1 = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+    pattern1 = re.compile(r'dataframes\\.get\\(\\s*[\'\"]([^\'\"]+)[\'\"]\\s*\\)')
     matches1 = pattern1.findall(code_str)
     if matches1:
         for match in matches1:
@@ -839,7 +849,7 @@ Todays date (dd/mm/yyy):
                 table_names.append(match)
     
     # Pattern 2: pd.read_excel("filename") or pd.read_csv("filename")
-    pattern2 = re.compile(r'pd\.read_(?:excel|csv)\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+    pattern2 = re.compile(r'pd\\.read_(?:excel|csv)\\(\\s*[\'\"]([^\'\"]+)[\'\"]\\s*\\)')
     matches2 = pattern2.findall(code_str)
     if matches2:
         for match in matches2:
@@ -849,9 +859,22 @@ Todays date (dd/mm/yyy):
     # Limit to max 3 table names, but keep file extensions
     table_names = table_names[:3]
 
-    #print(f"DEBUG: For question '{user_question[:50]}...'") # Identify which question run
-    #print(f"DEBUG: Generated code_str:\n---\n{code_str}\n---")
-    #print(f"DEBUG: Extracted table_names: {table_names}")
+    # --- FUZZY MATCHING LOGIC FOR TABLE NAMES ---
+    available_files = list(_metadata.keys())  # _metadata is your loaded schema info
+    def best_table_name_match(requested, available_files):
+        matches = get_close_matches(requested.lower(), [f.lower() for f in available_files], n=1, cutoff=0.7)
+        if matches:
+            idx = [f.lower() for f in available_files].index(matches[0])
+            return available_files[idx]
+        return requested  # fallback if no good match
+    fixed_table_names = []
+    for name in table_names:
+        best_match = best_table_name_match(name, available_files)
+        if best_match not in fixed_table_names:
+            fixed_table_names.append(best_match)
+    table_names = fixed_table_names[:3]
+    # --- END FUZZY MATCHING LOGIC ---
+
     #This line was changed to include only the tables needed
     execution_result = execute_generated_code(code_str, required_tables=table_names) # Pass table_names
     return {"result": execution_result, "code": code_str, "table_names": table_names}
@@ -1046,7 +1069,7 @@ Your output must be formatted as a properly escaped JSON with the following stru
 IMPORTANT RULES FOR TABLES AND LISTS:
 - If the answer requires a table (for example, monthly sales, visits, covers, etc.), DO NOT use markdown tables, pipes, or code blocks.
 - Instead, output the data as a numbered_list (preferred) or bullet_list, where each list item is a single row formatted as:
-  'Month: January | Visitors: 230,666 | Sales: 24,229,600 | Covers: 190,456'
+  'Month: Jan | Visitors: 230,666 | Sales: 24,229,600 | Covers: 190,456'
 - Limit the list to the first 12 rows. If there are more, add an extra item: "…and more months in the data."
 - NEVER use markdown table syntax (| Month | ...) or code blocks for table data, as Microsoft Teams cannot display them.
 
