@@ -137,8 +137,365 @@ async def _bot_logic(turn_context: TurnContext):
         state['history'] = ask_func.chat_history
         state['cache'] = ask_func.tool_cache
 
-        # Send Markdown/Plain Text. Teams renders it beautifully.
-        await turn_context.send_activity(Activity(type="message", text=answer_text))
+        try:
+            cleaned_answer_text = answer_text.strip()
+            if cleaned_answer_text.startswith('```json'):
+                cleaned_answer_text = cleaned_answer_text[7:].strip()
+            if cleaned_answer_text.startswith('```'):
+                cleaned_answer_text = cleaned_answer_text[3:].strip()
+            if cleaned_answer_text.endswith('```'):
+                cleaned_answer_text = cleaned_answer_text[:-3].strip()
+            cleaned_answer_text = cleaned_answer_text.replace('\n', '\n')
+            response_json = json.loads(cleaned_answer_text)
+            if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
+                content_items = response_json["content"]
+                source = response_json["source"]
+                body_blocks = []
+                for item in content_items:
+                    item_type = item.get("type", "")
+                    if item_type == "heading":
+                        body_blocks.append({
+                            "type": "TextBlock",
+                            "text": item.get("text", ""),
+                            "wrap": True,
+                            "weight": "Bolder",
+                            "size": "Large",
+                            "spacing": "Medium"
+                        })
+                    elif item_type == "paragraph":
+                        text = item.get("text", "")
+                        if not (text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:")):
+                            body_blocks.append({
+                                "type": "TextBlock",
+                                "text": text,
+                                "wrap": True,
+                                "spacing": "Small"
+                            })
+                    elif item_type == "bullet_list":
+                        items = item.get("items", [])
+                        for list_item in items:
+                            body_blocks.append({
+                                "type": "TextBlock",
+                                "text": f"• {list_item}",
+                                "wrap": True,
+                                "spacing": "Small"
+                            })
+                    elif item_type == "numbered_list":
+                        items = item.get("items", [])
+                        for i, list_item in enumerate(items, 1):
+                            body_blocks.append({
+                                "type": "TextBlock",
+                                "text": f"{i}. {list_item}",
+                                "wrap": True,
+                                "spacing": "Small"
+                            })
+                    elif item_type == "code_block":
+                        body_blocks.append({
+                            "type": "TextBlock",
+                            "text": f"```\n{item.get('code', '')}\n```",
+                            "wrap": True,
+                            "fontType": "Monospace",
+                            "spacing": "Medium"
+                        })
+                source_container = {
+                    "type": "Container",
+                    "id": "sourceContainer",
+                    "isVisible": False,
+                    "style": "emphasis",
+                    "bleed": True,
+                    "maxHeight": "500px",
+                    "isScrollable": True,
+                    "items": []
+                }
+                for item in content_items:
+                    if item.get("type", "") == "paragraph":
+                        text = item.get("text", "")
+                        if text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:"):
+                            lines = text.split("\n")
+                            if lines:
+                                source_container["items"].append({
+                                    "type": "TextBlock",
+                                    "text": lines[0],
+                                    "wrap": True,
+                                    "spacing": "Small",
+                                    "weight": "Bolder"
+                                })
+                            for line in lines[1:]:
+                                if line.strip().startswith("-"):
+                                    fname = line.strip()[1:].strip()
+                                    if fname:
+                                        sharepoint_base = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
+                                        url = sharepoint_base.format(urllib.parse.quote(fname))
+                                        source_container["items"].append({
+                                            "type": "TextBlock",
+                                            "text": f"[{fname}]({url})",
+                                            "wrap": True,
+                                            "spacing": "Small"
+                                        })
+                                else:
+                                    source_container["items"].append({
+                                        "type": "TextBlock",
+                                        "text": line,
+                                        "wrap": True,
+                                        "spacing": "Small"
+                                    })
+                source_container["items"].append({
+                    "type": "TextBlock",
+                    "text": f"Source: {source}",
+                    "wrap": True,
+                    "weight": "Bolder",
+                    "color": "Accent",
+                    "spacing": "Medium",
+                })
+                body_blocks.append(source_container)
+                body_blocks.append({
+                    "type": "ColumnSet",
+                    "columns": [
+                        {
+                            "type": "Column",
+                            "id": "showSourceBtn",
+                            "items": [
+                                {
+                                    "type": "ActionSet",
+                                    "actions": [
+                                        {
+                                            "type": "Action.ToggleVisibility",
+                                            "title": "Show Source",
+                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
+                                        }
+                                    ]
+                                }
+                            ]
+                        },
+                        {
+                            "type": "Column",
+                            "id": "hideSourceBtn",
+                            "isVisible": False,
+                            "items": [
+                                {
+                                    "type": "ActionSet",
+                                    "actions": [
+                                        {
+                                            "type": "Action.ToggleVisibility",
+                                            "title": "Hide Source",
+                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                })
+                adaptive_card = {
+                    "type": "AdaptiveCard",
+                    "body": body_blocks,
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "version": "1.5"
+                }
+                # SIZE CHECK for Teams
+                if not adaptive_card_size_ok(adaptive_card):
+                    adaptive_card = make_fallback_card()
+                message = Activity(
+                    type="message",
+                    attachments=[{
+                        "contentType": "application/vnd.microsoft.card.adaptive",
+                        "content": adaptive_card
+                    }]
+                )
+                await turn_context.send_activity(message)
+                return
+        except (json.JSONDecodeError, KeyError, TypeError):
+            pass
+
+        # --- Markdown/Plaintext Handling ---
+        # Extract main answer, references, and source from Markdown
+        markdown = answer_text.strip()
+        # Remove code fences if present
+        if markdown.startswith('```markdown'):
+            markdown = markdown[len('```markdown'):].strip()
+        if markdown.startswith('```'):
+            markdown = markdown[3:].strip()
+        if markdown.endswith('```'):
+            markdown = markdown[:-3].strip()
+
+        # Split into lines
+        lines = markdown.split('\n')
+        main_answer_lines = []
+        ref_lines = []
+        calc_lines = []
+        source_line = ""
+        in_refs = False
+        in_calcs = False
+        for line in lines:
+            lstr = line.strip()
+            if lstr.lower().startswith("referenced:"):
+                in_refs = True
+                in_calcs = False
+                ref_lines.append(lstr)
+                continue
+            elif lstr.lower().startswith("calculated using:"):
+                in_refs = False
+                in_calcs = True
+                calc_lines.append(lstr)
+                continue
+            elif lstr.lower().startswith("source:"):
+                source_line = lstr
+                in_refs = False
+                in_calcs = False
+                continue
+            if in_refs:
+                ref_lines.append(lstr)
+            elif in_calcs:
+                calc_lines.append(lstr)
+            else:
+                main_answer_lines.append(line)
+
+        main_answer = "\n".join(main_answer_lines).strip()
+        # Remove trailing empty lines
+        main_answer = re.sub(r'\n+$', '', main_answer)
+
+        # Extract file/table names from ref_lines and calc_lines
+        def extract_names(lines):
+            names = []
+            for l in lines[1:]:  # skip the first line ("Referenced:" or "Calculated using:")
+                l = l.strip()
+                if l.startswith("-"):
+                    name = l[1:].strip()
+                    if name:
+                        names.append(name)
+            return names
+        ref_names = extract_names(ref_lines)
+        calc_names = extract_names(calc_lines)
+
+        # Build Adaptive Card
+        body_blocks = []
+        if main_answer:
+            body_blocks.append({
+                "type": "TextBlock",
+                "text": main_answer,
+                "wrap": True,
+                "spacing": "Medium",
+                "fontType": "Default",
+                "size": "Default"
+            })
+        # Source/References container (hidden by default)
+        source_container = {
+            "type": "Container",
+            "id": "sourceContainer",
+            "isVisible": False,
+            "style": "emphasis",
+            "bleed": True,
+            "maxHeight": "500px",
+            "isScrollable": True,
+            "items": []
+        }
+        # Add Referenced files
+        if ref_names:
+            source_container["items"].append({
+                "type": "TextBlock",
+                "text": "Referenced:",
+                "wrap": True,
+                "weight": "Bolder",
+                "spacing": "Small"
+            })
+            for fname in ref_names:
+                sharepoint_base = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
+                url = sharepoint_base  # You can append/encode fname if you have a per-file URL
+                source_container["items"].append({
+                    "type": "TextBlock",
+                    "text": f"[{fname}]({url})",
+                    "wrap": True,
+                    "spacing": "Small"
+                })
+        # Add Calculated using tables
+        if calc_names:
+            source_container["items"].append({
+                "type": "TextBlock",
+                "text": "Calculated using:",
+                "wrap": True,
+                "weight": "Bolder",
+                "spacing": "Small"
+            })
+            for tname in calc_names:
+                sharepoint_base = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
+                url = sharepoint_base  # You can append/encode tname if you have a per-table URL
+                source_container["items"].append({
+                    "type": "TextBlock",
+                    "text": f"[{tname}]({url})",
+                    "wrap": True,
+                    "spacing": "Small"
+                })
+        # Add Source line
+        if source_line:
+            source_container["items"].append({
+                "type": "TextBlock",
+                "text": source_line,
+                "wrap": True,
+                "weight": "Bolder",
+                "color": "Accent",
+                "spacing": "Medium",
+            })
+        # Only add source container if it has items
+        if source_container["items"]:
+            body_blocks.append(source_container)
+            # Add Show/Hide Source button
+            body_blocks.append({
+                "type": "ColumnSet",
+                "columns": [
+                    {
+                        "type": "Column",
+                        "id": "showSourceBtn",
+                        "items": [
+                            {
+                                "type": "ActionSet",
+                                "actions": [
+                                    {
+                                        "type": "Action.ToggleVisibility",
+                                        "title": "Show Source",
+                                        "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "type": "Column",
+                        "id": "hideSourceBtn",
+                        "isVisible": False,
+                        "items": [
+                            {
+                                "type": "ActionSet",
+                                "actions": [
+                                    {
+                                        "type": "Action.ToggleVisibility",
+                                        "title": "Hide Source",
+                                        "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            })
+        adaptive_card = {
+            "type": "AdaptiveCard",
+            "body": body_blocks,
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "version": "1.5"
+        }
+        # SIZE CHECK for Teams
+        if not adaptive_card_size_ok(adaptive_card):
+            adaptive_card = make_fallback_card()
+        message = Activity(
+            type="message",
+            attachments=[{
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": adaptive_card
+            }]
+        )
+        await turn_context.send_activity(message)
+        return
+
     except Exception as e:
         error_message = f"An error occurred while processing your request: {str(e)}"
         print(f"Error in bot logic: {e}")
