@@ -567,7 +567,7 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_
     #subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
     # Optionally, you can normalize here:
     # subquestions = robust_split_question(normalize_question(user_question), use_semantic_parsing=True)
-    subquestions = robust_split_question(normalize_question(user_question), use_semantic_parsing=True)
+    subquestions = robust_split_question(user_question, use_semantic_parsing=True)
     if not subquestions:
         subquestions = [user_question]
     # --- Added Log ---
@@ -933,44 +933,140 @@ def final_answer_llm(user_question, index_dict, python_dict):
 
     if index_top_k.lower() == "no information" and python_result.lower() == "no information":
         fallback_text = tool_3_llm_fallback(user_question)
-        # Output fallback as plain Markdown
-        yield f"# AI Generated Answer\n\n{fallback_text}\n\nSource: AI Generated"
+        # Format the fallback as JSON to match the expected format
+        try:
+            import json
+            json_response = {
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "text": fallback_text
+                    }
+                ],
+                "source": "AI Generated"
+            }
+            yield json.dumps(json_response)
+        except:
+            # If JSON conversion fails, fall back to plaintext
+            yield f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
         return
 
-    # Compose the Markdown prompt
+    combined_info = f"INDEX_DATA:\n{index_top_k}\n\nPYTHON_DATA:\n{python_result}"
+
+    # ########################################################################
+    # # JSON RESPONSE FORMAT - REMOVE COMMENTS TO ENABLE
+    # # This block modifies the system prompt to output a well-structured JSON
+    # ########################################################################
     system_prompt = f"""
 You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
 1) Index data: (INDEX_DATA)
 2) Python data: (PYTHON_DATA)
-*) Always prioritize the Python result if the two are different.
+*) If the two sources conflict, ALWAYS prioritize the Python result.
 
-Your output must be a single, well-formatted answer using only Markdown (no JSON, no code blocks with json or yaml).
+###################################################################################
+#             OUTPUT FORMAT: MARKDOWN (FOR TEAMS OR CHAT UI)
+#
+# Use these Markdown elements in your response:
+#   - Headings:            # Main title, ## Subsection
+#   - Paragraphs:          Normal text for explanations
+#   - Bullet lists:        - item
+#   - Numbered lists:      1. item
+#   - Tables:              Use Markdown syntax (see below)
+#   - Code blocks:         ```python ... ```
+#
+# If you need to present data in tabular form (such as monthly stats, comparisons, etc),
+# ALWAYS use Markdown table syntax as below:
+#
+#   | Column 1 | Column 2 | Column 3 |
+#   |----------|----------|----------|
+#   | Value 1  | Value 2  | Value 3  |
+#   | ...      | ...      | ...      |
+#
+# Make sure every table has a header and a separator row (with dashes).
+###################################################################################
 
-**Markdown Formatting Rules:**
-- Start with `#` for the main heading (the user's question or a summary).
-- Use `##` for important subheadings (like "Answer", "Details", or "From Table Data").
-- Use bullet points (`-`) for lists and numbers for ordered lists.
-- For tables, use Markdown table syntax (pipe `|` separators, header/row, like GitHub).
-- Use triple backticks for code blocks (` ```python ... ``` `).
-- Put all referenced file names and table names as bullet lists at the end, under **Referenced files** and **Calculated using tables**.
-- Always include a final line: `Source: X` where X is "Index", "Python", "Index & Python", or "AI Generated".
-- Be concise and informative. Never generate more than 2000 characters. If the answer is long, say "See original documents for more.".
-- Never output JSON, XML, or any other data structure.
+###################################################################################
+#                       GUIDELINES AND RULES
+#
+# 1. Organize the answer using headings and sections for each subquestion, if relevant.
+# 2. Summarize or merge repetitive/lengthy lists. Never include more than 12 items
+#    in any bullet or numbered list.
+# 3. Prefer concise, direct answers—avoid excessive details.
+# 4. If you couldn’t find relevant information, answer as best you can and use
+#    "Source: AI Generated" at the end.
+# 5. If presenting data best shown in a table (such as numbers per month, by location,
+#    or by category), use Markdown table syntax as shown above.
+# 6. Always end your answer with a single line showing the data source used, in this format:
+#       - **Source:** Index
+#       - **Source:** Python
+#       - **Source:** Index & Python
+#       - **Source:** AI Generated
+# 7. If both Index and Python data were used, use "Source: Index & Python".
+#    If only Index, use "Source: Index". If only Python, use "Source: Python".
+# 8. For multi-part questions, organize the answer with subheadings or numbered steps.
+# 9. If the answer is a procedure/SOP, only list key actions (summarize—don’t list every sub-step).
+###################################################################################
 
-If you cannot answer, say so directly and politely.
-
-User question:
+###################################################################################
+#                 PROMPT INPUT DATA (Available for your answer)
+#
+User Question:
 {user_question}
 
-INDEX_DATA:
+Index Data:
 {index_top_k}
 
-PYTHON_DATA:
+Python Data:
 {python_result}
 
-Chat_history:
-{recent_history if 'recent_history' in locals() and recent_history else []}
+Chat history:
+{recent_history if recent_history else []}
 """
+
+
+
+
+
+# 12. **If the relevant content is a long list of steps, summarize the list and only include the most important steps/items in your JSON output.**
+# 13. **If the answer is a procedure, select only the key actions (not every sub-step). If the document contains a list that is too long, summarize and mention there are details in the source.**
+# 14. **Never generate more than 12 items in any bullet_list or numbered_list.**
+# 15. **Prefer a concise answer. If the source content is repetitive, merge and summarize instead of listing.**
+# 16. **If the user asks for a detailed SOP, you may note in a paragraph: "For full details, see the official document."**
+# 17. **Your total answer should never exceed 2000 characters.**
+
+
+    # ########################################################################
+    # # ORIGINAL SYSTEM PROMPT - UNCOMMENT TO USE INSTEAD OF JSON FORMAT
+    # ########################################################################
+    # system_prompt = f"""
+    # You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
+    # 1) Index data: (INDEX_DATA)
+    # 2) Python data: (PYTHON_DATA)
+    # *) Always Prioritise The python result if the 2 are different.
+    
+    # Use only these two sources to answer. If you find relevant info from both, answer using both. 
+    # At the end of your final answer, put EXACTLY one line with "Source: X" where X can be:
+    # - "Index" if only index data was used,
+    # - "Python" if only python data was used,
+    # - "Index & Python" if both were used,
+    # - or "No information was found in the Data. Can I help you with anything else?" if none is truly relevant.
+    # - Present your answer in a clear, readable format.
+    
+    # Important: If you see the user has multiple sub-questions, address them using the appropriate data from index_data or python_data. 
+    # Then decide which source(s) was used. or include both if there was a conflict making it clear you tell the user of the conflict.
+    
+    # User question:
+    # {user_question}
+    
+    # INDEX_DATA:
+    # {index_top_k}
+    
+    # PYTHON_DATA:
+    # {python_result}
+    
+    # Chat_history:
+    # {recent_history if recent_history else []}
+    # """
 
     try:
         final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.3)
@@ -984,7 +1080,7 @@ Chat_history:
             yield fallback_text
             return
 
-        yield final_text.strip()
+        yield final_text
     except Exception as e:
         logging.error(f"Error in final_answer_llm: {str(e)}")
         fallback_text = f"I'm sorry, but an error occurred: {str(e)}"
@@ -995,9 +1091,165 @@ Chat_history:
 #######################################################################################
 def post_process_source(final_text, index_dict, python_dict, user_question=None):
     """
-    No-op: Just return the text, optionally stripping whitespace and fixing double newlines.
+    • If the answer is valid JSON, inject file/table info into BOTH
+        – response_json["source_details"]   (for your UI)
+        – response_json["content"]          (visible paragraphs)
+    • Otherwise fall back to the legacy plain-text logic.
+    • Optionally, always ensure the user's question is present as the first heading or paragraph.
     """
-    return final_text.strip()
+    import json, re
+
+    def _inject_refs(resp, files=None, tables=None):
+        if not isinstance(resp.get("content"), list):
+            resp["content"] = []
+        if files:
+            bullet_block = "Referenced:\n- " + "\n- ".join(files)
+            resp["content"].append({
+                "type": "paragraph",
+                "text": bullet_block
+            })
+        if tables:
+            bullet_block = "Calculated using:\n- " + "\n- ".join(tables)
+            resp["content"].append({
+                "type": "paragraph",
+                "text": bullet_block
+            })
+
+    # ---------- strip code-fence wrappers before JSON parse ----------
+    cleaned = final_text.strip()
+    cleaned = re.sub(r"^```[a-zA-Z]*\s*", "", cleaned)   # remove ```json or ```
+    cleaned = re.sub(r"^'''[a-zA-Z]*\s*", "", cleaned)   # remove '''json or '''
+    cleaned = re.sub(r"\s*```$", "", cleaned)            # closing ```
+    cleaned = re.sub(r"\s*'''$", "", cleaned)            # closing '''
+
+    # ---------- attempt JSON branch ----------
+    try:
+        response_json = json.loads(cleaned)
+    except Exception:
+        response_json = None
+
+    if (
+        isinstance(response_json, dict)
+        and "content" in response_json
+        and "source"  in response_json
+    ):
+        idx_has  = index_dict .get("top_k" , "").strip().lower() not in ["", "no information"]
+        py_has   = python_dict.get("result", "").strip().lower() not in ["", "no information"]
+        src = response_json["source"].strip()
+        if src == "Python" and idx_has:
+            src = "Index & Python"
+        elif src == "Index" and py_has:
+            src = "Index & Python"
+        response_json["source"] = src
+        if src == "Index & Python":
+            files  = index_dict .get("file_names", [])
+            tables = python_dict.get("table_names", [])
+            #print(f"DEBUG: [post_process_source] src='Index & Python'. Files List: {files}, Tables List: {tables}")
+            response_json["source_details"] = {
+                "files"       : "", #index_dict.get("top_k", "No information"),
+                "code"        : "", #python_dict.get("code", ""),
+                "file_names"  : files,
+                "table_names" : tables
+            }
+            _inject_refs(response_json, files, tables)
+        elif src == "Index":
+            files = index_dict.get("file_names", [])
+            response_json["source_details"] = {
+                "files"      : "",
+                "file_names" : files
+            }
+            _inject_refs(response_json, files=files)
+        elif src == "Python":
+            if not python_dict.get("table_names"):
+                python_dict["table_names"] = re.findall(
+                    r'["\']([^"\']+\.(?:xlsx|xls|csv))["\']',
+                    python_dict.get("code", ""),
+                    flags=re.I
+                )
+            tables = python_dict.get("table_names", [])
+            response_json["source_details"] = {
+                "code"        : "",
+                "table_names" : tables
+            }
+            _inject_refs(response_json, tables=tables)
+        else:
+            response_json["source_details"] = {}
+                
+        # --- Ensure the user's question is present as first heading or paragraph ---
+        if user_question:
+            import difflib
+            def _is_similar(a, b, threshold=0.7):
+                a, b = a.strip().lower(), b.strip().lower()
+                seq_sim = difflib.SequenceMatcher(None, a, b).ratio()
+                a_tokens = set(a.split())
+                b_tokens = set(b.split())
+                if not a_tokens or not b_tokens:
+                    return False
+                overlap = len(a_tokens & b_tokens) / max(len(a_tokens), len(b_tokens))
+                return seq_sim > threshold or overlap > 0.7
+
+            uq_norm = user_question.strip().lower()
+            found = False
+            if isinstance(response_json.get("content"), list):
+                 for i, block in enumerate(response_json["content"]):
+                    # Check if block is a dict before accessing keys
+                    if isinstance(block, dict) and block.get("type") in ("heading", "paragraph"):
+                        block_text = block.get("text", "").strip().lower()
+                        if _is_similar(uq_norm, block_text):
+                            found = True
+                            break
+            else:
+                 # Initialize content as list if missing or not a list
+                 response_json["content"] = []
+
+            if not found:
+                response_json["content"].insert(0, {"type": "heading", "text": user_question})
+        return json.dumps(response_json)
+
+    # ---------- legacy plain-text branch (unchanged) ----------
+    text_lower = final_text.lower()
+
+    if "source: index & python" in text_lower:
+        top_k_text  = index_dict .get("top_k" , "No information")
+        code_text   = python_dict.get("code"  , "")
+        file_names  = index_dict .get("file_names" , [])
+        table_names = python_dict.get("table_names", [])
+        
+        src_idx = final_text.lower().find("source:")
+        if src_idx >= 0:
+            eol = final_text.find("\n", src_idx)
+            if eol < 0: eol = len(final_text)
+            prefix, suffix = final_text[:eol], final_text[eol:]
+            file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
+            table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
+            final_text = prefix + file_info + table_info + suffix
+        pass
+
+    elif "source: python" in text_lower:
+        code_text   = python_dict.get("code", "")
+        table_names = python_dict.get("table_names", [])
+        src_idx = final_text.lower().find("source:")
+        if src_idx >= 0:
+            eol = final_text.find("\n", src_idx)
+            if eol < 0: eol = len(final_text)
+            prefix, suffix = final_text[:eol], final_text[eol:]
+            table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
+            final_text = prefix + table_info + suffix
+        pass
+
+    elif "source: index" in text_lower:
+        top_k_text = index_dict.get("top_k", "No information")
+        file_names = index_dict.get("file_names", [])
+        src_idx = final_text.lower().find("source:")
+        if src_idx >= 0:
+            eol = final_text.find("\n", src_idx)
+            if eol < 0: eol = len(final_text)
+            prefix, suffix = final_text[:eol], final_text[eol:]
+            file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
+            final_text = prefix + file_info + suffix
+        pass
+
+    return final_text
 
 
 #######################################################################################
@@ -1403,8 +1655,3 @@ def robust_split_question(user_question, use_semantic_parsing=True):
             seen.add(sq)
     return result
 
-# Step 3 (optional): Normalization helper
-
-def normalize_question(q):
-    # Expand this with any patterns/phrases common in your user base
-    return q.lower().replace("what to do if there was", "if there was").replace("what to do if", "if")
