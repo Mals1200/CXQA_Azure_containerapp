@@ -1043,6 +1043,13 @@ Your output must be formatted as a properly escaped JSON with the following stru
   "source": "Source type (Index, Python, Index & Python, or AI Generated)"
 }}
 
+IMPORTANT RULES FOR TABLES AND LISTS:
+- If the answer requires a table (for example, monthly sales, visits, covers, etc.), DO NOT use markdown tables, pipes, or code blocks.
+- Instead, output the data as a numbered_list (preferred) or bullet_list, where each list item is a single row formatted as:
+  'Month: January | Visitors: 230,666 | Sales: 24,229,600 | Covers: 190,456'
+- Limit the list to the first 12 rows. If there are more, add an extra item: "…and more months in the data."
+- NEVER use markdown table syntax (| Month | ...) or code blocks for table data, as Microsoft Teams cannot display them.
+
 Important guidelines:
 1. Format your content appropriately based on the answer structure you want to convey
 2. Use "heading" for titles and subtitles
@@ -1734,3 +1741,22 @@ def normalize_question(question):
         question = re.sub(rf'\b{abbr}\b', full, question, flags=re.IGNORECASE)
     
     return question
+
+def convert_markdown_table_to_list(md_table: str):
+    """
+    Convert a markdown table string to a numbered list of row strings.
+    Assumes header row is first, separator row is second, then data rows.
+    """
+    lines = md_table.strip().splitlines()
+    if len(lines) < 3:  # Not a markdown table
+        return []
+
+    header = [h.strip() for h in lines[0].split('|') if h.strip()]
+    data_lines = lines[2:]  # skip header and separator
+    result = []
+    for row in data_lines:
+        cells = [c.strip() for c in row.split('|') if c.strip()]
+        if len(cells) == len(header):
+            row_str = " | ".join(f"{h}: {v}" for h, v in zip(header, cells))
+            result.append(row_str)
+    return result
