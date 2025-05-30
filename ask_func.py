@@ -35,7 +35,7 @@ from datetime import datetime
 CONFIG = {
     # ── MAIN, high-capacity model (Tool-1 Index, Tool-2 Python, Tool-3 Fallback) ──
     "LLM_ENDPOINT"     : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
-                         "openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview",
+                         "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
     # Add CODE LLM endpoint (same as main)
     "LLM_ENDPOINT_CODE": "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
                          "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
@@ -45,7 +45,7 @@ CONFIG = {
 
     # ── AUXILIARY model (classifiers, splitters, etc.) ────────────────────────────
     "LLM_ENDPOINT_AUX" : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
-                         "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
+                         "openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview",
 
     # (unchanged settings below) ───────────────────────────────────────────────────
     "SEARCH_SERVICE_NAME": "cxqa-azureai-search",
