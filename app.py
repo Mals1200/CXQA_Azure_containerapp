@@ -13,6 +13,7 @@ from threading import Lock
 import re
 import json
 import urllib.parse
+import re as _re  # for robust source extraction
 
 from flask import Flask, request, jsonify, Response
 from botbuilder.core import (
@@ -449,6 +450,26 @@ async def _bot_logic(turn_context: TurnContext):
                     "fontType": "Default",
                     "size": "Default"
                 })
+
+        # --- Robust Source Line Extraction ---
+        # Try to find a line with 'source' (case-insensitive), even if bold, bullet, or extra spaces
+        source_line = ""
+        for line in lines[::-1]:  # search from end
+            match = _re.match(r"^(?:\*\*|\-|\*)?\s*source\s*:?\s*(.*)$", line.strip(), _re.IGNORECASE)
+            if match:
+                val = match.group(1).strip()
+                if val:
+                    source_line = f"Source: {val}"
+                else:
+                    source_line = "Source:"
+                break
+        # If still not found, fallback to backend's source info if available
+        if not source_line and 'python' in markdown.lower():
+            source_line = "Source: Python"
+        elif not source_line and 'index' in markdown.lower():
+            source_line = "Source: Index"
+        elif not source_line and 'ai generated' in markdown.lower():
+            source_line = "Source: AI Generated"
 
         # Source/References container (hidden by default)
         source_container = {
