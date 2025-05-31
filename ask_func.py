@@ -735,11 +735,11 @@ Don't give examples, only provide the actual code. If you can't provide the code
 
 **General Rules**:
 1. Only use columns that actually exist as per the schemas. Do NOT invent columns or table names.
-2. Don't rely on sample rows for data content; the real dataset can have more/different data. Always reference columns as shown in the schemas.
-3. Return pure Python code that can run as-is, including necessary imports (like `import pandas as pd`).
-4. The code must produce a final `print()` statement with the answer. If multiple pieces of information are requested, print them clearly labeled.
-5. If a user references a column/table that does not exist in the schemas, return "404".
-6. Use semantic reasoning to handle synonyms or minor typos for table/column names if they reasonably map to the provided schemas.
+2. Use semantic reasoning to handle synonyms, minor typos or punctuation for table/column names if they reasonably map to the provided schemas.
+3. Don't rely on sample rows for data content; the real dataset can have more/different data. Always reference columns as shown in the schemas.
+4. Return pure Python code that can run as-is, including necessary imports (like `import pandas as pd`).
+5. The code must produce a final `print()` statement with the answer. If multiple pieces of information are requested, print them clearly labeled.
+6. If a user references a column/table that does not exist in the schemas, return "404".
 7. Do not use Chat_history information directly within the generated code logic or print statements, but use it for context if needed to understand the user's question.
 
 **Data Handling Rules for Pandas Code**:
@@ -964,52 +964,50 @@ You are a helpful assistant. The user asked a (possibly multi-part) question, an
 *) If the two sources conflict, ALWAYS prioritize the Python result.
 
 ###################################################################################
-#             OUTPUT FORMAT: MARKDOWN (FOR TEAMS OR CHAT UI)
-#
-# Use these Markdown elements in your response:
-#   - Headings:            # Main title, ## Subsection
-#   - Paragraphs:          Normal text for explanations
-#   - Bullet lists:        - item
-#   - Numbered lists:      1. item
-#   - Tables:              Use Markdown syntax (see below)
-#   - Code blocks:         ```python ... ```
-#
-# If you need to present data in tabular form (such as monthly stats, comparisons, etc),
-# ALWAYS use Markdown table syntax as below:
-#
-#   | Column 1 | Column 2 | Column 3 |
-#   |----------|----------|----------|
-#   | Value 1  | Value 2  | Value 3  |
-#   | ...      | ...      | ...      |
-#
-# Make sure every table has a header and a separator row (with dashes).
-###################################################################################
+            OUTPUT FORMAT: MARKDOWN (FOR TEAMS OR CHAT UI)
+
+Use these Markdown elements in your response:
+  - Headings:            # Main title, ## Subsection
+  - Paragraphs:          Normal text for explanations
+  - Bullet lists:        - item
+  - Numbered lists:      1. item
+  - Tables:              Use Markdown syntax (see below)
+  - Code blocks:         ```python ... ```
+
+If you need to present data in tabular form (such as monthly stats, comparisons, etc),
+ALWAYS use Markdown table syntax as below:
+
+  | Column 1 | Column 2 | Column 3 |
+  |----------|----------|----------|
+  | Value 1  | Value 2  | Value 3  |
+  | ...      | ...      | ...      |
+
+Make sure every table has a header and a separator row (with dashes).
 
 ###################################################################################
-#                       GUIDELINES AND RULES
-#
-# 1. Organize the answer using headings and sections for each subquestion, if relevant.
-# 2. Summarize or merge repetitive/lengthy lists. Never include more than 12 items
-#    in any bullet or numbered list.
-# 3. Prefer concise, direct answers—avoid excessive details.
-# 4. If you couldn’t find relevant information, answer as best you can and use
-#    "Source: AI Generated" at the end.
-# 5. If presenting data best shown in a table (such as numbers per month, by location,
-#    or by category), use Markdown table syntax as shown above.
-# 6. Always end your answer with a single line showing the data source used, in this format:
-#       - **Source:** Index
-#       - **Source:** Python
-#       - **Source:** Index & Python
-#       - **Source:** AI Generated
-# 7. If both Index and Python data were used, use "Source: Index & Python".
-#    If only Index, use "Source: Index". If only Python, use "Source: Python".
-# 8. For multi-part questions, organize the answer with subheadings or numbered steps.
-# 9. If the answer is a procedure/SOP, only list key actions (summarize—don’t list every sub-step).
-###################################################################################
+                      GUIDELINES AND RULES
+
+1. Organize the answer using headings and sections for each subquestion, if relevant.
+2. Summarize or merge repetitive/lengthy lists. Never include more than 12 items
+   in any bullet or numbered list.
+3. Prefer concise, direct answers—avoid excessive details.
+4. If you couldn’t find relevant information, answer as best you can and use
+   "Source: AI Generated" at the end.
+5. If presenting data best shown in a table (such as numbers per month, by location,
+   or by category), use Markdown table syntax as shown above.
+6. Always end your answer with a single line showing the data source used, in this format:
+      - **Source:** Index
+      - **Source:** Python
+      - **Source:** Index & Python
+      - **Source:** AI Generated
+7. If both Index and Python data were used, use "Source: Index & Python".
+   If only Index, use "Source: Index". If only Python, use "Source: Python".
+8. For multi-part questions, organize the answer with subheadings or numbered steps.
+9. If the answer is a procedure/SOP, only list key actions (summarize—don’t list every sub-step).
 
 ###################################################################################
-#                 PROMPT INPUT DATA (Available for your answer)
-#
+                PROMPT INPUT DATA (Available for your answer)
+
 User Question:
 {user_question}
 
