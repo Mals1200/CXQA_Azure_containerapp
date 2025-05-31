@@ -1,11 +1,6 @@
-# version 11c with Adaptive Card Size Limiting for Teams (28KB max)
-# ((Hyperlink file names))
-# Made it display the files sources for the compounded questions:
-#     Referenced: <Files>                <-------Hyperlink to sharepoint
-#     Calculated using: <Tables>         <-------Hyperlink to sharepoint
-# Adaptive Card output is automatically truncated if it exceeds 28KB.
-# If truncated, user gets a simple error card instead of no answer.
-# (still the url is fixed to one file. NEEDS WORK!)
+# version 12a with RENDER_MODE switch ("markdown" or "adaptivecard")
+# Robust and bulletproof: Always shows references/source, never crashes, 
+# works for both JSON and markdown from ask_func.py
 
 import os
 import asyncio
@@ -13,7 +8,6 @@ from threading import Lock
 import re
 import json
 import urllib.parse
-import re as _re  # for robust source extraction
 
 from flask import Flask, request, jsonify, Response
 from botbuilder.core import (
@@ -28,16 +22,18 @@ from ask_func import Ask_Question, chat_history
 
 app = Flask(__name__)
 
+# ======== TOP-LEVEL SWITCH ========
+RENDER_MODE = "adaptivecard"  # "markdown" or "adaptivecard"
+# ==================================
+
 MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
 MICROSOFT_APP_PASSWORD = os.environ.get("MICROSOFT_APP_PASSWORD", "")
 
 adapter_settings = BotFrameworkAdapterSettings(MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD)
 adapter = BotFrameworkAdapter(adapter_settings)
 
-# Teams Adaptive Card byte limit (official: 28KB)
 MAX_TEAMS_CARD_BYTES = 28 * 1024  # 28KB
 
-# Thread-safe conversation state management
 conversation_states = {}
 state_lock = Lock()
 
@@ -80,7 +76,6 @@ def messages():
     return Response(status=200)
 
 def adaptive_card_size_ok(card_dict):
-    # Returns True if JSON serialized card is <= 28KB
     card_json = json.dumps(card_dict, ensure_ascii=False)
     return len(card_json.encode("utf-8")) <= MAX_TEAMS_CARD_BYTES
 
@@ -102,6 +97,109 @@ def make_fallback_card():
         "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
         "version": "1.5"
     }
+
+def extract_references_from_json_or_markdown(answer_text):
+    """
+    Extracts main answer, ref_names, calc_names, source from answer_text.
+    Handles both JSON structure (with content/source) and markdown fallback.
+    Returns: (main_answer, ref_names, calc_names, source)
+    """
+    # Try JSON first
+    cleaned = answer_text.strip()
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:].strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned[3:].strip()
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3].strip()
+    try:
+        response_json = json.loads(cleaned)
+        if isinstance(response_json, dict) and "content" in response_json:
+            content_items = response_json["content"]
+            main_answer_lines = []
+            ref_names = []
+            calc_names = []
+            source = ""
+            for item in content_items:
+                if isinstance(item, dict):
+                    t = item.get("type", "")
+                    txt = item.get("text", "")
+                    if t == "heading" or t == "paragraph" or t == "numbered_list" or t == "bullet_list":
+                        if txt.startswith("Referenced:"):
+                            for line in txt.splitlines()[1:]:
+                                if line.strip().startswith("-"):
+                                    ref_names.append(line.strip()[1:].strip())
+                        elif txt.startswith("Calculated using:"):
+                            for line in txt.splitlines()[1:]:
+                                if line.strip().startswith("-"):
+                                    calc_names.append(line.strip()[1:].strip())
+                        elif txt.lower().startswith("source:"):
+                            source = txt.split(":",1)[-1].strip()
+                        else:
+                            main_answer_lines.append(txt)
+            # fallback: also check top-level "source"
+            if not source:
+                source = response_json.get("source", "")
+            main_answer = "\n".join(main_answer_lines).strip()
+            return main_answer, ref_names, calc_names, source
+    except Exception:
+        pass
+
+    # Now fallback to markdown
+    markdown = answer_text.strip()
+    if markdown.startswith('```markdown'):
+        markdown = markdown[len('```markdown'):].strip()
+    if markdown.startswith('```'):
+        markdown = markdown[3:].strip()
+    if markdown.endswith('```'):
+        markdown = markdown[:-3].strip()
+
+    lines = markdown.split('\n')
+    main_answer_lines = []
+    ref_lines = []
+    calc_lines = []
+    source_line = ""
+    in_refs = False
+    in_calcs = False
+    for line in lines:
+        lstr = line.strip()
+        if lstr.lower().startswith("referenced:"):
+            in_refs = True
+            in_calcs = False
+            ref_lines.append(lstr)
+            continue
+        elif lstr.lower().startswith("calculated using:"):
+            in_refs = False
+            in_calcs = True
+            calc_lines.append(lstr)
+            continue
+        elif lstr.lower().startswith("source:"):
+            source_line = lstr
+            in_refs = False
+            in_calcs = False
+            continue
+        if in_refs:
+            ref_lines.append(lstr)
+        elif in_calcs:
+            calc_lines.append(lstr)
+        else:
+            main_answer_lines.append(line)
+
+    def extract_names(lines):
+        names = []
+        for l in lines[1:]:  # skip the first line
+            l = l.strip()
+            if l.startswith("-"):
+                name = l[1:].strip()
+                if name:
+                    names.append(name)
+        return names
+
+    ref_names = extract_names(ref_lines)
+    calc_names = extract_names(calc_lines)
+    source = source_line.replace("**", "").replace("*", "").replace("Source:", "").strip()
+    main_answer = "\n".join(main_answer_lines).strip()
+    return main_answer, ref_names, calc_names, source
 
 async def _bot_logic(turn_context: TurnContext):
     conversation_id = turn_context.activity.conversation.id
@@ -138,231 +236,34 @@ async def _bot_logic(turn_context: TurnContext):
         state['history'] = ask_func.chat_history
         state['cache'] = ask_func.tool_cache
 
-        try:
-            cleaned_answer_text = answer_text.strip()
-            if cleaned_answer_text.startswith('```json'):
-                cleaned_answer_text = cleaned_answer_text[7:].strip()
-            if cleaned_answer_text.startswith('```'):
-                cleaned_answer_text = cleaned_answer_text[3:].strip()
-            if cleaned_answer_text.endswith('```'):
-                cleaned_answer_text = cleaned_answer_text[:-3].strip()
-            cleaned_answer_text = cleaned_answer_text.replace('\n', '\n')
-            response_json = json.loads(cleaned_answer_text)
-            if isinstance(response_json, dict) and "content" in response_json and "source" in response_json:
-                content_items = response_json["content"]
-                source = response_json["source"]
-                body_blocks = []
-                for item in content_items:
-                    item_type = item.get("type", "")
-                    if item_type == "heading":
-                        body_blocks.append({
-                            "type": "TextBlock",
-                            "text": item.get("text", ""),
-                            "wrap": True,
-                            "weight": "Bolder",
-                            "size": "Large",
-                            "spacing": "Medium"
-                        })
-                    elif item_type == "paragraph":
-                        text = item.get("text", "")
-                        if not (text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:")):
-                            body_blocks.append({
-                                "type": "TextBlock",
-                                "text": text,
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
-                    elif item_type == "bullet_list":
-                        items = item.get("items", [])
-                        for list_item in items:
-                            body_blocks.append({
-                                "type": "TextBlock",
-                                "text": f"• {list_item}",
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
-                    elif item_type == "numbered_list":
-                        items = item.get("items", [])
-                        for i, list_item in enumerate(items, 1):
-                            body_blocks.append({
-                                "type": "TextBlock",
-                                "text": f"{i}. {list_item}",
-                                "wrap": True,
-                                "spacing": "Small"
-                            })
-                    elif item_type == "code_block":
-                        body_blocks.append({
-                            "type": "TextBlock",
-                            "text": f"```\n{item.get('code', '')}\n```",
-                            "wrap": True,
-                            "fontType": "Monospace",
-                            "spacing": "Medium"
-                        })
-                source_container = {
-                    "type": "Container",
-                    "id": "sourceContainer",
-                    "isVisible": False,
-                    "style": "emphasis",
-                    "bleed": True,
-                    "maxHeight": "500px",
-                    "isScrollable": True,
-                    "items": []
-                }
-                for item in content_items:
-                    if item.get("type", "") == "paragraph":
-                        text = item.get("text", "")
-                        if text.strip().startswith("Referenced:") or text.strip().startswith("Calculated using:"):
-                            lines = text.split("\n")
-                            if lines:
-                                source_container["items"].append({
-                                    "type": "TextBlock",
-                                    "text": lines[0],
-                                    "wrap": True,
-                                    "spacing": "Small",
-                                    "weight": "Bolder"
-                                })
-                            for line in lines[1:]:
-                                if line.strip().startswith("-"):
-                                    fname = line.strip()[1:].strip()
-                                    if fname:
-                                        sharepoint_base = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
-                                        url = sharepoint_base.format(urllib.parse.quote(fname))
-                                        source_container["items"].append({
-                                            "type": "TextBlock",
-                                            "text": f"[{fname}]({url})",
-                                            "wrap": True,
-                                            "spacing": "Small"
-                                        })
-                                else:
-                                    source_container["items"].append({
-                                        "type": "TextBlock",
-                                        "text": line,
-                                        "wrap": True,
-                                        "spacing": "Small"
-                                    })
-                source_container["items"].append({
-                    "type": "TextBlock",
-                    "text": f"Source: {source}",
-                    "wrap": True,
-                    "weight": "Bolder",
-                    "color": "Accent",
-                    "spacing": "Medium",
-                })
-                body_blocks.append(source_container)
-                body_blocks.append({
-                    "type": "ColumnSet",
-                    "columns": [
-                        {
-                            "type": "Column",
-                            "id": "showSourceBtn",
-                            "items": [
-                                {
-                                    "type": "ActionSet",
-                                    "actions": [
-                                        {
-                                            "type": "Action.ToggleVisibility",
-                                            "title": "Show Source",
-                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                        }
-                                    ]
-                                }
-                            ]
-                        },
-                        {
-                            "type": "Column",
-                            "id": "hideSourceBtn",
-                            "isVisible": False,
-                            "items": [
-                                {
-                                    "type": "ActionSet",
-                                    "actions": [
-                                        {
-                                            "type": "Action.ToggleVisibility",
-                                            "title": "Hide Source",
-                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                        }
-                                    ]
-                                }
-                            ]
-                        }
-                    ]
-                })
-                adaptive_card = {
-                    "type": "AdaptiveCard",
-                    "body": body_blocks,
-                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                    "version": "1.5"
-                }
-                # SIZE CHECK for Teams
-                if not adaptive_card_size_ok(adaptive_card):
-                    adaptive_card = make_fallback_card()
-                message = Activity(
-                    type="message",
-                    attachments=[{
-                        "contentType": "application/vnd.microsoft.card.adaptive",
-                        "content": adaptive_card
-                    }]
-                )
-                await turn_context.send_activity(message)
-                return
-        except (json.JSONDecodeError, KeyError, TypeError):
-            pass
+        main_answer, ref_names, calc_names, source = extract_references_from_json_or_markdown(answer_text)
 
-        # --- Markdown/Plaintext Handling (Single Card with Show Source Toggle) ---
-        markdown = answer_text.strip()
-        if markdown.startswith('```markdown'):
-            markdown = markdown[len('```markdown'):].strip()
-        if markdown.startswith('```'):
-            markdown = markdown[3:].strip()
-        if markdown.endswith('```'):
-            markdown = markdown[:-3].strip()
+        if RENDER_MODE == "markdown":
+            # --- Markdown (Teams native) with references appended as markdown ---
+            markdown = main_answer
+            if ref_names:
+                markdown += "\n\n**Referenced:**\n" + "\n".join(f"- {f}" for f in ref_names)
+            if calc_names:
+                markdown += "\n\n**Calculated using:**\n" + "\n".join(f"- {t}" for t in calc_names)
+            if source:
+                markdown += f"\n\n**Source:** {source}"
+            await turn_context.send_activity(Activity(type="message", text=markdown))
+            return
 
-        lines = markdown.split('\n')
-        main_answer_lines = []
-        ref_lines = []
-        calc_lines = []
-        source_line = ""
-        in_refs = False
-        in_calcs = False
-        for line in lines:
-            lstr = line.strip()
-            if lstr.lower().startswith("referenced:"):
-                in_refs = True
-                in_calcs = False
-                ref_lines.append(lstr)
-                continue
-            elif lstr.lower().startswith("calculated using:"):
-                in_refs = False
-                in_calcs = True
-                calc_lines.append(lstr)
-                continue
-            elif lstr.lower().startswith("source:"):
-                source_line = lstr
-                in_refs = False
-                in_calcs = False
-                continue
-            if in_refs:
-                ref_lines.append(lstr)
-            elif in_calcs:
-                calc_lines.append(lstr)
-            else:
-                main_answer_lines.append(line)
-
-        main_answer = "\n".join(main_answer_lines).strip()
-
-        # --- Build the answer body blocks (supports markdown tables!) ---
+        # --- AdaptiveCard mode (everything in one card with toggle) ---
         def markdown_table_to_adaptive(lines):
             table_lines = [l for l in lines if l.strip().startswith('|') and l.strip().endswith('|')]
             if len(table_lines) < 2:
                 return None, None, []
             header = [h.strip() for h in table_lines[0].strip('|').split('|')]
             rows = []
-            for l in table_lines[2:]:  # skip header and separator
+            for l in table_lines[2:]:
                 row = [c.strip() for c in l.strip('|').split('|')]
                 if len(row) == len(header):
                     rows.append(row)
             return header, rows, table_lines
 
+        main_answer_lines = main_answer.split("\n")
         table_header, table_rows, table_lines = markdown_table_to_adaptive(main_answer_lines)
         body_blocks = []
 
@@ -377,7 +278,6 @@ async def _bot_logic(turn_context: TurnContext):
                     "fontType": "Default",
                     "size": "Default"
                 })
-            # Render header
             body_blocks.append({
                 "type": "ColumnSet",
                 "columns": [
@@ -394,7 +294,6 @@ async def _bot_logic(turn_context: TurnContext):
                     } for h in table_header
                 ]
             })
-            # Render rows
             for row in table_rows:
                 body_blocks.append({
                     "type": "ColumnSet",
@@ -411,7 +310,6 @@ async def _bot_logic(turn_context: TurnContext):
                         } for c in row
                     ]
                 })
-            # Add any text after the table (e.g., notes)
             if table_lines:
                 after_table = main_answer.split(table_lines[-1])[-1].strip()
                 if after_table:
@@ -432,21 +330,7 @@ async def _bot_logic(turn_context: TurnContext):
                     "size": "Default"
                 })
 
-        # --- Build the source (references) container ---
-        def extract_names(lines):
-            names = []
-            for l in lines[1:]:
-                l = l.strip()
-                if l.startswith("-"):
-                    name = l[1:].strip()
-                    if name:
-                        names.append(name)
-            return names
-
-        ref_names = extract_names(ref_lines)
-        calc_names = extract_names(calc_lines)
-        source = source_line.replace("**", "").replace("*", "").replace("Source:", "").strip()
-
+        # --- Build the source container (always include sections, even if empty) ---
         source_container = {
             "type": "Container",
             "id": "sourceContainer",
@@ -457,14 +341,15 @@ async def _bot_logic(turn_context: TurnContext):
             "isScrollable": True,
             "items": []
         }
+        # Referenced
+        source_container["items"].append({
+            "type": "TextBlock",
+            "text": "Referenced:",
+            "wrap": True,
+            "weight": "Bolder",
+            "spacing": "Small"
+        })
         if ref_names:
-            source_container["items"].append({
-                "type": "TextBlock",
-                "text": "Referenced Files:",
-                "wrap": True,
-                "weight": "Bolder",
-                "spacing": "Small"
-            })
             for fname in ref_names:
                 url = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
                 source_container["items"].append({
@@ -474,14 +359,22 @@ async def _bot_logic(turn_context: TurnContext):
                     "color": "Accent",
                     "spacing": "Small"
                 })
-        if calc_names:
+        else:
             source_container["items"].append({
                 "type": "TextBlock",
-                "text": "Calculated using:",
+                "text": "(None)",
                 "wrap": True,
-                "weight": "Bolder",
                 "spacing": "Small"
             })
+        # Calculated using
+        source_container["items"].append({
+            "type": "TextBlock",
+            "text": "Calculated using:",
+            "wrap": True,
+            "weight": "Bolder",
+            "spacing": "Small"
+        })
+        if calc_names:
             for tname in calc_names:
                 url = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
                 source_container["items"].append({
@@ -491,16 +384,23 @@ async def _bot_logic(turn_context: TurnContext):
                     "color": "Accent",
                     "spacing": "Small"
                 })
-        if source:
+        else:
             source_container["items"].append({
                 "type": "TextBlock",
-                "text": f"Source: {source}",
-                "weight": "Bolder",
-                "color": "Accent",
-                "spacing": "Medium",
+                "text": "(None)",
+                "wrap": True,
+                "spacing": "Small"
             })
+        # Source
+        source_container["items"].append({
+            "type": "TextBlock",
+            "text": f"Source: {source if source else '(Unknown)'}",
+            "weight": "Bolder",
+            "color": "Accent",
+            "spacing": "Medium",
+        })
 
-        # --- Add Show/Hide Source toggle buttons ---
+        # --- Show/Hide Source toggle ---
         show_hide_buttons = {
             "type": "ColumnSet",
             "columns": [
@@ -541,7 +441,6 @@ async def _bot_logic(turn_context: TurnContext):
             ]
         }
 
-        # --- Assemble the Adaptive Card body ---
         adaptive_card = {
             "type": "AdaptiveCard",
             "body": body_blocks + [source_container, show_hide_buttons],
