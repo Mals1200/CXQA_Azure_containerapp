@@ -461,6 +461,16 @@ async def _bot_logic(turn_context: TurnContext):
             "isScrollable": True,
             "items": []
         }
+        # Add Source line at the top (always)
+        if source_line:
+            source_container["items"].append({
+                "type": "TextBlock",
+                "text": source_line,
+                "wrap": True,
+                "weight": "Bolder",
+                "color": "Accent",
+                "spacing": "Medium",
+            })
         # Add Referenced files
         if ref_names:
             source_container["items"].append({
@@ -477,7 +487,8 @@ async def _bot_logic(turn_context: TurnContext):
                     "type": "TextBlock",
                     "text": f"[{fname}]({url})",
                     "wrap": True,
-                    "spacing": "Small"
+                    "spacing": "Small",
+                    "color": "Accent"
                 })
         # Add Calculated using tables
         if calc_names:
@@ -495,28 +506,20 @@ async def _bot_logic(turn_context: TurnContext):
                     "type": "TextBlock",
                     "text": f"[{tname}]({url})",
                     "wrap": True,
-                    "spacing": "Small"
+                    "spacing": "Small",
+                    "color": "Accent"
                 })
-        # Add Source line
-        if source_line:
-            source_container["items"].append({
-                "type": "TextBlock",
-                "text": source_line,
-                "wrap": True,
-                "weight": "Bolder",
-                "color": "Accent",
-                "spacing": "Medium",
-            })
         # Only add source container if it has items
         if source_container["items"]:
             body_blocks.append(source_container)
-            # Add Show/Hide Source button
+            # Add Show/Hide Source button logic
             body_blocks.append({
                 "type": "ColumnSet",
                 "columns": [
                     {
                         "type": "Column",
                         "id": "showSourceBtn",
+                        "isVisible": True,
                         "items": [
                             {
                                 "type": "ActionSet",
