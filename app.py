@@ -23,7 +23,7 @@ from ask_func import Ask_Question, chat_history
 app = Flask(__name__)
 
 # ======== TOP-LEVEL SWITCH ========
-RENDER_MODE = "markdown"  # "markdown" or "adaptivecard"
+RENDER_MODE = "adaptivecard"  # "markdown" or "adaptivecard"
 # ==================================
 
 MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
@@ -201,6 +201,34 @@ def extract_references_from_json_or_markdown(answer_text):
     main_answer = "\n".join(main_answer_lines).strip()
     return main_answer, ref_names, calc_names, source
 
+def extract_source_info(user_message, ask_func):
+    tool_cache = getattr(ask_func, 'tool_cache', {})
+    cache_key = user_message.strip().lower()
+    index_dict = {}
+    python_dict = {}
+    if cache_key in tool_cache:
+        index_dict, python_dict, _ = tool_cache[cache_key]
+    file_names = index_dict.get("file_names", []) or []
+    table_names = python_dict.get("table_names", []) or []
+    # Determine the most likely source label:
+    source = ""
+    if index_dict.get("top_k", "").strip().lower() not in ["", "no information"] \
+       and python_dict.get("result", "").strip().lower() not in ["", "no information"]:
+        source = "Index & Python"
+    elif index_dict.get("top_k", "").strip().lower() not in ["", "no information"]:
+        source = "Index"
+    elif python_dict.get("result", "").strip().lower() not in ["", "no information"]:
+        source = "Python"
+    else:
+        source = "AI Generated"
+    return file_names, table_names, source
+
+def clean_main_answer(answer_text):
+    # Remove any line at the end starting with "Source:"
+    lines = answer_text.strip().split('\n')
+    lines = [l for l in lines if not re.match(r"(?i)\s*\**source:", l)]
+    return "\n".join(lines).strip()
+
 async def _bot_logic(turn_context: TurnContext):
     conversation_id = turn_context.activity.conversation.id
     state = get_conversation_state(conversation_id)
@@ -236,17 +264,19 @@ async def _bot_logic(turn_context: TurnContext):
         state['history'] = ask_func.chat_history
         state['cache'] = ask_func.tool_cache
 
-        main_answer, ref_names, calc_names, source = extract_references_from_json_or_markdown(answer_text)
+        file_names, table_names, source = extract_source_info(user_message, ask_func)
+        main_answer = clean_main_answer(answer_text)
 
         if RENDER_MODE == "markdown":
-            # --- Markdown (Teams native) with references appended as markdown ---
             markdown = main_answer
-            if ref_names:
-                markdown += "\n\n**Referenced:**\n" + "\n".join(f"- {f}" for f in ref_names)
-            if calc_names:
-                markdown += "\n\n**Calculated using:**\n" + "\n".join(f"- {t}" for t in calc_names)
-            if source:
-                markdown += f"\n\n**Source:** {source}"
+            sections = []
+            if source in ("Index", "Index & Python") and file_names:
+                sections.append("**Referenced:**\n" + "\n".join(f"- {f}" for f in file_names))
+            if source in ("Python", "Index & Python") and table_names:
+                sections.append("**Calculated using:**\n" + "\n".join(f"- {t}" for t in table_names))
+            sections.append(f"**Source:** {source}")
+            if sections:
+                markdown += "\n\n" + "\n\n".join(sections)
             await turn_context.send_activity(Activity(type="message", text=markdown))
             return
 
@@ -278,6 +308,7 @@ async def _bot_logic(turn_context: TurnContext):
                     "fontType": "Default",
                     "size": "Default"
                 })
+            # Render header
             body_blocks.append({
                 "type": "ColumnSet",
                 "columns": [
@@ -294,6 +325,7 @@ async def _bot_logic(turn_context: TurnContext):
                     } for h in table_header
                 ]
             })
+            # Render rows
             for row in table_rows:
                 body_blocks.append({
                     "type": "ColumnSet",
@@ -310,6 +342,7 @@ async def _bot_logic(turn_context: TurnContext):
                         } for c in row
                     ]
                 })
+            # Add any text after the table (e.g., notes)
             if table_lines:
                 after_table = main_answer.split(table_lines[-1])[-1].strip()
                 if after_table:
@@ -330,7 +363,7 @@ async def _bot_logic(turn_context: TurnContext):
                     "size": "Default"
                 })
 
-        # --- Build the source container (always include sections, even if empty) ---
+        # --- Build the source container (only relevant sections, always inside the button) ---
         source_container = {
             "type": "Container",
             "id": "sourceContainer",
@@ -341,60 +374,55 @@ async def _bot_logic(turn_context: TurnContext):
             "isScrollable": True,
             "items": []
         }
-        # Referenced
-        source_container["items"].append({
-            "type": "TextBlock",
-            "text": "Referenced:",
-            "wrap": True,
-            "weight": "Bolder",
-            "spacing": "Small"
-        })
-        if ref_names:
-            for fname in ref_names:
-                url = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
-                source_container["items"].append({
-                    "type": "TextBlock",
-                    "text": f"[{fname}]({url})",
-                    "wrap": True,
-                    "color": "Accent",
-                    "spacing": "Small"
-                })
-        else:
+        if source in ("Index", "Index & Python"):
             source_container["items"].append({
                 "type": "TextBlock",
-                "text": "(None)",
-                "wrap": True,
-                "spacing": "Small"
+                "text": "Referenced:",
+                "weight": "Bolder",
+                "spacing": "Small",
+                "wrap": True
             })
-        # Calculated using
-        source_container["items"].append({
-            "type": "TextBlock",
-            "text": "Calculated using:",
-            "wrap": True,
-            "weight": "Bolder",
-            "spacing": "Small"
-        })
-        if calc_names:
-            for tname in calc_names:
-                url = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
+            if file_names:
+                for fname in file_names:
+                    url = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
+                    source_container["items"].append({
+                        "type": "TextBlock",
+                        "text": f"[{fname}]({url})",
+                        "wrap": True,
+                        "color": "Accent"
+                    })
+            else:
                 source_container["items"].append({
                     "type": "TextBlock",
-                    "text": f"[{tname}]({url})",
-                    "wrap": True,
-                    "color": "Accent",
-                    "spacing": "Small"
+                    "text": "(None)",
+                    "wrap": True
                 })
-        else:
+        if source in ("Python", "Index & Python"):
             source_container["items"].append({
                 "type": "TextBlock",
-                "text": "(None)",
-                "wrap": True,
-                "spacing": "Small"
+                "text": "Calculated using:",
+                "weight": "Bolder",
+                "spacing": "Small",
+                "wrap": True
             })
-        # Source
+            if table_names:
+                for tname in table_names:
+                    url = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
+                    source_container["items"].append({
+                        "type": "TextBlock",
+                        "text": f"[{tname}]({url})",
+                        "wrap": True,
+                        "color": "Accent"
+                    })
+            else:
+                source_container["items"].append({
+                    "type": "TextBlock",
+                    "text": "(None)",
+                    "wrap": True
+                })
         source_container["items"].append({
             "type": "TextBlock",
-            "text": f"Source: {source if source else '(Unknown)'}",
+            "text": f"Source: {source or '(Unknown)'}",
             "weight": "Bolder",
             "color": "Accent",
             "spacing": "Medium",
@@ -441,6 +469,7 @@ async def _bot_logic(turn_context: TurnContext):
             ]
         }
 
+        # --- Assemble the Adaptive Card body ---
         adaptive_card = {
             "type": "AdaptiveCard",
             "body": body_blocks + [source_container, show_hide_buttons],
