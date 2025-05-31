@@ -308,8 +308,7 @@ async def _bot_logic(turn_context: TurnContext):
         except (json.JSONDecodeError, KeyError, TypeError):
             pass
 
-        # --- Markdown/Plaintext Handling ---
-        # Extract main answer, references, and source from Markdown
+        # --- Markdown/Plaintext Handling (Two Replies: Markdown + Source Card) ---
         markdown = answer_text.strip()
         # Remove code fences if present
         if markdown.startswith('```markdown'):
@@ -319,7 +318,6 @@ async def _bot_logic(turn_context: TurnContext):
         if markdown.endswith('```'):
             markdown = markdown[:-3].strip()
 
-        # Split into lines
         lines = markdown.split('\n')
         main_answer_lines = []
         ref_lines = []
@@ -352,10 +350,11 @@ async def _bot_logic(turn_context: TurnContext):
                 main_answer_lines.append(line)
 
         main_answer = "\n".join(main_answer_lines).strip()
-        # Remove trailing empty lines
-        main_answer = re.sub(r'\n+$', '', main_answer)
 
-        # Extract file/table names from ref_lines and calc_lines
+        # 1. SEND MAIN ANSWER (Markdown)
+        await turn_context.send_activity(Activity(type="message", text=main_answer))
+
+        # 2. SEND SOURCE CARD (References/Files/Source)
         def extract_names(lines):
             names = []
             for l in lines[1:]:  # skip the first line ("Referenced:" or "Calculated using:")
@@ -365,231 +364,64 @@ async def _bot_logic(turn_context: TurnContext):
                     if name:
                         names.append(name)
             return names
+
         ref_names = extract_names(ref_lines)
         calc_names = extract_names(calc_lines)
+        source = source_line.replace("**", "").replace("*", "").replace("Source:", "").strip()
 
-        # --- Parse Markdown Table if present ---
-        def parse_markdown_table(md_text):
-            table_lines = [l for l in md_text.split('\n') if l.strip().startswith('|') and l.strip().endswith('|')]
-            if len(table_lines) < 2:
-                return None, None, []
-            header = [h.strip() for h in table_lines[0].strip('|').split('|')]
-            rows = []
-            for l in table_lines[2:]:  # skip header and separator
-                row = [c.strip() for c in l.strip('|').split('|')]
-                if len(row) == len(header):
-                    rows.append(row)
-            return header, rows, table_lines
-
-        table_header, table_rows, table_lines = parse_markdown_table(main_answer)
-        body_blocks = []
-        if table_header and table_rows:
-            # Add intro text (if any, before the table)
-            pre_table = main_answer.split('|')[0].strip()
-            if pre_table:
-                body_blocks.append({
-                    "type": "TextBlock",
-                    "text": pre_table,
-                    "wrap": True,
-                    "spacing": "Medium",
-                    "fontType": "Default",
-                    "size": "Default"
+        def make_source_card(ref_names, calc_names, source):
+            card = {
+                "type": "AdaptiveCard",
+                "body": [],
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "version": "1.5"
+            }
+            if ref_names:
+                card["body"].append({
+                    "type": "TextBlock", "text": "Referenced Files:", "weight": "Bolder", "spacing": "Medium"
                 })
-            # Render table header
-            body_blocks.append({
-                "type": "ColumnSet",
-                "columns": [
-                    {
-                        "type": "Column",
-                        "width": "stretch",
-                        "items": [{
-                            "type": "TextBlock",
-                            "text": h,
-                            "weight": "Bolder",
-                            "wrap": True,
-                            "spacing": "Small"
-                        }]
-                    } for h in table_header
-                ]
-            })
-            # Render table rows
-            for row in table_rows:
-                body_blocks.append({
-                    "type": "ColumnSet",
-                    "columns": [
-                        {
-                            "type": "Column",
-                            "width": "stretch",
-                            "items": [{
-                                "type": "TextBlock",
-                                "text": c,
-                                "wrap": True,
-                                "spacing": "Small"
-                            }]
-                        } for c in row
-                    ]
-                })
-            # Add any text after the table (e.g., notes)
-            if table_lines:
-                after_table = main_answer.split(table_lines[-1])[-1].strip()
-                if after_table:
-                    body_blocks.append({
+                for fname in ref_names:
+                    url = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
+                    card["body"].append({
                         "type": "TextBlock",
-                        "text": after_table,
+                        "text": f"[{fname}]({url})",
                         "wrap": True,
-                        "spacing": "Small"
+                        "color": "Accent"
                     })
-        else:
-            # No table, just render as text
-            if main_answer:
-                body_blocks.append({
+            if calc_names:
+                card["body"].append({
+                    "type": "TextBlock", "text": "Calculated using:", "weight": "Bolder", "spacing": "Medium"
+                })
+                for tname in calc_names:
+                    url = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
+                    card["body"].append({
+                        "type": "TextBlock",
+                        "text": f"[{tname}]({url})",
+                        "wrap": True,
+                        "color": "Accent"
+                    })
+            if source:
+                card["body"].append({
                     "type": "TextBlock",
-                    "text": main_answer,
-                    "wrap": True,
+                    "text": f"Source: {source}",
+                    "weight": "Bolder",
+                    "color": "Accent",
                     "spacing": "Medium",
-                    "fontType": "Default",
-                    "size": "Default"
                 })
+            return card
 
-        # --- Robust Source Line Extraction ---
-        # Try to find a line with 'source' (case-insensitive), even if bold, bullet, or extra spaces
-        source_line = ""
-        for line in lines[::-1]:  # search from end
-            match = _re.match(r"^(?:\*\*|\-|\*)?\s*source\s*:?\s*(.*)$", line.strip(), _re.IGNORECASE)
-            if match:
-                val = match.group(1).strip()
-                if val:
-                    source_line = f"Source: {val}"
-                else:
-                    source_line = "Source:"
-                break
-        # If still not found, fallback to backend's source info if available
-        if not source_line and 'python' in markdown.lower():
-            source_line = "Source: Python"
-        elif not source_line and 'index' in markdown.lower():
-            source_line = "Source: Index"
-        elif not source_line and 'ai generated' in markdown.lower():
-            source_line = "Source: AI Generated"
+        source_card = make_source_card(ref_names, calc_names, source)
+        if not adaptive_card_size_ok(source_card):
+            source_card = make_fallback_card()
 
-        # Source/References container (hidden by default)
-        source_container = {
-            "type": "Container",
-            "id": "sourceContainer",
-            "isVisible": False,
-            "style": "emphasis",
-            "bleed": True,
-            "maxHeight": "500px",
-            "isScrollable": True,
-            "items": []
-        }
-        # Add Source line at the top (always)
-        if source_line:
-            source_container["items"].append({
-                "type": "TextBlock",
-                "text": source_line,
-                "wrap": True,
-                "weight": "Bolder",
-                "color": "Accent",
-                "spacing": "Medium",
-            })
-        # Add Referenced files
-        if ref_names:
-            source_container["items"].append({
-                "type": "TextBlock",
-                "text": "Referenced:",
-                "wrap": True,
-                "weight": "Bolder",
-                "spacing": "Small"
-            })
-            for fname in ref_names:
-                sharepoint_base = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
-                url = sharepoint_base  # You can append/encode fname if you have a per-file URL
-                source_container["items"].append({
-                    "type": "TextBlock",
-                    "text": f"[{fname}]({url})",
-                    "wrap": True,
-                    "spacing": "Small",
-                    "color": "Accent"
-                })
-        # Add Calculated using tables
-        if calc_names:
-            source_container["items"].append({
-                "type": "TextBlock",
-                "text": "Calculated using:",
-                "wrap": True,
-                "weight": "Bolder",
-                "spacing": "Small"
-            })
-            for tname in calc_names:
-                sharepoint_base = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
-                url = sharepoint_base  # You can append/encode tname if you have a per-table URL
-                source_container["items"].append({
-                    "type": "TextBlock",
-                    "text": f"[{tname}]({url})",
-                    "wrap": True,
-                    "spacing": "Small",
-                    "color": "Accent"
-                })
-        # Always add source container and button if there is a source line
-        if source_line:
-            body_blocks.append(source_container)
-            # Add Show/Hide Source button logic
-            body_blocks.append({
-                "type": "ColumnSet",
-                "columns": [
-                    {
-                        "type": "Column",
-                        "id": "showSourceBtn",
-                        "isVisible": True,
-                        "items": [
-                            {
-                                "type": "ActionSet",
-                                "actions": [
-                                    {
-                                        "type": "Action.ToggleVisibility",
-                                        "title": "Show Source",
-                                        "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        "type": "Column",
-                        "id": "hideSourceBtn",
-                        "isVisible": False,
-                        "items": [
-                            {
-                                "type": "ActionSet",
-                                "actions": [
-                                    {
-                                        "type": "Action.ToggleVisibility",
-                                        "title": "Hide Source",
-                                        "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                ]
-            })
-        adaptive_card = {
-            "type": "AdaptiveCard",
-            "body": body_blocks,
-            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-            "version": "1.5"
-        }
-        # SIZE CHECK for Teams
-        if not adaptive_card_size_ok(adaptive_card):
-            adaptive_card = make_fallback_card()
-        message = Activity(
+        card_message = Activity(
             type="message",
             attachments=[{
                 "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": adaptive_card
+                "content": source_card
             }]
         )
-        await turn_context.send_activity(message)
+        await turn_context.send_activity(card_message)
         return
 
     except Exception as e:
