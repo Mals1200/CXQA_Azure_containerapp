@@ -367,17 +367,88 @@ async def _bot_logic(turn_context: TurnContext):
         ref_names = extract_names(ref_lines)
         calc_names = extract_names(calc_lines)
 
-        # Build Adaptive Card
+        # --- Parse Markdown Table if present ---
+        def parse_markdown_table(md_text):
+            table_lines = [l for l in md_text.split('\n') if l.strip().startswith('|') and l.strip().endswith('|')]
+            if len(table_lines) < 2:
+                return None, None  # Not a table
+            header = [h.strip() for h in table_lines[0].strip('|').split('|')]
+            rows = []
+            for l in table_lines[2:]:  # skip header and separator
+                row = [c.strip() for c in l.strip('|').split('|')]
+                if len(row) == len(header):
+                    rows.append(row)
+            return header, rows
+
+        table_header, table_rows = parse_markdown_table(main_answer)
         body_blocks = []
-        if main_answer:
+        if table_header and table_rows:
+            # Add intro text (if any, before the table)
+            pre_table = main_answer.split('|')[0].strip()
+            if pre_table:
+                body_blocks.append({
+                    "type": "TextBlock",
+                    "text": pre_table,
+                    "wrap": True,
+                    "spacing": "Medium",
+                    "fontType": "Default",
+                    "size": "Default"
+                })
+            # Render table header
             body_blocks.append({
-                "type": "TextBlock",
-                "text": main_answer,
-                "wrap": True,
-                "spacing": "Medium",
-                "fontType": "Default",
-                "size": "Default"
+                "type": "ColumnSet",
+                "columns": [
+                    {
+                        "type": "Column",
+                        "width": "stretch",
+                        "items": [{
+                            "type": "TextBlock",
+                            "text": h,
+                            "weight": "Bolder",
+                            "wrap": True,
+                            "spacing": "Small"
+                        }]
+                    } for h in table_header
+                ]
             })
+            # Render table rows
+            for row in table_rows:
+                body_blocks.append({
+                    "type": "ColumnSet",
+                    "columns": [
+                        {
+                            "type": "Column",
+                            "width": "stretch",
+                            "items": [{
+                                "type": "TextBlock",
+                                "text": c,
+                                "wrap": True,
+                                "spacing": "Small"
+                            }]
+                        } for c in row
+                    ]
+                })
+            # Add any text after the table (e.g., notes)
+            after_table = main_answer.split(table_lines[-1])[-1].strip()
+            if after_table:
+                body_blocks.append({
+                    "type": "TextBlock",
+                    "text": after_table,
+                    "wrap": True,
+                    "spacing": "Small"
+                })
+        else:
+            # No table, just render as text
+            if main_answer:
+                body_blocks.append({
+                    "type": "TextBlock",
+                    "text": main_answer,
+                    "wrap": True,
+                    "spacing": "Medium",
+                    "fontType": "Default",
+                    "size": "Default"
+                })
+
         # Source/References container (hidden by default)
         source_container = {
             "type": "Container",
