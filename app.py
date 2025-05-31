@@ -509,8 +509,8 @@ async def _bot_logic(turn_context: TurnContext):
                     "spacing": "Small",
                     "color": "Accent"
                 })
-        # Only add source container if it has items
-        if source_container["items"]:
+        # Always add source container and button if there is a source line
+        if source_line:
             body_blocks.append(source_container)
             # Add Show/Hide Source button logic
             body_blocks.append({
