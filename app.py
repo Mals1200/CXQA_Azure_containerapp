@@ -308,9 +308,8 @@ async def _bot_logic(turn_context: TurnContext):
         except (json.JSONDecodeError, KeyError, TypeError):
             pass
 
-        # --- Markdown/Plaintext Handling (Two Replies: Markdown + Source Card) ---
+        # --- Markdown/Plaintext Handling (Single Card with Show Source Toggle) ---
         markdown = answer_text.strip()
-        # Remove code fences if present
         if markdown.startswith('```markdown'):
             markdown = markdown[len('```markdown'):].strip()
         if markdown.startswith('```'):
@@ -351,13 +350,92 @@ async def _bot_logic(turn_context: TurnContext):
 
         main_answer = "\n".join(main_answer_lines).strip()
 
-        # 1. SEND MAIN ANSWER (Markdown)
-        await turn_context.send_activity(Activity(type="message", text=main_answer))
+        # --- Build the answer body blocks (supports markdown tables!) ---
+        def markdown_table_to_adaptive(lines):
+            table_lines = [l for l in lines if l.strip().startswith('|') and l.strip().endswith('|')]
+            if len(table_lines) < 2:
+                return None, None, []
+            header = [h.strip() for h in table_lines[0].strip('|').split('|')]
+            rows = []
+            for l in table_lines[2:]:  # skip header and separator
+                row = [c.strip() for c in l.strip('|').split('|')]
+                if len(row) == len(header):
+                    rows.append(row)
+            return header, rows, table_lines
 
-        # 2. SEND SOURCE CARD (References/Files/Source)
+        table_header, table_rows, table_lines = markdown_table_to_adaptive(main_answer_lines)
+        body_blocks = []
+
+        if table_header and table_rows:
+            pre_table = main_answer.split('|')[0].strip()
+            if pre_table:
+                body_blocks.append({
+                    "type": "TextBlock",
+                    "text": pre_table,
+                    "wrap": True,
+                    "spacing": "Medium",
+                    "fontType": "Default",
+                    "size": "Default"
+                })
+            # Render header
+            body_blocks.append({
+                "type": "ColumnSet",
+                "columns": [
+                    {
+                        "type": "Column",
+                        "width": "stretch",
+                        "items": [{
+                            "type": "TextBlock",
+                            "text": h,
+                            "weight": "Bolder",
+                            "wrap": True,
+                            "spacing": "Small"
+                        }]
+                    } for h in table_header
+                ]
+            })
+            # Render rows
+            for row in table_rows:
+                body_blocks.append({
+                    "type": "ColumnSet",
+                    "columns": [
+                        {
+                            "type": "Column",
+                            "width": "stretch",
+                            "items": [{
+                                "type": "TextBlock",
+                                "text": c,
+                                "wrap": True,
+                                "spacing": "Small"
+                            }]
+                        } for c in row
+                    ]
+                })
+            # Add any text after the table (e.g., notes)
+            if table_lines:
+                after_table = main_answer.split(table_lines[-1])[-1].strip()
+                if after_table:
+                    body_blocks.append({
+                        "type": "TextBlock",
+                        "text": after_table,
+                        "wrap": True,
+                        "spacing": "Small"
+                    })
+        else:
+            if main_answer:
+                body_blocks.append({
+                    "type": "TextBlock",
+                    "text": main_answer,
+                    "wrap": True,
+                    "spacing": "Medium",
+                    "fontType": "Default",
+                    "size": "Default"
+                })
+
+        # --- Build the source (references) container ---
         def extract_names(lines):
             names = []
-            for l in lines[1:]:  # skip the first line ("Referenced:" or "Calculated using:")
+            for l in lines[1:]:
                 l = l.strip()
                 if l.startswith("-"):
                     name = l[1:].strip()
@@ -369,59 +447,118 @@ async def _bot_logic(turn_context: TurnContext):
         calc_names = extract_names(calc_lines)
         source = source_line.replace("**", "").replace("*", "").replace("Source:", "").strip()
 
-        def make_source_card(ref_names, calc_names, source):
-            card = {
-                "type": "AdaptiveCard",
-                "body": [],
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "version": "1.5"
-            }
-            if ref_names:
-                card["body"].append({
-                    "type": "TextBlock", "text": "Referenced Files:", "weight": "Bolder", "spacing": "Medium"
-                })
-                for fname in ref_names:
-                    url = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
-                    card["body"].append({
-                        "type": "TextBlock",
-                        "text": f"[{fname}]({url})",
-                        "wrap": True,
-                        "color": "Accent"
-                    })
-            if calc_names:
-                card["body"].append({
-                    "type": "TextBlock", "text": "Calculated using:", "weight": "Bolder", "spacing": "Medium"
-                })
-                for tname in calc_names:
-                    url = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
-                    card["body"].append({
-                        "type": "TextBlock",
-                        "text": f"[{tname}]({url})",
-                        "wrap": True,
-                        "color": "Accent"
-                    })
-            if source:
-                card["body"].append({
+        source_container = {
+            "type": "Container",
+            "id": "sourceContainer",
+            "isVisible": False,
+            "style": "emphasis",
+            "bleed": True,
+            "maxHeight": "500px",
+            "isScrollable": True,
+            "items": []
+        }
+        if ref_names:
+            source_container["items"].append({
+                "type": "TextBlock",
+                "text": "Referenced Files:",
+                "wrap": True,
+                "weight": "Bolder",
+                "spacing": "Small"
+            })
+            for fname in ref_names:
+                url = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
+                source_container["items"].append({
                     "type": "TextBlock",
-                    "text": f"Source: {source}",
-                    "weight": "Bolder",
+                    "text": f"[{fname}]({url})",
+                    "wrap": True,
                     "color": "Accent",
-                    "spacing": "Medium",
+                    "spacing": "Small"
                 })
-            return card
+        if calc_names:
+            source_container["items"].append({
+                "type": "TextBlock",
+                "text": "Calculated using:",
+                "wrap": True,
+                "weight": "Bolder",
+                "spacing": "Small"
+            })
+            for tname in calc_names:
+                url = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
+                source_container["items"].append({
+                    "type": "TextBlock",
+                    "text": f"[{tname}]({url})",
+                    "wrap": True,
+                    "color": "Accent",
+                    "spacing": "Small"
+                })
+        if source:
+            source_container["items"].append({
+                "type": "TextBlock",
+                "text": f"Source: {source}",
+                "weight": "Bolder",
+                "color": "Accent",
+                "spacing": "Medium",
+            })
 
-        source_card = make_source_card(ref_names, calc_names, source)
-        if not adaptive_card_size_ok(source_card):
-            source_card = make_fallback_card()
+        # --- Add Show/Hide Source toggle buttons ---
+        show_hide_buttons = {
+            "type": "ColumnSet",
+            "columns": [
+                {
+                    "type": "Column",
+                    "id": "showSourceBtn",
+                    "isVisible": True,
+                    "items": [
+                        {
+                            "type": "ActionSet",
+                            "actions": [
+                                {
+                                    "type": "Action.ToggleVisibility",
+                                    "title": "Show Source",
+                                    "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "type": "Column",
+                    "id": "hideSourceBtn",
+                    "isVisible": False,
+                    "items": [
+                        {
+                            "type": "ActionSet",
+                            "actions": [
+                                {
+                                    "type": "Action.ToggleVisibility",
+                                    "title": "Hide Source",
+                                    "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
 
-        card_message = Activity(
+        # --- Assemble the Adaptive Card body ---
+        adaptive_card = {
+            "type": "AdaptiveCard",
+            "body": body_blocks + [source_container, show_hide_buttons],
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "version": "1.5"
+        }
+        if not adaptive_card_size_ok(adaptive_card):
+            adaptive_card = make_fallback_card()
+
+        message = Activity(
             type="message",
             attachments=[{
                 "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": source_card
+                "content": adaptive_card
             }]
         )
-        await turn_context.send_activity(card_message)
+        await turn_context.send_activity(message)
         return
 
     except Exception as e:
