@@ -485,79 +485,120 @@ Data:
 
 
 ##################################################
-# Generate Documents function
+# Generate Documents function (Version 4b – simplified)
 ##################################################
 def Call_DOC(latest_question, latest_answer, chat_history, instructions_doc):
     """
-    Simple Document generator: 
-      - First line of instructions_doc is used as the Title.
-      - The rest of instructions_doc is placed verbatim below under a 'Body' heading.
-      - Saves as .docx, uploads to Azure Blob, returns URL.
+    Simple Document generator:
+      1) Sends the user's instructions, latest question/answer, and chat history
+         to the LLM and asks for plain document text.
+      2) Takes the raw text returned by the LLM and inserts it verbatim into a
+         .docx, using the same "Cairo" font, 12pt, light‐gray background style.
+      3) Uploads to Azure Blob & returns a download URL.
     """
     from docx import Document
     from docx.shared import Pt as DocxPt, RGBColor as DocxRGBColor
     from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
     from docx.oxml.ns import nsdecls
     from docx.oxml import parse_xml
-    import io
-    import threading
+    import io, threading
     from datetime import datetime
     from azure.storage.blob import BlobServiceClient
 
-    # 1) If the user didn't provide any instructions, bail out:
+    # 1) If no instructions provided, default to a simple Q+A dump:
     if not instructions_doc or not instructions_doc.strip():
-        return "Error: No instructions provided to generate document."
-    
-    # 2) Split instructions_doc into lines. First non-empty line is Title:
-    lines = [line for line in instructions_doc.splitlines() if line.strip()]
-    if len(lines) == 0:
-        return "Error: Instructions were empty or whitespace."
-    
-    doc_title = lines[0].strip()
-    body_lines = lines[1:]  # everything after line 0
+        instructions_doc = (
+            "Please write a short document that restates the latest question and answer "
+            "from the conversation above, in paragraph form."
+        )
 
+    ##################################################
+    # (A) Ask the LLM to "write" a document
+    ##################################################
     try:
-        # 3) Create a new DOCX
+        chat_history_str = "\n".join(f"{msg['role']}: {msg['content']}"
+                                     for msg in chat_history)
+
+        doc_prompt = f"""
+You are a professional document author. Using ONLY the information below, produce
+a complete document in plain text (no markdown or code fences). Do not embed any
+headings or bullet tags—just write paragraphs. We will take your text and drop it
+into a Word file with \"Cairo\" 12pt and a light‐gray background.
+
+Information to use:
+- User instructions: {instructions_doc}
+- Latest question: {latest_question}
+- Latest answer: {latest_answer}
+- Conversation history:
+{chat_history_str}
+
+Begin your output here, as plain text:
+"""
+
+        endpoint = (
+            "https://cxqaazureaihub2358016269.openai.azure.com/"
+            "openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview"
+        )
+        headers = {
+            "Content-Type": "application/json",
+            "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+        }
+        payload = {
+            "messages": [
+                {"role": "system", "content": "You are a professional document author."},
+                {"role": "user", "content": doc_prompt}
+            ],
+            "max_tokens": 1000,
+            "temperature": 0.3
+        }
+
+        llm_response = openai_call_with_retry(endpoint, headers, payload,
+                                              max_attempts=3, backoff=5, timeout=30)
+        if "error" in llm_response:
+            return f"OpenAI API Error: {llm_response['error']}"
+
+        document_text = llm_response["choices"][0]["message"]["content"].strip()
+        if not document_text:
+            # This should basically never happen now, since instructions_doc was never empty.
+            return "Error: LLM returned empty document content."
+    except Exception as e:
+        return f"Document Generation Error (LLM call failed): {str(e)}"
+
+    ##################################################
+    # (B) Build the .docx file
+    ##################################################
+    try:
         doc = Document()
 
-        # 3a) Set default "Cairo" font, 12pt, as you liked:
-        style = doc.styles['Normal']
+        # 1) Set "Cairo" 12pt as the default Normal style:
+        style = doc.styles["Normal"]
         style.font.name = "Cairo"
         style.font.size = DocxPt(12)
         style.font.color.rgb = DocxRGBColor(0, 0, 0)
 
-        # 3b) Light-gray page background if desired (optional; comment out if not)
+        # 2) Light‐gray page background (optional; comment out if unwanted)
+        BG_COLOR_HEX = "EAD7C2"
         for section in doc.sections:
             sectPr = section._sectPr
-            shd = parse_xml(r'<w:shd {} w:fill="EAD7C2"/>'.format(nsdecls('w')))
+            shd = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls("w"), BG_COLOR_HEX))
             sectPr.append(shd)
 
-        # 3c) Add the Title as a Heading 1
-        para_title = doc.add_heading(level=1)
-        run_t = para_title.add_run(doc_title)
-        run_t.font.name = "Cairo"
-        run_t.font.size = DocxPt(16)
-        run_t.bold = True
+        # 3) Insert each line from the LLM output as its own paragraph.
+        lines = document_text.split("\n")
+        for line in lines:
+            if not line.strip():
+                # blank line: add an empty paragraph
+                doc.add_paragraph()
+            else:
+                p = doc.add_paragraph()
+                run = p.add_run(line)
+                run.font.name = "Cairo"
+                run.font.size = DocxPt(12)
 
-        # 4) If there are any "body_lines," put them under a "Body" heading
-        if body_lines:
-            doc.add_paragraph()  # blank line
-            para_hdr = doc.add_heading(level=2)
-            run_hdr = para_hdr.add_run("Body")
-            run_hdr.font.name = "Cairo"
-            run_hdr.font.size = DocxPt(14)
-            run_hdr.bold = True
-
-            for bl in body_lines:
-                normal_para = doc.add_paragraph()
-                run_n = normal_para.add_run(bl)
-                run_n.font.name = "Cairo"
-                run_n.font.size = DocxPt(12)
-
-        # 5) Upload to Azure Blob
-        buf = io.BytesIO()
-        doc.save(buf)
-        buf.seek(0)
+        # 4) Upload to Azure Blob
+        buffer_io = io.BytesIO()
+        doc.save(buffer_io)
+        buffer_io.seek(0)
 
         blob_config = {
             "account_url": "https://cxqaazureaihub8779474245.blob.core.windows.net",
@@ -572,13 +613,10 @@ def Call_DOC(latest_question, latest_answer, chat_history, instructions_doc):
             account_url=blob_config["account_url"],
             credential=blob_config["sas_token"]
         )
-        # Name it "document_<timestamp>.docx"
-        blob_client = blob_service.get_container_client(
-            blob_config["container"]
-        ).get_blob_client(
+        blob_client = blob_service.get_container_client(blob_config["container"]).get_blob_client(
             f"document_{datetime.now().strftime('%Y%m%d%H%M%S')}.docx"
         )
-        blob_client.upload_blob(buf, overwrite=True)
+        blob_client.upload_blob(buffer_io, overwrite=True)
 
         download_url = (
             f"{blob_config['account_url']}/"
@@ -586,13 +624,12 @@ def Call_DOC(latest_question, latest_answer, chat_history, instructions_doc):
             f"{blob_client.blob_name}?{blob_config['sas_token']}"
         )
 
-        # Delete after 5 minutes
+        # Auto‐delete after 5 minutes
         threading.Timer(300, blob_client.delete_blob).start()
-
         return f"Here is your generated Document:\n{download_url}"
 
     except Exception as e:
-        return f"Document Generation Error: {str(e)}"
+        return f"Document Generation Error (uploading .docx failed): {str(e)}"
 
 
 def Call_SOP(latest_question, latest_answer, chat_history, instructions):
