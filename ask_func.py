@@ -742,6 +742,9 @@ Don't give examples, only provide the actual code. If you can't provide the code
 6. If a user references a column/table that does not exist in the schemas, return "404".
 7. Do not use Chat_history information directly within the generated code logic or print statements, but use it for context if needed to understand the user's question.
 
+**IMPORTANT: YOU MUST ALWAYS USE FUZZY MATCHING**
+**When referencing table names, column names, or row values, you MUST ALWAYS use fuzzy matching (such as difflib's SequenceMatcher) to find the closest match in the actual data, in case of typos or alternate spellings. Only use the closest match if its similarity is reasonably high (e.g., ratio > 0.8). This is a CRITICAL REQUIREMENT and NOT OPTIONAL.**
+
 **Data Handling Rules for Pandas Code**:
 A. **Numeric Conversion:** When a column is expected to be numeric for calculations (e.g., for .sum(), .mean(), comparisons):
    - First, replace common non-numeric placeholders (like '-', 'N/A', or strings containing only spaces) with `pd.NA` or `numpy.nan`. For example: `df['column_name'] = df['column_name'].replace(['-', 'N/A', ' ', '  '], pd.NA)`
