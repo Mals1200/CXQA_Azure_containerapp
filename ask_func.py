@@ -85,6 +85,7 @@ def azure_retry(max_attempts=3, delay=2):
 #######################################################################################
 #                           RBAC HELPERS (User & File Tiers)
 #######################################################################################
+@lru_cache(maxsize=1)
 @azure_retry()
 def load_rbac_files():
     """
@@ -944,7 +945,7 @@ Make sure every table has a header and a separator row (with dashes).
 2. Summarize or merge repetitive/lengthy lists. Never include more than 12 items
    in any bullet or numbered list.
 3. Prefer concise, direct answers—avoid excessive details.
-4. If you couldn’t find relevant information, answer as best you can and use
+4. If you couldn't find relevant information, answer as best you can and use
    "Source: AI Generated" at the end.
 5. If presenting data best shown in a table (such as numbers per month, by location,
    or by category), use Markdown table syntax as shown above.
@@ -956,7 +957,7 @@ Make sure every table has a header and a separator row (with dashes).
 7. If both Index and Python data were used, use "Source: Index & Python".
    If only Index, use "Source: Index". If only Python, use "Source: Python".
 8. For multi-part questions, organize the answer with subheadings or numbered steps.
-9. If the answer is a procedure/SOP, only list key actions (summarize—don’t list every sub-step).
+9. If the answer is a procedure/SOP, only list key actions (summarize—don't list every sub-step).
 
 ###################################################################################
                 PROMPT INPUT DATA (Available for your answer)
