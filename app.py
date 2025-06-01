@@ -1,4 +1,4 @@
-# version 12a with RENDER_MODE switch ("markdown" or "adaptivecard")
+# version 12b with RENDER_MODE switch ("markdown" or "adaptivecard")
 # Robust and bulletproof: Always shows references/source, never crashes, 
 # works for both JSON and markdown from ask_func.py
 
