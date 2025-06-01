@@ -1,4 +1,4 @@
-# version 12 with RENDER_MODE switch ("markdown" or "adaptivecard")
+# version 12b with RENDER_MODE switch ("markdown" or "adaptivecard")
 # Robust and bulletproof: Always shows references/source, never crashes, 
 # works for both JSON and markdown from ask_func.py
 
@@ -23,7 +23,7 @@ from ask_func import Ask_Question, chat_history
 app = Flask(__name__)
 
 # ======== TOP-LEVEL SWITCH ========
-RENDER_MODE = "adaptivecard"  # "markdown" or "adaptivecard"
+RENDER_MODE = "markdown"  # "markdown" or "adaptivecard"
 # ==================================
 
 MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
