@@ -115,21 +115,19 @@ def Call_PPT(latest_question, latest_answer, chat_history, instructions):
     def generate_slide_content():
         chat_history_str = str(chat_history)
         
-        ppt_prompt = f'''You are a PowerPoint presentation expert. Use this information to create slides:
+        ppt_prompt = f"""You are a PowerPoint presentation expert. Use this information to create slides:
 Rules:
 1. Use ONLY the provided information
 2. Output ready-to-use slide text
 3. Format: Slide Title\\n- Bullet 1\\n- Bullet 2
 4. Separate slides with \\n\\n
 5. If insufficient information, say: "NOT_ENOUGH_INFO"
-6. NEVER write your answer as Python or JSON code—only use clear, normal sentences and bullet lists.
-7. If the content is empty, respond with: Not enough Information to perform export.
 
 Data:
 - Instructions: {instructions}
 - Question: {latest_question}
 - Answer: {latest_answer}
-- History: {chat_history_str}'''
+- History: {chat_history_str}"""
 
         endpoint = "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/openai/deployments/gpt-4o-2/chat/completions?api-version=2025-01-01-preview"
         headers = {
@@ -160,6 +158,7 @@ Data:
     ##################################################
     slides_text = generate_slide_content()
     
+    # Handle error cases
     slides_text_clean = (slides_text or "").strip().lower()
     if (
         slides_text_clean.startswith("api_error:") or
@@ -169,11 +168,7 @@ Data:
         "insufficient information" in slides_text_clean or
         "not suitable for" in slides_text_clean or
         slides_text_clean == "" or
-        len(slides_text_clean.replace("-", "").replace(" ", "")) < 10 or
-        slides_text_clean.startswith("{") or
-        slides_text_clean.startswith("```json") or
-        slides_text_clean.startswith("````") or
-        "class " in slides_text_clean
+        len(slides_text_clean) < 20
     ):
         return "Error: Insufficient information to generate slides"
 
@@ -544,11 +539,7 @@ Data:
         "no information" in doc_text_clean or
         "insufficient information" in doc_text_clean or
         doc_text_clean == "" or
-        len(doc_text_clean.replace("-", "").replace(" ", "")) < 10 or
-        doc_text_clean.startswith("{") or
-        doc_text_clean.startswith("```json") or
-        doc_text_clean.startswith("````") or
-        "class " in doc_text_clean
+        len(doc_text_clean.replace("-", "").replace(" ", "")) < 10
     ):
         return "Error: Insufficient information to generate document"
 
@@ -772,16 +763,15 @@ User_description:
         "no information" in raw_json_clean or
         "insufficient information" in raw_json_clean or
         raw_json_clean == "" or
-        len(raw_json_clean) < 20 or
-        (raw_json_clean.startswith("{") and not raw_json_clean.strip().endswith("}"))
+        len(raw_json_clean) < 20
     ):
         return "Error: Insufficient information to generate SOP"
 
     # 2) Parse the JSON into a dict
     try:
         sop_data = json.loads(raw_json)
-    except json.JSONDecodeError:
-        return "Error: Insufficient information to generate SOP"
+    except json.JSONDecodeError as e:
+        return f"Error: GPT output wasn't valid JSON. Details: {str(e)}"
 
     # 3) Prepare our data fields from the JSON
     # We'll call them with .get() so if something is missing, it's blank.
