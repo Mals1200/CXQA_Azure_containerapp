@@ -496,7 +496,9 @@ Rules:
 3. Format: 
    Section Heading\\n- Bullet 1\\n- Bullet 2
 4. Separate sections with \\n\\n
-5. If insufficient information, say: "Not enough Information to perform export."
+5. If insufficient information, say: \"Not enough Information to perform export.\"
+6. NEVER write your answer as Python or JSON code—only use clear, normal sentences and bullet lists.
+7. If the content is empty, respond with: Not enough Information to perform export.
 
 Data:
 - Instructions: {instructions_doc}
@@ -537,7 +539,7 @@ Data:
         "no information" in doc_text_clean or
         "insufficient information" in doc_text_clean or
         doc_text_clean == "" or
-        len(doc_text_clean) < 20
+        len(doc_text_clean.replace("-", "").replace(" ", "")) < 10
     ):
         return "Error: Insufficient information to generate document"
 
@@ -926,19 +928,31 @@ User_description:
             if not content:
                 return
             story.append(Paragraph(title, style_heading))
-            if isinstance(content, list):
-                # if user put a bullet list for "provisions"
+
+            # Handle a list of dicts (common for steps, actions)
+            if isinstance(content, list) and all(isinstance(item, dict) for item in content):
+                for item in content:
+                    # Try to format as "- Step: Details" or "Scenario: Action"
+                    if "step" in item and "details" in item:
+                        line = f"- {item['step']}: {item['details']}"
+                        story.append(Paragraph(line, style_text))
+                    elif "scenario" in item and "actions" in item and isinstance(item["actions"], list):
+                        story.append(Paragraph(f"- {item['scenario']}:", style_text))
+                        for subaction in item["actions"]:
+                            story.append(Paragraph(f"   • {subaction}", style_text))
+                    else:
+                        # Print all key-values in the dict as bullets
+                        for k, v in item.items():
+                            story.append(Paragraph(f"- {k}: {v}", style_text))
+            # If it's a simple list, print as bullet list
+            elif isinstance(content, list):
                 for item in content:
                     story.append(Paragraph(f"- {item}", style_text))
             elif isinstance(content, dict):
-                # we might have a dictionary for process_responsibilities
-                for k,v in content.items():
-                    # if v is a list/dict, we can convert to string or do further logic
-                    if isinstance(v, (list, dict)):
-                        v = json.dumps(v, indent=2)
+                for k, v in content.items():
                     story.append(Paragraph(f"{k}: {v}", style_text))
             else:
-                # Just treat content as string
+                # Treat as plain string with possible line breaks
                 lines = str(content).split("\n")
                 for line in lines:
                     line = line.strip()
