@@ -1,3 +1,10 @@
+# Version 4b
+# call SOP has more efficient prompt & has a better layout:
+    # The logo and art images are centered
+    # Can manipulate the art image using ratios and scalinf
+    # The prompt is more effiecient and uses less tokens.
+
+
 import re
 import requests
 import json
@@ -114,7 +121,7 @@ Rules:
 2. Output ready-to-use slide text
 3. Format: Slide Title\\n- Bullet 1\\n- Bullet 2
 4. Separate slides with \\n\\n
-5. If insufficient information, say: \"NOT_ENOUGH_INFO\"
+5. If insufficient information, say: "NOT_ENOUGH_INFO"
 
 Data:
 - Instructions: {instructions}
@@ -165,86 +172,40 @@ Data:
     try:
         prs = Presentation()
 
-        BG_COLOR   = PPTRGBColor(234, 215, 194)  # #EAD7C2
-        TEXT_COLOR = PPTRGBColor(193, 114, 80)   # #C17250
-        FONT_NAME  = "Cairo"
+        BG_COLOR = PPTRGBColor(234, 215, 194)  # #EAD7C2
+        TEXT_COLOR = PPTRGBColor(193, 114, 80) # #C17250
+        FONT_NAME = "Cairo"
         
-        def choose_font_size(text, max_chars, large_size, small_size):
-            """
-            If text length > max_chars, return small_size. Otherwise large_size.
-            """
-            return Pt(small_size if len(text) > max_chars else large_size)
-
-        for slide_block in slides_text.split('\n\n'):
-            # 1) Break the block into raw lines; remove any lines that are purely blank
-            raw_lines = [line for line in slide_block.split('\n')]
-            lines     = [line.strip() for line in raw_lines if line.strip()]
+        for slide_content in slides_text.split('\n\n'):
+            lines = [line.strip() for line in slide_content.split('\n') if line.strip()]
             if not lines:
-                # No non-blank text in this block → skip entirely
                 continue
-
-            title_text   = lines[0]
-            bullet_lines = lines[1:]
-            if not bullet_lines:
-                # If there are no bullets (just a title), skip creating a slide
-                continue
-
-            # 2) Break into chunks of at most 6 bullet lines
-            chunks = []
-            if len(bullet_lines) > 6:
-                for i in range(0, len(bullet_lines), 6):
-                    chunk = bullet_lines[i:i+6]
-                    if any(b.strip() for b in chunk):
-                        chunks.append(chunk)
-            else:
-                if any(b.strip() for b in bullet_lines):
-                    chunks.append(bullet_lines)
-
-            # 3) Create one slide per non-empty chunk
-            for chunk in chunks:
-                slide = prs.slides.add_slide(prs.slide_layouts[6])
-                slide.background.fill.solid()
-                slide.background.fill.fore_color.rgb = BG_COLOR
-
-                # (i) Title box
-                title_box = slide.shapes.add_textbox(
-                    Pt(50), Pt(50), prs.slide_width - Pt(100), Pt(60)
-                )
-                title_frame = title_box.text_frame
-                title_frame.text = title_text
-                for paragraph in title_frame.paragraphs:
-                    paragraph.font.color.rgb = TEXT_COLOR
-                    paragraph.font.name = FONT_NAME
-                    paragraph.font.size = choose_font_size(
-                        title_text,
-                        max_chars=30,
-                        large_size=36,
-                        small_size=28
-                    )
-                    paragraph.alignment = PP_ALIGN.CENTER
-
-                # (ii) Bullets box (only if chunk is non-empty)
-                if chunk:
-                    content_box = slide.shapes.add_textbox(
-                        Pt(100), Pt(150),
-                        prs.slide_width - Pt(200),
-                        prs.slide_height - Pt(250)
-                    )
-                    content_frame = content_box.text_frame
-                    content_frame.clear()
-                    for bullet in chunk:
-                        p = content_frame.add_paragraph()
-                        txt = bullet.replace('- ', '').strip()
-                        p.text = txt
-                        p.font.color.rgb = TEXT_COLOR
-                        p.font.name = FONT_NAME
-                        p.font.size = choose_font_size(
-                            txt,
-                            max_chars=50,
-                            large_size=24,
-                            small_size=18
-                        )
-                        p.space_after = Pt(8)
+                
+            slide = prs.slides.add_slide(prs.slide_layouts[6])
+            slide.background.fill.solid()
+            slide.background.fill.fore_color.rgb = BG_COLOR
+            
+            # Title
+            title_box = slide.shapes.add_textbox(Pt(50), Pt(50), prs.slide_width - Pt(100), Pt(60))
+            title_frame = title_box.text_frame
+            title_frame.text = lines[0]
+            for paragraph in title_frame.paragraphs:
+                paragraph.font.color.rgb = TEXT_COLOR
+                paragraph.font.name = FONT_NAME
+                paragraph.font.size = Pt(36)
+                paragraph.alignment = PP_ALIGN.CENTER
+                
+            # Bullets
+            if len(lines) > 1:
+                content_box = slide.shapes.add_textbox(Pt(100), Pt(150), prs.slide_width - Pt(200), prs.slide_height - Pt(250))
+                content_frame = content_box.text_frame
+                for bullet in lines[1:]:
+                    p = content_frame.add_paragraph()
+                    p.text = bullet.replace('- ', '').strip()
+                    p.font.color.rgb = TEXT_COLOR
+                    p.font.name = FONT_NAME
+                    p.font.size = Pt(24)
+                    p.space_after = Pt(12)
 
         ##################################################
         # (D) FILE UPLOAD
@@ -259,7 +220,11 @@ Data:
         prs.save(ppt_buffer)
         ppt_buffer.seek(0)
 
+        # Reuse our helper to upload
         file_name_prefix = f"presentation_{datetime.now().strftime('%Y%m%d%H%M%S')}.pptx"
+        # We'll just do the entire final name in the prefix to keep old naming style:
+        # Or we can simplify. Let's keep it exactly the same as before for compatibility.
+        # So we won't use a . in the prefix. We'll do the same logic as prior lines:
         blob_service = BlobServiceClient(
             account_url=blob_config["account_url"],
             credential=blob_config["sas_token"]
@@ -272,12 +237,16 @@ Data:
         download_url = (
             f"{blob_config['account_url']}/"
             f"{blob_config['container']}/"
-            f"{blob_client.blob_name}?{blob_config['sas_token']}"
+            f"{blob_client.blob_name}?"
+            f"{blob_config['sas_token']}"
         )
         
+        # Auto-delete after 5 minutes
         threading.Timer(300, blob_client.delete_blob).start()
 
-        return f"Here is your generated slides:\n{download_url}"
+        # SINGLE-LINE RETURN
+        export_type = "slides"
+        return f"Here is your generated {export_type}:\n{download_url}"
 
     except Exception as e:
         return f"Presentation Generation Error: {str(e)}"
@@ -303,40 +272,6 @@ def Call_CHART(latest_question, latest_answer, chat_history, instructions):
         (39/255, 71/255, 54/255),     # Dark Green
         (254/255, 200/255, 65/255)    # Yellow
     ]
-
-    ##################################################
-    # (A1) If latest_answer contains a Markdown table, parse it directly
-    ##################################################
-    headers, data_rows = _parse_markdown_table(latest_answer)
-    if headers and data_rows:
-        # We assume headers[0] is the category axis (e.g. "Month"),
-        # and headers[1:] are series names (e.g. "Visits", "Sales").
-        if len(headers) < 2 or not data_rows:
-            return "Information is not suitable for a chart"
-        # Build categories from the first column of each row
-        categories = [row[0] for row in data_rows]
-        # Build one series per header (skipping index 0)
-        series_list = []
-        for col_idx in range(1, len(headers)):
-            values = []
-            for row in data_rows:
-                try:
-                    values.append(float(row[col_idx]))
-                except:
-                    values.append(0.0)
-            series_list.append({
-                "name": headers[col_idx],
-                "values": values
-            })
-        # Default to a line chart with a generic title
-        chart_data = {
-            "chart_type": "line",
-            "title": f"{headers[1]} over {headers[0]}",
-            "categories": categories,
-            "series": series_list
-        }
-        return json.dumps(chart_data)
-    # If no Markdown table, fall through to the LLM-based JSON prompt below…
 
     ##################################################
     # (A) Improved Azure OpenAI Call for Chart Data
@@ -440,9 +375,7 @@ Data:
             ax.set_title(chart_data['title'])
             ax.yaxis.set_major_locator(MaxNLocator(integer=True))
             plt.xticks(rotation=45, ha='right')
-            has_labels = any(series.get("name", "").strip() for series in chart_data["series"])
-            if has_labels:
-                plt.legend()
+            plt.legend()
             plt.tight_layout()
 
             # Save chart to image buffer
@@ -530,164 +463,167 @@ Data:
 
 
 ##################################################
-# Generate Documents function (Version 4b – simplified)
+# Generate Documents function
 ##################################################
 def Call_DOC(latest_question, latest_answer, chat_history, instructions_doc):
-    """
-    Simple Document generator:
-      1) Sends the user's instructions, latest question/answer, and chat history
-         to the LLM and asks for plain document text.
-      2) Takes the raw text returned by the LLM and inserts it verbatim into a
-         .docx, using the same "Cairo" font, 12pt, light‐gray background style.
-      3) Uploads to Azure Blob & returns a download URL.
-    """
     from docx import Document
-    from docx.shared import Pt as DocxPt, RGBColor as DocxRGBColor
+    from docx.shared import Pt as DocxPt, Inches, RGBColor as DocxRGBColor
     from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
     from docx.oxml.ns import nsdecls
     from docx.oxml import parse_xml
-    import io, threading
-    from datetime import datetime
-    from azure.storage.blob import BlobServiceClient
 
-    # 1) If no instructions provided, default to a simple Q+A dump:
-    if not instructions_doc or not instructions_doc.strip():
-        instructions_doc = (
-            "Please write a short document that restates the latest question and answer "
-            "from the conversation above, in paragraph form."
-        )
+    def generate_doc_content():
+        chat_history_str = str(chat_history)
+        
+        doc_prompt = f"""You are a professional document writer. Use this information to create content:
+Rules:
+1. Use ONLY the provided information
+2. Output ready-to-use document text
+3. Format: 
+   Section Heading\\n- Bullet 1\\n- Bullet 2
+4. Separate sections with \\n\\n
+5. If insufficient information, say: "Not enough Information to perform export."
 
-    ##################################################
-    # (A) Ask the LLM to "write" a document
-    ##################################################
-    try:
-        # chat_history is already a list of strings ("User: …", "Assistant: …"), so just join:
-        chat_history_str = "\n".join(chat_history)
-        doc_prompt = f"""
-You are a professional document author. Using ONLY the information below, produce
-a complete document in plain text (no markdown or code fences). Do not embed any
-headings or bullet tags—just write paragraphs. We will take your text and drop it
-into a Word file with \"Cairo\" 12pt and a light‐gray background.
+Data:
+- Instructions: {instructions_doc}
+- Question: {latest_question}
+- Answer: {latest_answer}
+- History: {chat_history_str}"""
 
-Information to use:
-- User instructions: {instructions_doc}
-- Latest question: {latest_question}
-- Latest answer: {latest_answer}
-- Conversation history:
-{chat_history_str}
-
-Begin your output here, as plain text:
-"""
-
-        endpoint = (
-            "https://cxqaazureaihub2358016269.openai.azure.com/"
-            "openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview"
-        )
+        endpoint = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview"
         headers = {
             "Content-Type": "application/json",
             "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
         }
+
         payload = {
             "messages": [
-                {"role": "system", "content": "You are a professional document author."},
+                {"role": "system", "content": "Generate structured document content"},
                 {"role": "user", "content": doc_prompt}
             ],
             "max_tokens": 1000,
             "temperature": 0.3
         }
 
-        llm_response = openai_call_with_retry(endpoint, headers, payload,
-                                              max_attempts=3, backoff=5, timeout=30)
-        if "error" in llm_response:
-            return f"OpenAI API Error: {llm_response['error']}"
+        result_json = openai_call_with_retry(endpoint, headers, payload, max_attempts=3, backoff=5, timeout=30)
+        if "error" in result_json:
+            return result_json["error"]
+        try:
+            return result_json['choices'][0]['message']['content'].strip()
+        except Exception as e:
+            return f"API_ERROR: {str(e)}"
 
-        document_text = llm_response["choices"][0]["message"]["content"].strip()
-        if not document_text:
-            # This should basically never happen now, since instructions_doc was never empty.
-            return "Error: LLM returned empty document content."
-    except Exception as e:
-        return f"Document Generation Error (LLM call failed): {str(e)}"
+    # Get the doc text
+    doc_text = generate_doc_content()
+    if doc_text.startswith("API_ERROR:"):
+        return f"OpenAI API Error: {doc_text[10:]}"
+    if "NOT_ENOUGH_INFO" in doc_text.upper():
+        return "Error: Insufficient information to generate document"
+    if len(doc_text) < 20:
+        return "Error: Generated content too short or invalid"
 
-    ##################################################
-    # (B) Build the .docx file
-    ##################################################
     try:
         doc = Document()
-
-        # 1) Set "Cairo" 12pt as the default Normal style:
-        style = doc.styles["Normal"]
-        style.font.name = "Cairo"
-        style.font.size = DocxPt(12)
-        style.font.color.rgb = DocxRGBColor(0, 0, 0)
-
-        # 2) Light‐gray page background (optional; comment out if unwanted)
+        
         BG_COLOR_HEX = "EAD7C2"
+        TITLE_COLOR = DocxRGBColor(193, 114, 80)
+        BODY_COLOR = DocxRGBColor(0, 0, 0)
+        FONT_NAME = "Cairo"
+        TITLE_SIZE = DocxPt(16)
+        BODY_SIZE = DocxPt(12)
+
+        style = doc.styles['Normal']
+        style.font.name = FONT_NAME
+        style.font.size = BODY_SIZE
+        style.font.color.rgb = BODY_COLOR
+
         for section in doc.sections:
             sectPr = section._sectPr
-            shd = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls("w"), BG_COLOR_HEX))
+            shd = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{BG_COLOR_HEX}"/>')
             sectPr.append(shd)
 
-        # 3) Insert each line from the LLM output as its own paragraph.
-        lines = document_text.split("\n")
-        for line in lines:
-            if not line.strip():
-                # blank line: add an empty paragraph
-                doc.add_paragraph()
-            else:
-                p = doc.add_paragraph()
-                run = p.add_run(line)
-                run.font.name = "Cairo"
-                run.font.size = DocxPt(12)
+        # Split into sections
+        for section_content in doc_text.split('\n\n'):
+            lines = [line.strip() for line in section_content.split('\n') if line.strip()]
+            if not lines:
+                continue
 
-        # 4) Upload to Azure Blob
-        buffer_io = io.BytesIO()
-        doc.save(buffer_io)
-        buffer_io.seek(0)
+            heading = doc.add_heading(level=1)
+            heading.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+            heading_run = heading.add_run(lines[0])
+            heading_run.font.color.rgb = TITLE_COLOR
+            heading_run.font.size = TITLE_SIZE
+            heading_run.bold = True
+
+            # Bullets
+            if len(lines) > 1:
+                for bullet in lines[1:]:
+                    para = doc.add_paragraph(style='ListBullet')
+                    run = para.add_run(bullet.replace('- ', '').strip())
+                    run.font.color.rgb = BODY_COLOR
+
+            doc.add_paragraph()
 
         blob_config = {
             "account_url": "https://cxqaazureaihub8779474245.blob.core.windows.net",
-            "sas_token": (
-                "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
-                "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&spr=https&"
-                "sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"
-            ),
+            "sas_token": "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D",
             "container": "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
         }
+
+        doc_buffer = io.BytesIO()
+        doc.save(doc_buffer)
+        doc_buffer.seek(0)
+
         blob_service = BlobServiceClient(
             account_url=blob_config["account_url"],
             credential=blob_config["sas_token"]
         )
-        blob_client = blob_service.get_container_client(blob_config["container"]).get_blob_client(
+        blob_client = blob_service.get_container_client(
+            blob_config["container"]
+        ).get_blob_client(
             f"document_{datetime.now().strftime('%Y%m%d%H%M%S')}.docx"
         )
-        blob_client.upload_blob(buffer_io, overwrite=True)
-
+        
+        blob_client.upload_blob(doc_buffer, overwrite=True)
         download_url = (
             f"{blob_config['account_url']}/"
             f"{blob_config['container']}/"
-            f"{blob_client.blob_name}?{blob_config['sas_token']}"
+            f"{blob_client.blob_name}?"
+            f"{blob_config['sas_token']}"
         )
 
-        # Auto‐delete after 5 minutes
         threading.Timer(300, blob_client.delete_blob).start()
-        return f"Here is your generated Document:\n{download_url}"
+
+        # SINGLE-LINE RETURN
+        export_type = "Document"
+        return f"Here is your generated {export_type}:\n{download_url}"
 
     except Exception as e:
-        return f"Document Generation Error (uploading .docx failed): {str(e)}"
+        return f"Document Generation Error: {str(e)}"
 
 
 def Call_SOP(latest_question, latest_answer, chat_history, instructions):
     """
     Generates a Standard Operating Procedure (SOP) PDF by:
-      1) Asking GPT for a JSON object with these fields:
-         title, table_of_contents, overview, scope, policy, provisions,
-         definitions, process_responsibilities, process, procedures,
-         related_docs, sop_form, sop_log
-      2) Parsing that JSON and building a multi-page PDF with:
-         - A front cover (logo + metadata)
-         - One section per JSON key (with headings/styles)
-      3) Uploading the final PDF to Azure Blob and returning the URL.
+      1) Calling GPT to get JSON data with these fields:
+         title, table_of_contents, overview, scope, policy, provisions, definitions,
+         process_responsibilities, process, procedures, related_docs, sop_form, sop_log.
+      2) Parsing that JSON and converting each field into a normal SOP layout:
+         - Front page with a logo, metadata, and "Standard Operating Procedure Document"
+         - Then each SOP section (overview, scope, etc.) as headings/paragraphs
+      3) Uploading the PDF to Azure Blob Storage and returning the final download URL.
+
+    Parameters:
+    - latest_question: The user's prompt or question
+    - latest_answer: Any existing 'answer' from conversation or prior steps
+    - chat_history: The conversation history
+    - instructions: Additional user instructions (e.g., "We want an SOP...")
+
+    Returns:
+      A string with either an error or
+      "Here is your generated SOP:\n<URL>" (the Azure Blob URL).
     """
+
     import re
     import json
     import io
@@ -709,17 +645,20 @@ def Call_SOP(latest_question, latest_answer, chat_history, instructions):
     ##################################################
     def generate_sop_content():
         """
-        Calls Azure OpenAI with a prompt that forces valid, escaped JSON.
+        Calls Azure OpenAI with a prompt that instructs it to produce
+        a JSON object. The JSON object must have:
+          title, table_of_contents, overview, scope, policy, provisions,
+          definitions, process_responsibilities, process, procedures,
+          related_docs, sop_form, sop_log
+
+        If GPT returns insufficient data or an error, we handle it.
         """
         chat_history_str = str(chat_history)
 
         sop_prompt = f"""
-You are an SOP writer. Based on the provided information below, return exactly one valid JSON object—nothing else.
+You are an SOP writer. Based on the Provided Information, produce only JSON object with fields and nothing else:
 
-Each value inside that JSON must escape any internal double-quotes (e.g. use \\\" inside values).  
-The JSON MUST begin with a single "{{" on its own line and end with a single "}}" on its own line (no leading/trailing text).
-
-The required structure (all keys must appear, even if empty) is:
+The structure:
 - title
 - table_of_contents
 - overview
@@ -734,41 +673,41 @@ The required structure (all keys must appear, even if empty) is:
 - sop_form
 - sop_log
 
-**IMPORTANT RULES**:
-1. Do NOT include any triple backticks or code fences.
-2. Do NOT include any text before the first "{{" or after the final "}}".
-3. Every string value inside this JSON must escape internal quotes (e.g.: \\"like this\\").
-4. If a section is missing, return an empty string for that key (not "null").
-5. Use valid JSON syntax—commas between entries, double quotes around keys and string values.
+Return **only** valid JSON (no extra text).
 
-Example of EXACTLY acceptable output:
+IMPORTANT RULES:
+1. No triple backticks or code fences.
+2. No explanations
+3. No extra characters 
+4. Return ONLY the JSON object.
+
+Example of the json file to produce:
 {{
+  "Table of Contents",
   "title": "Example Title",
-  "table_of_contents": "Section 1, Section 2",
-  "overview": "This is an overview.",
-  "scope": "This is the scope.",
-  "policy": "Policy text here.",
-  "provisions": "Provision text here.",
-  "definitions": "Definition text here.",
-  "process_responsibilities": "Responsibilities text.",
-  "process": "Process details.",
-  "procedures": "Procedure details.",
-  "related_docs": "Related Document A",
-  "sop_form": "Form details.",
-  "sop_log": "Log details."
+  "overview": "Example text"
 }}
 
-The information to use:
-- Conversation history: {chat_history_str}
-- User request: {latest_question}
-- Final answer to the user: {latest_answer}
-- User instructions: {instructions}
+The Information to use:
+Conversation:
+{chat_history}
+
+User_request:
+{latest_question}
+
+Final_answer_to_the_user:
+{latest_answer}
+
+User_description:
+{instructions}
 """
+
         endpoint = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview"
         headers = {
             "Content-Type": "application/json",
             "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
         }
+
         payload = {
             "messages": [
                 {"role": "system", "content": "Generate SOP content in a structured manner."},
@@ -777,77 +716,78 @@ The information to use:
             "max_tokens": 1000,
             "temperature": 0.3
         }
-        # Use the existing retry helper
+
         result_json = openai_call_with_retry(endpoint, headers, payload, max_attempts=3, backoff=5, timeout=30)
+
         if "error" in result_json:
             return f"API_ERROR: {result_json['error']}"
+
         try:
             return result_json['choices'][0]['message']['content'].strip()
         except Exception as e:
             return f"API_ERROR: {str(e)}"
 
+
     ##################################################
-    # (B) Receive raw JSON string & extract it cleanly
+    # (B) Parse JSON and build PDF (front page + SOP sections)
     ##################################################
+    # 1) Get raw content from GPT (should be JSON)
     raw_json = generate_sop_content()
 
-    # 1) Catch API errors or "Not enough info" responses
+    # Check for errors or insufficient data
     if raw_json.startswith("API_ERROR:"):
-        return f"OpenAI API Error: {raw_json[10:].strip()}"
+        return f"OpenAI API Error: {raw_json[10:]}"
     if "NOT_ENOUGH_INFO" in raw_json.upper():
         return "Error: Insufficient information to generate SOP"
-    if len(raw_json.strip()) < 20:
+    if len(raw_json) < 20:
         return "Error: Generated content too short or invalid"
 
-    # 2) Extract exactly the JSON object between the first '{' and the final '}'  
-    match = re.search(r'\{.*\}\Z', raw_json.strip(), flags=re.DOTALL)
-    if not match:
-        return "Error: Could not find a valid JSON object in LLM output."
-    clean_json = match.group(0)
-
-    # 3) Parse the cleaned JSON string
+    # 2) Parse the JSON into a dict
     try:
-        sop_data = json.loads(clean_json)
+        sop_data = json.loads(raw_json)
     except json.JSONDecodeError as e:
         return f"Error: GPT output wasn't valid JSON. Details: {str(e)}"
 
-    # 4) Ensure all keys exist (fill missing ones with empty string)
-    for key in ["title", "table_of_contents", "overview", "scope",
-                "policy", "provisions", "definitions",
-                "process_responsibilities", "process", "procedures",
-                "related_docs", "sop_form", "sop_log"]:
-        if key not in sop_data:
-            sop_data[key] = ""
+    # 3) Prepare our data fields from the JSON
+    # We'll call them with .get() so if something is missing, it's blank.
+    sop_title       = sop_data.get("title", "Untitled SOP")
+    toc_text        = sop_data.get("table_of_contents", "")
+    overview_text   = sop_data.get("overview", "")
+    scope_text      = sop_data.get("scope", "")
+    policy_text     = sop_data.get("policy", "")
+    provisions_data = sop_data.get("provisions", "")
+    definitions_data= sop_data.get("definitions", "")
+    proc_resp_data  = sop_data.get("process_responsibilities", "")
+    process_text    = sop_data.get("process", "")
+    procedures_data = sop_data.get("procedures", "")
+    related_docs    = sop_data.get("related_docs", "")
+    sop_form        = sop_data.get("sop_form", "")
+    sop_log         = sop_data.get("sop_log", "")
 
-    # 5) Build the five desired sections in order (some may be empty)
-    sop_title        = sop_data.get("title", "")
-    toc_text         = sop_data.get("table_of_contents", "")
-    overview_text    = sop_data.get("overview", "")
-    scope_text       = sop_data.get("scope", "")
-    policy_text      = sop_data.get("policy", "")
-    provisions_data  = sop_data.get("provisions", "")
-    definitions_data = sop_data.get("definitions", "")
-    proc_resp_data   = sop_data.get("process_responsibilities", "")
-    process_text     = sop_data.get("process", "")
-    procedures_data  = sop_data.get("procedures", "")
-    related_docs     = sop_data.get("related_docs", "")
-    sop_form         = sop_data.get("sop_form", "")
-    sop_log          = sop_data.get("sop_log", "")
-
-    ##################################################
-    # (C) Generate the PDF (front cover + main content)
-    ##################################################
+    # 4) Now let's build a PDF with a front page + subsequent sections
     try:
+        import io
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib import colors
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+        from reportlab.lib.styles import ParagraphStyle
+        from reportlab.lib.enums import TA_CENTER
+        from reportlab.lib.utils import ImageReader
+        import fitz
+
         buffer_front = io.BytesIO()
         c = canvas.Canvas(buffer_front, pagesize=A4)
         page_width, page_height = A4
 
-        # (i) Download logo & art if available
+        # Download images from Azure
         blob_config = {
             "account_url": "https://cxqaazureaihub8779474245.blob.core.windows.net",
-            "sas_token": ("sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&"
-                          "se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&"
-                          "spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D"),
+            "sas_token": (
+                "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&se=2030-11-21T02:02:26Z&"
+                "st=2024-11-20T18:02:26Z&spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8Z"
+                "W75yCsFM6nUmUw%3D"
+            ),
             "container": "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
         }
 
@@ -863,6 +803,7 @@ The information to use:
             img_data.seek(0)
             return img_data
 
+        # Attempt to fetch the same logo & art
         try:
             logo_img = ImageReader(fetch_image("UI/2024-11-20_142337_UTC/cxqa_data/export-resources/logo.png"))
             art_img  = ImageReader(fetch_image("UI/2024-11-20_142337_UTC/cxqa_data/export-resources/art.png"))
@@ -870,42 +811,62 @@ The information to use:
             logo_img = None
             art_img  = None
 
-        # --- Front page: logo + art + title ---
+        # FRONT PAGE
         if logo_img:
             logo_width = 70
-            c.drawImage(logo_img,
-                        (page_width - logo_width) / 2,
-                        page_height - 150,
-                        width=logo_width,
-                        preserveAspectRatio=True,
-                        mask='auto')
+            c.drawImage(
+                logo_img,
+                (page_width - logo_width) / 2,
+                page_height - 150,
+                width=logo_width,
+                preserveAspectRatio=True,
+                mask='auto'
+            )
+            
         if art_img:
-            o_w, o_h = art_img.getSize()
+            original_width, original_height = art_img.getSize()  
             ratio = 0.8
-            scaled_w = o_w * ratio
-            scaled_h = o_h * ratio
-            x_pos = (page_width - scaled_w) / 2
+            # double the original size
+            # ratio = 1.0  # original size
+            # ratio = 0.5  # half size, etc.
+    
+            # 3) Compute scaled dimensions.
+            scaled_width = original_width * ratio
+            scaled_height = original_height * ratio
+            
+            # 4) Compute X/Y so it's centered horizontally, for example at Y=0.
+            x_pos = (page_width - scaled_width) / 2
             y_pos = 0
-            c.drawImage(art_img, x=x_pos, y=y_pos,
-                        width=scaled_w, height=scaled_h,
-                        preserveAspectRatio=False, mask='auto')
+            
+            c.drawImage(
+                art_img,
+                x=x_pos,
+                y=y_pos,
+                width=scaled_width,
+                height=scaled_height,
+                preserveAspectRatio=False,  # you can set False now because we did the math
+                mask='auto'
+            )
 
-        # Title on front
+
+
+        # Title
+        # Main Title (bold black)
         c.setFont("Helvetica-Bold", 16)
         c.setFillColor(colors.black)
-        c.drawCentredString(page_width/2, page_height - 230, sop_title or "Untitled SOP")
+        c.drawCentredString(page_width/2, page_height - 230, sop_title)
 
-        # Subtitle
+        # Subtitle (gray)
         c.setFont("Helvetica", 12)
         c.setFillColor(colors.HexColor("#777777"))
-        c.drawCentredString(page_width/2, page_height - 250,
-                            "Standard Operating Procedure Document")
+        c.drawCentredString(page_width/2, page_height - 250, "Standard Operating Procedure Document")
 
-        # Metadata
+
+        # Some doc metadata
         c.setFont("Helvetica", 10)
         meta_y = page_height - 310
         meta_lines = [
-            f"Document Name: {sop_title or 'Untitled SOP'}",
+            f"Document Name: {sop_title}",
             f"Approved Date: {datetime.today().strftime('%B %d, %Y')}",
             "Version: 001",
             "Document Prepared By: Standards & Delivery"
@@ -917,9 +878,11 @@ The information to use:
         c.setFont("Helvetica", 8)
         c.setFillColor(colors.black)
         c.drawString(40, 20, "ClassificationRedacted")
+
         c.showPage()
 
-        # --- Main sections ---
+        # MAIN SECTIONS
+        # We'll do a function to add each chunk
         style_heading = ParagraphStyle(
             'heading',
             fontName='Helvetica-Bold',
@@ -936,45 +899,65 @@ The information to use:
         )
 
         def add_section(title, content, story):
+            # If content is empty, skip
             if not content:
                 return
             story.append(Paragraph(title, style_heading))
             if isinstance(content, list):
+                # if user put a bullet list for "provisions"
                 for item in content:
                     story.append(Paragraph(f"- {item}", style_text))
             elif isinstance(content, dict):
+                # we might have a dictionary for process_responsibilities
                 for k,v in content.items():
+                    # if v is a list/dict, we can convert to string or do further logic
                     if isinstance(v, (list, dict)):
                         v = json.dumps(v, indent=2)
                     story.append(Paragraph(f"{k}: {v}", style_text))
             else:
-                for line in str(content).split("\n"):
-                    if line.strip():
-                        story.append(Paragraph(line.strip(), style_text))
-            story.append(Spacer(1, 12))
+                # Just treat content as string
+                lines = str(content).split("\n")
+                for line in lines:
+                    line = line.strip()
+                    if line:
+                        story.append(Paragraph(line, style_text))
+            story.append(Spacer(1,12))
 
+        # We'll store in a story for a second PDF:
         buffer_content = io.BytesIO()
         doc_story = []
 
-        # Build each of the  five sections in order
+        # 0) Table of Contents
         add_section("Table of Contents", toc_text, doc_story)
+        # 1) Overview
         add_section("1 Overview", overview_text, doc_story)
+        # 1.1 Scope
         add_section("1.1 Scope", scope_text, doc_story)
+        # 2) Policy and References
         add_section("2 Policy and References", policy_text, doc_story)
+        # 3) General Provisions
         add_section("3 General Provisions", provisions_data, doc_story)
+        # 4) Terms and Definitions
         add_section("4 Terms and Definitions", definitions_data, doc_story)
+        # 5) Process and Responsibilities
         add_section("5 Process and Responsibilities", proc_resp_data, doc_story)
+        # 5.1 <SOP Title> Process
         add_section(f"5.1 {sop_title} Process", process_text, doc_story)
+        # 6) Procedures
         add_section("6 Procedures", procedures_data, doc_story)
+        # 7) Related Documents and Records
         add_section("7 Related Documents and Records", related_docs, doc_story)
+        # 7.1 <SOP Title> Form
         add_section(f"7.1 {sop_title} Form", sop_form, doc_story)
+        # 7.2 <SOP Title> Log
         add_section(f"7.2 {sop_title} Log", sop_log, doc_story)
 
         doc = SimpleDocTemplate(buffer_content, pagesize=A4)
         doc.build(doc_story)
 
-        # Merge front page + content into one PDF
         c.save()
+
+        # Merge front page + main content
         buffer_content.seek(0)
         front_pdf = fitz.open(stream=buffer_front.getvalue(), filetype="pdf")
         content_pdf = fitz.open(stream=buffer_content.getvalue(), filetype="pdf")
@@ -984,7 +967,7 @@ The information to use:
         front_pdf.save(final_output)
         final_output.seek(0)
 
-        # Upload final PDF to Azure Blob
+        # Upload to Azure
         blob_service = BlobServiceClient(
             account_url=blob_config["account_url"],
             credential=blob_config["sas_token"]
@@ -997,7 +980,8 @@ The information to use:
         final_url = (
             f"{blob_config['account_url']}/"
             f"{blob_config['container']}/"
-            f"{blob_name}?{blob_config['sas_token']}"
+            f"{blob_name}?"
+            f"{blob_config['sas_token']}"
         )
 
         threading.Timer(300, blob_client.delete_blob).start()
@@ -1005,6 +989,11 @@ The information to use:
 
     except Exception as e:
         return f"SOP Generation Error: {str(e)}"
+
+
+
+
+
 
 
 ##################################################
@@ -1024,7 +1013,7 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
 
     instructions_lower = instructions.lower()
 
-    # 1) PPT?
+    # PPT detection
     if re.search(
         r"\b("
         r"presentation[s]?|slide[s]?|slideshow[s]?|"
@@ -1033,11 +1022,13 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
         r"seminar|webinar|conference[-\s]?slides|training[-\s]?materials|"
         r"meeting[-\s]?slides|workshop[-\s]?slides|lecture[-\s]?slides|"
         r"presenation|presentaion"
-        r")\b", instructions_lower, re.IGNORECASE
+        r")\b",
+        instructions_lower,
+        re.IGNORECASE
     ):
-        return [generate_ppt()]
+        text = generate_ppt()
 
-    # 2) Chart?
+    # Chart detection
     elif re.search(
         r"\b("
         r"chart[s]?|graph[s]?|diagram[s]?|"
@@ -1047,65 +1038,45 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
         r"heatmap[s]?|time[-\s]?series|distribution[-\s]?plot|"
         r"statistical[-\s]?graph[s]?|data[-\s]?plot[s]?|"
         r"char|grph|daigram"
-        r")\b", instructions_lower, re.IGNORECASE
-    ):
-        return [generate_chart()]
-
-    # 3) Document?  (more inclusive now)
-    elif re.search(
-        r"\b("
-        r"document[s]?|word\s+document[s]?|word[-\s]?doc[s]?|docx?"
         r")\b",
         instructions_lower,
         re.IGNORECASE
     ):
-        return [generate_doc()]
+        text = generate_chart()
 
-    # 4) SOP?
+    # Document detection
     elif re.search(
-        r"\b(standard operating procedure document|standard operating procedure|sop\.?)\b",
-        instructions_lower, re.IGNORECASE
+        r"\b(document|doc|word|report|pdf|"
+        r"business[-\s]?plan[s]?|research[-\s]?paper[s]?|"
+        r"proposal[s]?|guideline[s]?|introduction|conclusion|"
+        r"terms[-\s]?of[-\s]?service|agreement|"
+        r"contract[-\s]?draft|standard[-\s]?operating[-\s]?procedure|"
+        r"documnt|repot|worddoc|proposel"
+        r")\b",
+        instructions_lower,
+        re.IGNORECASE
     ):
-        return [Call_SOP(latest_question, latest_answer, chat_history, instructions)]
+        text = generate_doc()
 
-    # 5) Fallback
-    return ["Not enough Information to perform export."]
+    # SOP detection
+    elif re.search(
+        r"\b(standard operating procedure document|"
+        r"standard[-\s]?operating[-\s]?procedure|sop\.?\b)",
+        instructions_lower,
+        re.IGNORECASE
+    ):
+        text = Call_SOP(latest_question, latest_answer, chat_history, instructions)
 
-def _parse_markdown_table(md_text: str):
-    """
-    Given a block of text that may contain a Markdown table (e.g. "| Col1 | Col2 | ... |"),
-    extract its header and rows. Returns (headers: list[str], data_rows: list[list[values]]).
-    If no valid Markdown table is found, returns (None, None).
-    """
-    lines = md_text.split("\n")
-    # Collect any lines that start and end with '|'
-    table_lines = [l for l in lines if l.strip().startswith("|") and l.strip().endswith("|")]
-    if len(table_lines) < 2:
-        return None, None
+    # Fallback
+    else:
+        text = "Not enough Information to perform export."
 
-    # First line is header row (e.g. "| Month | Visits |")
-    header_line = table_lines[0].strip().strip("|")
-    # Second line should be separators (e.g. "|------|-------|")
-    separator_line = table_lines[1].strip()
-    # Basic sanity check: separators must be composed of '-', '|' or ':'
-    if not all(ch in "-|:" for ch in separator_line.replace(" ", "")):
-        return None, None
+    # Ensure a string is returned
+    if text is None:
+        text = "Error: Export function returned None"
+    else:
+        text = str(text)
 
-    headers = [h.strip() for h in header_line.split("|")]
-
-    data_rows = []
-    for row_line in table_lines[2:]:
-        # Strip leading/trailing '|' and split on '|'
-        cells = [cell.strip() for cell in row_line.strip().strip("|").split("|")]
-        # Convert numeric strings (with optional commas) to float, else keep as string
-        parsed = []
-        for c in cells:
-            try:
-                num = float(c.replace(",", ""))
-                parsed.append(num)
-            except:
-                parsed.append(c)
-        if len(parsed) == len(headers):
-            data_rows.append(parsed)
-
-    return headers, data_rows
+    # Yield each line so ask_func.py can stream messages properly
+    for line in text.splitlines():
+        yield line
