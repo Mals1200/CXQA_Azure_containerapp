@@ -1,10 +1,3 @@
-# Version 4b
-# call SOP has more efficient prompt & has a better layout:
-    # The logo and art images are centered
-    # Can manipulate the art image using ratios and scalinf
-    # The prompt is more effiecient and uses less tokens.
-
-
 import re
 import requests
 import json
@@ -182,31 +175,38 @@ Data:
             """
             return Pt(small_size if len(text) > max_chars else large_size)
 
-        # Split each "slide" block at double newlines
         for slide_block in slides_text.split('\n\n'):
-            lines = [line.strip() for line in slide_block.split('\n') if line.strip()]
+            # 1) Break the block into raw lines; remove any lines that are purely blank
+            raw_lines = [line for line in slide_block.split('\n')]
+            lines     = [line.strip() for line in raw_lines if line.strip()]
             if not lines:
-                # skip empty slide entirely
+                # No non-blank text in this block → skip entirely
                 continue
-            
-            # If there are more than 6 bullets, break them into two slides:
+
             title_text   = lines[0]
             bullet_lines = lines[1:]
+            if not bullet_lines:
+                # If there are no bullets (just a title), skip creating a slide
+                continue
+
+            # 2) Break into chunks of at most 6 bullet lines
             chunks = []
             if len(bullet_lines) > 6:
-                # Split into chunks of <= 6 lines each
                 for i in range(0, len(bullet_lines), 6):
-                    chunks.append(bullet_lines[i:i+6])
+                    chunk = bullet_lines[i:i+6]
+                    if any(b.strip() for b in chunk):
+                        chunks.append(chunk)
             else:
-                chunks.append(bullet_lines)
-            
-            # For each chunk, create a separate slide with the same title
+                if any(b.strip() for b in bullet_lines):
+                    chunks.append(bullet_lines)
+
+            # 3) Create one slide per non-empty chunk
             for chunk in chunks:
                 slide = prs.slides.add_slide(prs.slide_layouts[6])
                 slide.background.fill.solid()
                 slide.background.fill.fore_color.rgb = BG_COLOR
-                
-                # (1) Title box
+
+                # (i) Title box
                 title_box = slide.shapes.add_textbox(
                     Pt(50), Pt(50), prs.slide_width - Pt(100), Pt(60)
                 )
@@ -215,16 +215,22 @@ Data:
                 for paragraph in title_frame.paragraphs:
                     paragraph.font.color.rgb = TEXT_COLOR
                     paragraph.font.name = FONT_NAME
-                    paragraph.font.size = choose_font_size(title_text, max_chars=30, large_size=36, small_size=28)
+                    paragraph.font.size = choose_font_size(
+                        title_text,
+                        max_chars=30,
+                        large_size=36,
+                        small_size=28
+                    )
                     paragraph.alignment = PP_ALIGN.CENTER
-                    
-                # (2) Bullets box
+
+                # (ii) Bullets box (only if chunk is non-empty)
                 if chunk:
                     content_box = slide.shapes.add_textbox(
-                        Pt(100), Pt(150), prs.slide_width - Pt(200), prs.slide_height - Pt(250)
+                        Pt(100), Pt(150),
+                        prs.slide_width - Pt(200),
+                        prs.slide_height - Pt(250)
                     )
                     content_frame = content_box.text_frame
-                    # Clear any pre-existing bullet
                     content_frame.clear()
                     for bullet in chunk:
                         p = content_frame.add_paragraph()
@@ -232,7 +238,12 @@ Data:
                         p.text = txt
                         p.font.color.rgb = TEXT_COLOR
                         p.font.name = FONT_NAME
-                        p.font.size = choose_font_size(txt, max_chars=50, large_size=24, small_size=18)
+                        p.font.size = choose_font_size(
+                            txt,
+                            max_chars=50,
+                            large_size=24,
+                            small_size=18
+                        )
                         p.space_after = Pt(8)
 
         ##################################################
@@ -292,6 +303,40 @@ def Call_CHART(latest_question, latest_answer, chat_history, instructions):
         (39/255, 71/255, 54/255),     # Dark Green
         (254/255, 200/255, 65/255)    # Yellow
     ]
+
+    ##################################################
+    # (A1) If latest_answer contains a Markdown table, parse it directly
+    ##################################################
+    headers, data_rows = _parse_markdown_table(latest_answer)
+    if headers and data_rows:
+        # We assume headers[0] is the category axis (e.g. "Month"),
+        # and headers[1:] are series names (e.g. "Visits", "Sales").
+        if len(headers) < 2 or not data_rows:
+            return "Information is not suitable for a chart"
+        # Build categories from the first column of each row
+        categories = [row[0] for row in data_rows]
+        # Build one series per header (skipping index 0)
+        series_list = []
+        for col_idx in range(1, len(headers)):
+            values = []
+            for row in data_rows:
+                try:
+                    values.append(float(row[col_idx]))
+                except:
+                    values.append(0.0)
+            series_list.append({
+                "name": headers[col_idx],
+                "values": values
+            })
+        # Default to a line chart with a generic title
+        chart_data = {
+            "chart_type": "line",
+            "title": f"{headers[1]} over {headers[0]}",
+            "categories": categories,
+            "series": series_list
+        }
+        return json.dumps(chart_data)
+    # If no Markdown table, fall through to the LLM-based JSON prompt below…
 
     ##################################################
     # (A) Improved Azure OpenAI Call for Chart Data
@@ -516,9 +561,8 @@ def Call_DOC(latest_question, latest_answer, chat_history, instructions_doc):
     # (A) Ask the LLM to "write" a document
     ##################################################
     try:
-        chat_history_str = "\n".join(f"{msg['role']}: {msg['content']}"
-                                     for msg in chat_history)
-
+        # chat_history is already a list of strings ("User: …", "Assistant: …"), so just join:
+        chat_history_str = "\n".join(chat_history)
         doc_prompt = f"""
 You are a professional document author. Using ONLY the information below, produce
 a complete document in plain text (no markdown or code fences). Do not embed any
@@ -1026,3 +1070,42 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
 
     # 5) Fallback
     return ["Not enough Information to perform export."]
+
+def _parse_markdown_table(md_text: str):
+    """
+    Given a block of text that may contain a Markdown table (e.g. "| Col1 | Col2 | ... |"),
+    extract its header and rows. Returns (headers: list[str], data_rows: list[list[values]]).
+    If no valid Markdown table is found, returns (None, None).
+    """
+    lines = md_text.split("\n")
+    # Collect any lines that start and end with '|'
+    table_lines = [l for l in lines if l.strip().startswith("|") and l.strip().endswith("|")]
+    if len(table_lines) < 2:
+        return None, None
+
+    # First line is header row (e.g. "| Month | Visits |")
+    header_line = table_lines[0].strip().strip("|")
+    # Second line should be separators (e.g. "|------|-------|")
+    separator_line = table_lines[1].strip()
+    # Basic sanity check: separators must be composed of '-', '|' or ':'
+    if not all(ch in "-|:" for ch in separator_line.replace(" ", "")):
+        return None, None
+
+    headers = [h.strip() for h in header_line.split("|")]
+
+    data_rows = []
+    for row_line in table_lines[2:]:
+        # Strip leading/trailing '|' and split on '|'
+        cells = [cell.strip() for cell in row_line.strip().strip("|").split("|")]
+        # Convert numeric strings (with optional commas) to float, else keep as string
+        parsed = []
+        for c in cells:
+            try:
+                num = float(c.replace(",", ""))
+                parsed.append(num)
+            except:
+                parsed.append(c)
+        if len(parsed) == len(headers):
+            data_rows.append(parsed)
+
+    return headers, data_rows
