@@ -54,3 +54,6 @@ PyQt5==5.15.11
 # for formatting output
 markdown==3.8
 
+# time
+pytz
+
