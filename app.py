@@ -296,6 +296,23 @@ async def _bot_logic(turn_context: TurnContext):
         main_answer_lines = main_answer.split("\n")
         table_header, table_rows, table_lines = markdown_table_to_adaptive(main_answer_lines)
         body_blocks = []
+        import re
+        export_link_match = re.search(r'https?://[^\s\)]+', main_answer)
+        if export_link_match:
+            export_url = export_link_match.group(0)
+            # Remove the URL from the answer text if it's a bare URL line
+            main_answer = main_answer.replace(export_url, '').strip()
+            # Insert a "Download File" button at the TOP of the card body
+            body_blocks.insert(0, {
+                "type": "ActionSet",
+                "actions": [
+                    {
+                        "type": "Action.OpenUrl",
+                        "title": "Download File",
+                        "url": export_url
+                    }
+                ]
+            })
 
         if table_header and table_rows:
             pre_table = main_answer.split('|')[0].strip()
