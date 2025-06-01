@@ -991,7 +991,7 @@ Make sure every table has a header and a separator row (with dashes).
 2. Summarize or merge repetitive/lengthy lists. Never include more than 12 items
    in any bullet or numbered list.
 3. Prefer concise, direct answers—avoid excessive details.
-4. If you couldn’t find relevant information, answer as best you can and use
+4. If you couldn't find relevant information, answer as best you can and use
    "Source: AI Generated" at the end.
 5. If presenting data best shown in a table (such as numbers per month, by location,
    or by category), use Markdown table syntax as shown above.
@@ -1003,7 +1003,7 @@ Make sure every table has a header and a separator row (with dashes).
 7. If both Index and Python data were used, use "Source: Index & Python".
    If only Index, use "Source: Index". If only Python, use "Source: Python".
 8. For multi-part questions, organize the answer with subheadings or numbered steps.
-9. If the answer is a procedure/SOP, only list key actions (summarize—don’t list every sub-step).
+9. If the answer is a procedure/SOP, only list key actions (summarize—don't list every sub-step).
 
 ###################################################################################
                 PROMPT INPUT DATA (Available for your answer)
@@ -1539,10 +1539,16 @@ def Ask_Question(question, user_id="anonymous"):
         if question_lower.startswith("export"):
             try:
                 from Export_Agent import Call_Export
+
+                # Get the most recent assistant answer from chat history BEFORE you append the export command
+                latest_answer = get_last_assistant_answer(chat_history)
+
+                # Now add the export command to history (if you want)
                 chat_history.append(f"User: {question}")
+
                 for message in Call_Export(
                     latest_question=question,
-                    latest_answer=chat_history[-1] if chat_history else "",
+                    latest_answer=latest_answer,
                     chat_history=chat_history,
                     instructions=question[6:].strip()
                 ):
@@ -1653,3 +1659,14 @@ def robust_split_question(user_question, use_semantic_parsing=True):
             seen.add(sq)
     return result
 
+# Helper: Get last assistant answer from chat_history
+
+def get_last_assistant_answer(chat_history):
+    """
+    Scans chat_history backwards to find the most recent Assistant answer.
+    Returns the text of the answer (without "Assistant:" prefix), or "" if not found.
+    """
+    for entry in reversed(chat_history):
+        if entry.startswith("Assistant:"):
+            return entry[len("Assistant:"):].strip()
+    return ""
