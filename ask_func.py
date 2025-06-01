@@ -217,7 +217,7 @@ def format_tables_text(meta: dict) -> str:
             lines.append(f"   -{col}: {dt}")
     return "\n".join(lines)
 
-def format_schema_and_sample(meta: dict, sample_n: int = 2, char_limit: int = 15, show_sample: bool = False) -> str:
+def format_schema_and_sample(meta: dict, sample_n: int = 2, char_limit: int = 15) -> str:
     def truncate_val(v):
         s = "" if v is None else str(v)
         return s if len(s) <= char_limit else s[:char_limit] + "…"
@@ -225,49 +225,11 @@ def format_schema_and_sample(meta: dict, sample_n: int = 2, char_limit: int = 15
     lines = []
     for fn, info in meta.items():
         lines.append(f"{fn}: {info['schema']}")
-        if show_sample:
-            truncated = [
-                {col: truncate_val(val) for col, val in row.items()}
-                for row in info["sample"][:sample_n]
-            ]
-            lines.append(f"    Sample: {truncated},")
-
-        # --- Add unique values for columns with nunique < 21 and no 'date' in name ---
-        # Load the full DataFrame to check unique values
-        try:
-            # Try to load the full DataFrame from Azure Blob Storage
-            from azure.storage.blob import BlobServiceClient
-            import pandas as pd
-            import io
-            account_url = CONFIG["ACCOUNT_URL"]
-            sas_token = CONFIG["SAS_TOKEN"]
-            container_name = CONFIG["CONTAINER_NAME"]
-            target_folder_path = CONFIG["TARGET_FOLDER_PATH"]
-            blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
-            container_client = blob_service_client.get_container_client(container_name)
-            blob_name = os.path.join(target_folder_path, fn).replace("\\", "/")
-            blob_client = container_client.get_blob_client(blob_name)
-            blob_data = blob_client.download_blob().readall()
-            if fn.lower().endswith((".xlsx", ".xls")):
-                df = pd.read_excel(io.BytesIO(blob_data))
-            elif fn.lower().endswith(".csv"):
-                df = pd.read_csv(io.BytesIO(blob_data))
-            else:
-                df = None
-        except Exception as e:
-            df = None
-
-        if df is not None:
-            for col in df.columns:
-                if (
-                    df[col].nunique(dropna=True) < 21
-                    and "date" not in col.lower()
-                ):
-                    unique_vals = list(df[col].dropna().unique())
-                    # Truncate long values for display
-                    unique_vals = [truncate_val(v) for v in unique_vals]
-                    lines.append(f"    Unique values for '{col}': {unique_vals}")
-
+        truncated = [
+            {col: truncate_val(val) for col, val in row.items()}
+            for row in info["sample"][:sample_n]
+        ]
+        lines.append(f"    Sample: {truncated},")
     return "\n".join(lines)
 
 _metadata   = load_table_metadata(sample_n=2)
@@ -982,7 +944,7 @@ Make sure every table has a header and a separator row (with dashes).
 2. Summarize or merge repetitive/lengthy lists. Never include more than 12 items
    in any bullet or numbered list.
 3. Prefer concise, direct answers—avoid excessive details.
-4. If you couldn't find relevant information, answer as best you can and use
+4. If you couldn’t find relevant information, answer as best you can and use
    "Source: AI Generated" at the end.
 5. If presenting data best shown in a table (such as numbers per month, by location,
    or by category), use Markdown table syntax as shown above.
@@ -994,7 +956,7 @@ Make sure every table has a header and a separator row (with dashes).
 7. If both Index and Python data were used, use "Source: Index & Python".
    If only Index, use "Source: Index". If only Python, use "Source: Python".
 8. For multi-part questions, organize the answer with subheadings or numbered steps.
-9. If the answer is a procedure/SOP, only list key actions (summarize—don't list every sub-step).
+9. If the answer is a procedure/SOP, only list key actions (summarize—don’t list every sub-step).
 
 ###################################################################################
                 PROMPT INPUT DATA (Available for your answer)
