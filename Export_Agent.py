@@ -159,12 +159,18 @@ Data:
     slides_text = generate_slide_content()
     
     # Handle error cases
-    if slides_text.startswith("API_ERROR:"):
-        return f"OpenAI API Error: {slides_text[10:]}"
-    if "NOT_ENOUGH_INFO" in slides_text:
+    slides_text_clean = (slides_text or "").strip().lower()
+    if (
+        slides_text_clean.startswith("api_error:") or
+        "not enough information" in slides_text_clean or
+        "not enough info" in slides_text_clean or
+        "no information" in slides_text_clean or
+        "insufficient information" in slides_text_clean or
+        "not suitable for" in slides_text_clean or
+        slides_text_clean == "" or
+        len(slides_text_clean) < 20
+    ):
         return "Error: Insufficient information to generate slides"
-    if len(slides_text) < 20:
-        return "Error: Generated content too short or invalid"
 
     ##################################################
     # (C) SLIDE GENERATION WITH DESIGN
@@ -395,17 +401,25 @@ Data:
     try:
         chart_response = generate_chart_data()
 
-        if chart_response.startswith("API_ERROR:"):
-            return f"OpenAI Error: {chart_response[10:]}"
+        cr_clean = (chart_response or "").strip().lower()
 
-        if chart_response.strip() == "Information is not suitable for a chart":
-            return "Information is not suitable for a chart"
+        if (
+            cr_clean.startswith("api_error:") or
+            "not suitable for a chart" in cr_clean or
+            "not enough information" in cr_clean or
+            "not enough info" in cr_clean or
+            "no information" in cr_clean or
+            "insufficient information" in cr_clean or
+            cr_clean == "" or
+            len(cr_clean) < 20
+        ):
+            return "Error: Insufficient information to generate chart"
 
         match = re.search(r'(\{.*\})', chart_response, re.DOTALL)
         if match:
             json_str = match.group(1)
         else:
-            return "Invalid chart data format: No JSON object found"
+            return "Error: Chart data was not provided in the expected JSON format."
 
         try:
             chart_data = json.loads(json_str)
@@ -515,12 +529,17 @@ Data:
 
     # Get the doc text
     doc_text = generate_doc_content()
-    if doc_text.startswith("API_ERROR:"):
-        return f"OpenAI API Error: {doc_text[10:]}"
-    if "NOT_ENOUGH_INFO" in doc_text.upper():
+    doc_text_clean = (doc_text or "").strip().lower()
+    if (
+        doc_text_clean.startswith("api_error:") or
+        "not enough information" in doc_text_clean or
+        "not enough info" in doc_text_clean or
+        "no information" in doc_text_clean or
+        "insufficient information" in doc_text_clean or
+        doc_text_clean == "" or
+        len(doc_text_clean) < 20
+    ):
         return "Error: Insufficient information to generate document"
-    if len(doc_text) < 20:
-        return "Error: Generated content too short or invalid"
 
     try:
         doc = Document()
@@ -734,13 +753,17 @@ User_description:
     # 1) Get raw content from GPT (should be JSON)
     raw_json = generate_sop_content()
 
-    # Check for errors or insufficient data
-    if raw_json.startswith("API_ERROR:"):
-        return f"OpenAI API Error: {raw_json[10:]}"
-    if "NOT_ENOUGH_INFO" in raw_json.upper():
+    raw_json_clean = (raw_json or "").strip().lower()
+    if (
+        raw_json_clean.startswith("api_error:") or
+        "not enough information" in raw_json_clean or
+        "not enough info" in raw_json_clean or
+        "no information" in raw_json_clean or
+        "insufficient information" in raw_json_clean or
+        raw_json_clean == "" or
+        len(raw_json_clean) < 20
+    ):
         return "Error: Insufficient information to generate SOP"
-    if len(raw_json) < 20:
-        return "Error: Generated content too short or invalid"
 
     # 2) Parse the JSON into a dict
     try:
