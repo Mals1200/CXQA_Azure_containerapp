@@ -159,18 +159,12 @@ Data:
     slides_text = generate_slide_content()
     
     # Handle error cases
-    slides_text_clean = (slides_text or "").strip().lower()
-    if (
-        slides_text_clean.startswith("api_error:") or
-        "not enough information" in slides_text_clean or
-        "not enough info" in slides_text_clean or
-        "no information" in slides_text_clean or
-        "insufficient information" in slides_text_clean or
-        "not suitable for" in slides_text_clean or
-        slides_text_clean == "" or
-        len(slides_text_clean) < 20
-    ):
+    if slides_text.startswith("API_ERROR:"):
+        return f"OpenAI API Error: {slides_text[10:]}"
+    if "NOT_ENOUGH_INFO" in slides_text:
         return "Error: Insufficient information to generate slides"
+    if len(slides_text) < 20:
+        return "Error: Generated content too short or invalid"
 
     ##################################################
     # (C) SLIDE GENERATION WITH DESIGN
@@ -401,25 +395,17 @@ Data:
     try:
         chart_response = generate_chart_data()
 
-        cr_clean = (chart_response or "").strip().lower()
+        if chart_response.startswith("API_ERROR:"):
+            return f"OpenAI Error: {chart_response[10:]}"
 
-        if (
-            cr_clean.startswith("api_error:") or
-            "not suitable for a chart" in cr_clean or
-            "not enough information" in cr_clean or
-            "not enough info" in cr_clean or
-            "no information" in cr_clean or
-            "insufficient information" in cr_clean or
-            cr_clean == "" or
-            len(cr_clean) < 20
-        ):
-            return "Error: Insufficient information to generate chart"
+        if chart_response.strip() == "Information is not suitable for a chart":
+            return "Information is not suitable for a chart"
 
         match = re.search(r'(\{.*\})', chart_response, re.DOTALL)
         if match:
             json_str = match.group(1)
         else:
-            return "Error: Chart data was not provided in the expected JSON format."
+            return "Invalid chart data format: No JSON object found"
 
         try:
             chart_data = json.loads(json_str)
@@ -496,9 +482,7 @@ Rules:
 3. Format: 
    Section Heading\\n- Bullet 1\\n- Bullet 2
 4. Separate sections with \\n\\n
-5. If insufficient information, say: \"Not enough Information to perform export.\"
-6. NEVER write your answer as Python or JSON code—only use clear, normal sentences and bullet lists.
-7. If the content is empty, respond with: Not enough Information to perform export.
+5. If insufficient information, say: "Not enough Information to perform export."
 
 Data:
 - Instructions: {instructions_doc}
@@ -531,17 +515,12 @@ Data:
 
     # Get the doc text
     doc_text = generate_doc_content()
-    doc_text_clean = (doc_text or "").strip().lower()
-    if (
-        doc_text_clean.startswith("api_error:") or
-        "not enough information" in doc_text_clean or
-        "not enough info" in doc_text_clean or
-        "no information" in doc_text_clean or
-        "insufficient information" in doc_text_clean or
-        doc_text_clean == "" or
-        len(doc_text_clean.replace("-", "").replace(" ", "")) < 10
-    ):
+    if doc_text.startswith("API_ERROR:"):
+        return f"OpenAI API Error: {doc_text[10:]}"
+    if "NOT_ENOUGH_INFO" in doc_text.upper():
         return "Error: Insufficient information to generate document"
+    if len(doc_text) < 20:
+        return "Error: Generated content too short or invalid"
 
     try:
         doc = Document()
@@ -755,17 +734,13 @@ User_description:
     # 1) Get raw content from GPT (should be JSON)
     raw_json = generate_sop_content()
 
-    raw_json_clean = (raw_json or "").strip().lower()
-    if (
-        raw_json_clean.startswith("api_error:") or
-        "not enough information" in raw_json_clean or
-        "not enough info" in raw_json_clean or
-        "no information" in raw_json_clean or
-        "insufficient information" in raw_json_clean or
-        raw_json_clean == "" or
-        len(raw_json_clean) < 20
-    ):
+    # Check for errors or insufficient data
+    if raw_json.startswith("API_ERROR:"):
+        return f"OpenAI API Error: {raw_json[10:]}"
+    if "NOT_ENOUGH_INFO" in raw_json.upper():
         return "Error: Insufficient information to generate SOP"
+    if len(raw_json) < 20:
+        return "Error: Generated content too short or invalid"
 
     # 2) Parse the JSON into a dict
     try:
@@ -928,31 +903,19 @@ User_description:
             if not content:
                 return
             story.append(Paragraph(title, style_heading))
-
-            # Handle a list of dicts (common for steps, actions)
-            if isinstance(content, list) and all(isinstance(item, dict) for item in content):
-                for item in content:
-                    # Try to format as "- Step: Details" or "Scenario: Action"
-                    if "step" in item and "details" in item:
-                        line = f"- {item['step']}: {item['details']}"
-                        story.append(Paragraph(line, style_text))
-                    elif "scenario" in item and "actions" in item and isinstance(item["actions"], list):
-                        story.append(Paragraph(f"- {item['scenario']}:", style_text))
-                        for subaction in item["actions"]:
-                            story.append(Paragraph(f"   • {subaction}", style_text))
-                    else:
-                        # Print all key-values in the dict as bullets
-                        for k, v in item.items():
-                            story.append(Paragraph(f"- {k}: {v}", style_text))
-            # If it's a simple list, print as bullet list
-            elif isinstance(content, list):
+            if isinstance(content, list):
+                # if user put a bullet list for "provisions"
                 for item in content:
                     story.append(Paragraph(f"- {item}", style_text))
             elif isinstance(content, dict):
-                for k, v in content.items():
+                # we might have a dictionary for process_responsibilities
+                for k,v in content.items():
+                    # if v is a list/dict, we can convert to string or do further logic
+                    if isinstance(v, (list, dict)):
+                        v = json.dumps(v, indent=2)
                     story.append(Paragraph(f"{k}: {v}", style_text))
             else:
-                # Treat as plain string with possible line breaks
+                # Just treat content as string
                 lines = str(content).split("\n")
                 for line in lines:
                     line = line.strip()
