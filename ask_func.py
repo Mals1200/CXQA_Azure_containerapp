@@ -1,51 +1,3 @@
-###############################################################################
-#                           CXQA SUBQUESTION SPLITTING FIXES (v23 2025-05-28)
-#
-# Purpose: Ensure that user questions are only split into subquestions when
-#          absolutely necessary, and that no splitting ever results in more
-#          than 4 subquestions. This ensures:
-#              • Precise retrieval and matching for SOP/policy/incident questions
-#              • Answers in Teams and notebook always match the user's real query
-#              • No over-splitting or loss of context for "what to do"/SOP-type questions
-#
-# Key Additions:
-#
-# 1. Robust Split Function:
-#      - Added robust_split_question(user_question, use_semantic_parsing=True)
-#        • Ensures the original user question is always the first subquestion
-#        • Deduplicates results and preserves order
-#
-# 2. LLM Splitter Prompt Hardening:
-#      - The system prompt in split_question_into_subquestions() now explicitly tells
-#        the LLM:
-#            • Only split if the user question *really* needs it for independent answers
-#            • Never split into more than 4 subquestions
-#            • If the question can be answered as a whole, just return the original
-#            • If you split, each subquestion must be essential for a complete answer
-#            • Return each subquestion on a separate line or as bullet points
-#
-# 3. Post-LLM Hard Cap (Double Safety):
-#      - After splitting (LLM or regex), always cap subqs = subqs[:4]
-#
-# 4. Code Integration:
-#      - All places where user questions are split (esp. tool_1_index_search)
-#        now call:
-#           subquestions = robust_split_question(normalize_question(user_question), use_semantic_parsing=True)
-#        instead of direct calls to split_question_into_subquestions
-#
-# 5. Normalization:
-#      - Added normalize_question() to standardize phrasings like "what to do if…",
-#        improving consistency and retrieval.
-#
-# 6. Debug (Optional for Testing):
-#      - You may print [DEBUG] Subquestions for '...' to verify splitting in logs.
-#
-# Result:
-#      - Minimal, meaningful subquestions, never more than 4, always including
-#        the real user question—Teams and notebook always match.
-###############################################################################
-
-
 import os
 import io
 import re
@@ -265,7 +217,7 @@ def format_tables_text(meta: dict) -> str:
             lines.append(f"   -{col}: {dt}")
     return "\n".join(lines)
 
-def format_schema_and_sample(meta: dict, sample_n: int = 2, char_limit: int = 15) -> str:
+def format_schema_and_sample(meta: dict, sample_n: int = 2, char_limit: int = 15, show_sample: bool = False) -> str:
     def truncate_val(v):
         s = "" if v is None else str(v)
         return s if len(s) <= char_limit else s[:char_limit] + "…"
@@ -273,11 +225,49 @@ def format_schema_and_sample(meta: dict, sample_n: int = 2, char_limit: int = 15
     lines = []
     for fn, info in meta.items():
         lines.append(f"{fn}: {info['schema']}")
-        truncated = [
-            {col: truncate_val(val) for col, val in row.items()}
-            for row in info["sample"][:sample_n]
-        ]
-        lines.append(f"    Sample: {truncated},")
+        if show_sample:
+            truncated = [
+                {col: truncate_val(val) for col, val in row.items()}
+                for row in info["sample"][:sample_n]
+            ]
+            lines.append(f"    Sample: {truncated},")
+
+        # --- Add unique values for columns with nunique < 21 and no 'date' in name ---
+        # Load the full DataFrame to check unique values
+        try:
+            # Try to load the full DataFrame from Azure Blob Storage
+            from azure.storage.blob import BlobServiceClient
+            import pandas as pd
+            import io
+            account_url = CONFIG["ACCOUNT_URL"]
+            sas_token = CONFIG["SAS_TOKEN"]
+            container_name = CONFIG["CONTAINER_NAME"]
+            target_folder_path = CONFIG["TARGET_FOLDER_PATH"]
+            blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
+            container_client = blob_service_client.get_container_client(container_name)
+            blob_name = os.path.join(target_folder_path, fn).replace("\\", "/")
+            blob_client = container_client.get_blob_client(blob_name)
+            blob_data = blob_client.download_blob().readall()
+            if fn.lower().endswith((".xlsx", ".xls")):
+                df = pd.read_excel(io.BytesIO(blob_data))
+            elif fn.lower().endswith(".csv"):
+                df = pd.read_csv(io.BytesIO(blob_data))
+            else:
+                df = None
+        except Exception as e:
+            df = None
+
+        if df is not None:
+            for col in df.columns:
+                if (
+                    df[col].nunique(dropna=True) < 21
+                    and "date" not in col.lower()
+                ):
+                    unique_vals = list(df[col].dropna().unique())
+                    # Truncate long values for display
+                    unique_vals = [truncate_val(v) for v in unique_vals]
+                    lines.append(f"    Unique values for '{col}': {unique_vals}")
+
     return "\n".join(lines)
 
 _metadata   = load_table_metadata(sample_n=2)
@@ -742,9 +732,6 @@ Don't give examples, only provide the actual code. If you can't provide the code
 6. If a user references a column/table that does not exist in the schemas, return "404".
 7. Do not use Chat_history information directly within the generated code logic or print statements, but use it for context if needed to understand the user's question.
 
-**IMPORTANT: YOU MUST ALWAYS USE FUZZY MATCHING**
-**When referencing table names, column names, or row values, you MUST ALWAYS use fuzzy matching (such as difflib's SequenceMatcher) to find the closest match in the actual data, in case of typos or alternate spellings. Only use the closest match if its similarity is reasonably high (e.g., ratio > 0.8). This is a CRITICAL REQUIREMENT and NOT OPTIONAL.**
-
 **Data Handling Rules for Pandas Code**:
 A. **Numeric Conversion:** When a column is expected to be numeric for calculations (e.g., for .sum(), .mean(), comparisons):
    - First, replace common non-numeric placeholders (like '-', 'N/A', or strings containing only spaces) with `pd.NA` or `numpy.nan`. For example: `df['column_name'] = df['column_name'].replace(['-', 'N/A', ' ', '  '], pd.NA)`
@@ -970,12 +957,13 @@ You are a helpful assistant. The user asked a (possibly multi-part) question, an
             OUTPUT FORMAT: MARKDOWN (FOR TEAMS OR CHAT UI)
 
 Use these Markdown elements in your response:
-  - Headings:            # Main title, ## Subsection
+  - Headings:            # Main title, ## Subsection 
   - Paragraphs:          Normal text for explanations
   - Bullet lists:        - item
   - Numbered lists:      1. item
   - Tables:              Use Markdown syntax (see below)
   - Code blocks:         ```python ... ```
+Always seperate the elements with a new line after each one.
 
 If you need to present data in tabular form (such as monthly stats, comparisons, etc),
 ALWAYS use Markdown table syntax as below:
@@ -1542,16 +1530,10 @@ def Ask_Question(question, user_id="anonymous"):
         if question_lower.startswith("export"):
             try:
                 from Export_Agent import Call_Export
-
-                # Get the most recent assistant answer from chat history BEFORE you append the export command
-                latest_answer = get_last_assistant_answer(chat_history)
-
-                # Now add the export command to history (if you want)
                 chat_history.append(f"User: {question}")
-
                 for message in Call_Export(
                     latest_question=question,
-                    latest_answer=latest_answer,
+                    latest_answer=chat_history[-1] if chat_history else "",
                     chat_history=chat_history,
                     instructions=question[6:].strip()
                 ):
@@ -1662,14 +1644,3 @@ def robust_split_question(user_question, use_semantic_parsing=True):
             seen.add(sq)
     return result
 
-# Helper: Get last assistant answer from chat_history
-
-def get_last_assistant_answer(chat_history):
-    """
-    Scans chat_history backwards to find the most recent Assistant answer.
-    Returns the text of the answer (without "Assistant:" prefix), or "" if not found.
-    """
-    for entry in reversed(chat_history):
-        if entry.startswith("Assistant:"):
-            return entry[len("Assistant:"):].strip()
-    return ""
