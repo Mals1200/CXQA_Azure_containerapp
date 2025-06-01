@@ -34,7 +34,8 @@ pandas==1.5.3
 # For generating Word, PPT and graphs/charts files:
 python-pptx==1.0.2
 python-docx==1.1.2
-docx==0.2.4
+lxml>=4.9.0
+Pillow>=9.0.0
 matplotlib==3.9.4
 pyvis==0.3.2
 
