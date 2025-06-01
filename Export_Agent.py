@@ -129,10 +129,10 @@ Data:
 - Answer: {latest_answer}
 - History: {chat_history_str}"""
 
-        endpoint = "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/openai/deployments/gpt-4o-2/chat/completions?api-version=2025-01-01-preview"
+        endpoint = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview"
         headers = {
             "Content-Type": "application/json",
-            "api-key": "5EgVev7KCYaO758NWn5yL7f2iyrS4U3FaSI5lQhTx7RlePQ7QMESJQQJ99AKACHYHv6XJ3w3AAAAACOGoSfb"
+            "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
         }
 
         payload = {
