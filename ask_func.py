@@ -1107,6 +1107,21 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
     except Exception:
         response_json = None
 
+    # ---------- fallback if JSON parsing failed but it looks like an AI-generated JSON string ----------
+    if response_json is None:
+        lower_clean = cleaned.lower()
+        if '"content"' in lower_clean and '"source"' in lower_clean and 'ai generated' in lower_clean:
+            import re
+            text_blocks = re.findall(r'"text"\s*:\s*"([^"]+)"', cleaned)
+            if text_blocks:
+                markdown_answer = "\n\n".join(text_blocks).strip()
+            else:
+                markdown_answer = cleaned  # fallback to raw if regex failed
+            # Ensure Source line
+            if 'source:' not in markdown_answer.lower():
+                markdown_answer += "\n\nSource: AI Generated"
+            return markdown_answer
+
     # ONLY treat it as "our" JSON if it has:
     #  1) response_json is a dict
     #  2) response_json["content"] is a _list_ of dicts, each having both "type" and "text"
