@@ -1,4 +1,4 @@
-# version 12bc with RENDER_MODE switch ("markdown" or "adaptivecard")
+# version 12b with RENDER_MODE switch ("markdown" or "adaptivecard")
 # Robust and bulletproof: Always shows references/source, never crashes, 
 # works for both JSON and markdown from ask_func.py
 
@@ -240,10 +240,14 @@ def clean_main_answer(answer_text):
                 return markdown_answer
         except Exception:
             pass
-    # Remove any line at the end starting with "Source:"
+    # Remove any lines that start with "Source:", "Referenced:", or "Calculated using:" (case-insensitive, with or without markdown bold)
     lines = answer_text.strip().split('\n')
-    lines = [l for l in lines if not re.match(r"(?i)\s*\**source:", l)]
-    return "\n".join(lines).strip()
+    filtered_lines = []
+    for l in lines:
+        if re.match(r"(?i)\s*\**(source|referenced|calculated using):", l):
+            continue
+        filtered_lines.append(l)
+    return "\n".join(filtered_lines).strip()
 
 async def _bot_logic(turn_context: TurnContext):
     conversation_id = turn_context.activity.conversation.id
