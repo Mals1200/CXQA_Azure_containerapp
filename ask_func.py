@@ -1,5 +1,6 @@
-# v24b
-# ai generated now not printed as json
+# 24b
+# made the ai gen a bit more robust
+# fixed the double printing of the source
 
 import os
 import io
@@ -1253,8 +1254,10 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
             prefix, suffix = final_text[:eol], final_text[eol:]
             file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
             table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
-            final_text = prefix + file_info + table_info + suffix
-        pass
+            # Remove any additional Source: lines from suffix
+            suffix = re.sub(r"(?i)\n*source:.*", "", suffix)
+            final_text = prefix + file_info + table_info + "\nSource: Index & Python"
+        return final_text
 
     elif "source: python" in text_lower:
         code_text   = python_dict.get("code", "")
@@ -1265,8 +1268,10 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
             if eol < 0: eol = len(final_text)
             prefix, suffix = final_text[:eol], final_text[eol:]
             table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
-            final_text = prefix + table_info + suffix
-        pass
+            # Remove any additional Source: lines from suffix
+            suffix = re.sub(r"(?i)\n*source:.*", "", suffix)
+            final_text = prefix + table_info + "\nSource: Python"
+        return final_text
 
     elif "source: index" in text_lower:
         top_k_text = index_dict.get("top_k", "No information")
@@ -1277,8 +1282,10 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
             if eol < 0: eol = len(final_text)
             prefix, suffix = final_text[:eol], final_text[eol:]
             file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
-            final_text = prefix + file_info + suffix
-        pass
+            # Remove any additional Source: lines from suffix
+            suffix = re.sub(r"(?i)\n*source:.*", "", suffix)
+            final_text = prefix + file_info + "\nSource: Index"
+        return final_text
 
     return final_text
 
