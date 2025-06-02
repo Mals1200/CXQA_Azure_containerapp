@@ -54,6 +54,12 @@ def cleanup_old_states():
             if state['last_activity'] and (current_time - state['last_activity']) > 86400:
                 del conversation_states[conv_id]
 
+def split_into_sentences(text):
+    # Splits on punctuation (.!? ) followed by whitespace.
+    # Keeps the punctuation at the end of each sentence.
+    sentences = re.split(r'(?<=[\.!\?])\s+', text.strip())
+    return [s for s in sentences if s]
+
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({"message": "API is running!"}), 200
@@ -242,7 +248,7 @@ def clean_main_answer(answer_text):
             pass
     # Remove any line at the end starting with "Source:"
     lines = answer_text.strip().split('\n')
-    lines = [l for l in lines if not re.match(r"(?i)\s*\**source:", l)]
+    lines = [l for l in lines if not re.match(r"(?i)\s*\*{0,2}\s*source\s*:", l)]
     return "\n".join(lines).strip()
 
 async def _bot_logic(turn_context: TurnContext):
@@ -293,7 +299,23 @@ async def _bot_logic(turn_context: TurnContext):
             sections.append(f"**Source:** {source}")
             if sections:
                 markdown += "\n\n" + "\n\n".join(sections)
-            await turn_context.send_activity(Activity(type="message", text=markdown))
+
+
+            # 2) Split `markdown` into smaller sentences:
+            def split_into_sentences(text):
+                return [s for s in re.split(r'(?<=[\.!\?])\s+', text.strip()) if s]
+        
+            pieces = split_into_sentences(markdown)
+
+            # 3) Send each sentence with a typing indicator in between:
+            for idx, piece in enumerate(pieces):
+                # 3a) Send a typing activity so it “feels” like the bot is thinking
+                await turn_context.send_activity(Activity(type="typing"))
+                await asyncio.sleep(0.4)  # a short pause (400 ms). Tweak as needed.
+
+                # 3b) Send the next chunk
+                await turn_context.send_activity(Activity(type="message", text=piece))
+
             return
 
         # --- AdaptiveCard mode (everything in one card with toggle) ---
