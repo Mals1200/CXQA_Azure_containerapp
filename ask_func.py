@@ -18,6 +18,7 @@ from functools import lru_cache, wraps
 from collections import OrderedDict
 import difflib
 import time
+from rapidfuzz import process, fuzz
 
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
@@ -85,7 +86,6 @@ def azure_retry(max_attempts=3, delay=2):
 #######################################################################################
 #                           RBAC HELPERS (User & File Tiers)
 #######################################################################################
-@lru_cache(maxsize=1)
 @azure_retry()
 def load_rbac_files():
     """
@@ -184,6 +184,7 @@ def get_file_tier(file_name):
         # Found a good fuzzy match
         # print(f"[DEBUG get_file_tier] Fuzzy matched => ratio={best_ratio:.2f}, tier={best_tier}")
         return best_tier
+
 
 
 #######################################################################################
@@ -693,6 +694,7 @@ Don't give examples, only provide the actual code. If you can't provide the code
 4. Return pure Python code that can run as-is, including necessary imports (like `import pandas as pd`).
 5. The code must produce a final `print()` statement with the answer. If multiple pieces of information are requested, print them clearly labeled.
 6. If a user references a column/table that does not exist in the schemas, return "404".
+7. Do NOT use manually defined data. Load data into dataframes. Do not use pd.DataFrame(data={...}).
 7. Do not use Chat_history information directly within the generated code logic or print statements, but use it for context if needed to understand the user's question.
 
 **Data Handling Rules for Pandas Code**:
@@ -760,105 +762,141 @@ Chat_history:
     return {"result": execution_result, "code": code_str, "table_names": table_names}
 
 def execute_generated_code(code_str, required_tables=None):
+    import re
+    from rapidfuzz import process, fuzz
+
+    def fuzzy_correct_code(code_str, dataframes):
+        corrected_code = code_str
+
+        # Match exact filters: df['col'] == 'val' or df.col == 'val'
+        exact_pattern = r"((\w+)(?:\[['\"]([^'\"]+)['\"]\]|\.(\w+))\s*(?:==|eq)\s*['\"]([^'\"]+)['\"])"
+        exact_matches = re.findall(exact_pattern, code_str)
+        print(f"[FUZZY DEBUG] Found {len(exact_matches)} exact-match filters.")
+
+        for match in exact_matches:
+            full_expr, df_prefix, col1, col2, val = match
+            col = col1 or col2
+            for fname, df in dataframes.items():
+                if col in df.columns and pd.api.types.is_string_dtype(df[col]):
+                    try:
+                        unique_vals = df[col].dropna().astype(str).unique().tolist()
+                        best_match = process.extractOne(val, unique_vals, scorer=fuzz.token_sort_ratio)
+                        if best_match and best_match[1] > 85:
+                            print(f"[FUZZY FIX - EXACT] '{val}' → '{best_match[0]}' in column '{col}' (score={best_match[1]})")
+                            corrected_expr = f"{df_prefix}['{col}'] == '{best_match[0]}'"
+                            corrected_code = corrected_code.replace(full_expr, corrected_expr)
+                    except Exception as e:
+                        print(f"[FUZZY ERROR] {e}")
+
+        # Match fuzzy filters like: df['col'].str.contains('val')
+        contains_pattern = r"((\w+)(?:\[['\"]([^'\"]+)['\"]\]|\.(\w+))\.str\.contains\(\s*['\"]([^'\"]+)['\"])"
+        try:
+            contains_matches = re.findall(contains_pattern, code_str)
+        except re.error as e:
+            print(f"[REGEX ERROR] Invalid contains pattern: {e}")
+            contains_matches = []
+
+        print(f"[FUZZY DEBUG] Found {len(contains_matches)} .str.contains filters.")
+
+        for match in contains_matches:
+            if len(match) >= 5:
+                full_expr, df_prefix, col1, col2, val = match
+                col = col1 or col2
+                for fname, df in dataframes.items():
+                    if col in df.columns and pd.api.types.is_string_dtype(df[col]):
+                        try:
+                            unique_vals = df[col].dropna().astype(str).unique().tolist()
+                            best_match = process.extractOne(val, unique_vals, scorer=fuzz.token_sort_ratio)
+                            if best_match and best_match[1] > 85:
+                                print(f"[FUZZY FIX - CONTAINS] '{val}' → '{best_match[0]}' in column '{col}' (score={best_match[1]})")
+                                corrected_code = corrected_code.replace(
+                                    f".str.contains('{val}'", f".str.contains('{best_match[0]}'"
+                                )
+                        except Exception as e:
+                            print(f"[FUZZY ERROR] {e}")
+            else:
+                print(f"[FUZZY WARN] Unexpected match shape: {match}")
+                continue
+
+        return corrected_code
+
+
     account_url = CONFIG["ACCOUNT_URL"]
     sas_token = CONFIG["SAS_TOKEN"]
     container_name = CONFIG["CONTAINER_NAME"]
     target_folder_path = CONFIG["TARGET_FOLDER_PATH"]
 
-    dataframes = {} # Initialize dict to store loaded dataframes
-    # --- MODIFICATION START ---
-    # Only proceed to load data if specific tables are requested
+    dataframes = {}
+
     if required_tables:
-        #logging.info(f"Attempting to load required tables: {required_tables}")
         try:
             blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
             container_client = blob_service_client.get_container_client(container_name)
 
             for file_name in required_tables:
-                # Construct the full path to the blob
-                blob_name = os.path.join(target_folder_path, file_name).replace("\\", "/") # Ensure forward slashes for blob path
+                blob_name = os.path.join(target_folder_path, file_name).replace("\\", "/")
 
                 try:
-                    #logging.debug(f"Loading blob: {blob_name}")
                     blob_client = container_client.get_blob_client(blob_name)
                     blob_data = blob_client.download_blob().readall()
 
-                    # Read into DataFrame based on file extension
                     if file_name.lower().endswith(('.xlsx', '.xls')):
                         df = pd.read_excel(io.BytesIO(blob_data))
                         dataframes[file_name] = df
-                        #logging.debug(f"Successfully loaded Excel file: {file_name}")
                     elif file_name.lower().endswith('.csv'):
                         df = pd.read_csv(io.BytesIO(blob_data))
                         dataframes[file_name] = df
-                        #logging.debug(f"Successfully loaded CSV file: {file_name}")
-                    #else:
-                        #logging.warning(f"Skipping file with unsupported extension in required list: {file_name}")
-
                 except Exception as blob_error:
-                    # Handle error if a specific required blob is not found or fails to load
                     err_msg = f"Error loading required table '{blob_name}': {blob_error}"
                     print(err_msg)
                     logging.error(err_msg)
-                    # Stop execution and return error if a required file is missing/unreadable
                     return err_msg
 
         except Exception as service_error:
-            # Handle Azure connection errors
             err_msg = f"Azure connection error during selective table loading: {service_error}"
             print(err_msg)
             logging.error(err_msg)
             return err_msg
     else:
-        # If required_tables is empty or None, but code seems to need dataframes
-        # Check if the code likely expects dataframes
-        # This check is basic; might need refinement based on code generation patterns
         if "dataframes.get(" in code_str or "pd.read_excel(" in code_str or "pd.read_csv(" in code_str:
             logging.warning("Code execution might expect tables, but none were identified as required.")
-            # You could return an error, or let it proceed and potentially fail during exec
-            # Returning an error is likely safer.
             return "Error: Code seems to require tables, but specific tables needed were not identified or provided."
         else:
-            # If code doesn't appear to reference dataframes, proceed without loading any.
             logging.info("No required tables specified, proceeding without loading data.")
 
-    # --- MODIFICATION END ---
-
-
-    # --- Safety check before exec ---
-    # If the code expects dataframes but none were loaded (e.g., due to errors above)
-    # This check might overlap with the one above, but adds safety before exec
     if not dataframes and ("dataframes.get(" in code_str):
          return "Error: Failed to load required tables before code execution."
 
-
-    # Modify code string (replace pandas read calls with dataframe dictionary lookups)
-    # This part remains the same
     code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
     code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
 
-    # Execute the code
+    # ✅ Add debug print BEFORE correction
+    print(f"\n[RAW LLM GENERATED CODE]\n{code_str}")
+
+    code_modified = fuzzy_correct_code(code_modified, dataframes)
+
+    # ✅ Add debug print AFTER correction
+    print(f"\n[CODE AFTER FUZZY FIX]\n{code_modified}")
+
     output_buffer = StringIO()
-    try: # Wrap exec in its own try/except
+    try:
         with contextlib.redirect_stdout(output_buffer):
             local_vars = {
-                "dataframes": dataframes, # Pass the (potentially empty) dict
+                "dataframes": dataframes,
                 "pd": pd,
                 "datetime": datetime
             }
-            # Execute in a restricted scope
-            exec(code_modified, {"pd": pd, "datetime": datetime}, local_vars) # Pass pd/datetime also to globals for safety
+            exec(code_modified, {"pd": pd, "datetime": datetime}, local_vars)
 
         output = output_buffer.getvalue().strip()
         return output if output else "Execution completed with no output."
 
     except Exception as exec_error:
-        # Catch errors specifically during the exec() call
         err_msg = f"An error occurred during code execution: {exec_error}"
         print(err_msg)
         logging.error(err_msg)
-        # Include the generated code that failed in the error message for easier debugging
         return f"{err_msg}\n--- Failing Code ---\n{code_modified}\n--- End Code ---"
+
 
 #######################################################################################
 #                              TOOL #3 - LLM Fallback
@@ -945,7 +983,7 @@ Make sure every table has a header and a separator row (with dashes).
 2. Summarize or merge repetitive/lengthy lists. Never include more than 12 items
    in any bullet or numbered list.
 3. Prefer concise, direct answers—avoid excessive details.
-4. If you couldn't find relevant information, answer as best you can and use
+4. If you couldn’t find relevant information, answer as best you can and use
    "Source: AI Generated" at the end.
 5. If presenting data best shown in a table (such as numbers per month, by location,
    or by category), use Markdown table syntax as shown above.
@@ -957,7 +995,7 @@ Make sure every table has a header and a separator row (with dashes).
 7. If both Index and Python data were used, use "Source: Index & Python".
    If only Index, use "Source: Index". If only Python, use "Source: Python".
 8. For multi-part questions, organize the answer with subheadings or numbered steps.
-9. If the answer is a procedure/SOP, only list key actions (summarize—don't list every sub-step).
+9. If the answer is a procedure/SOP, only list key actions (summarize—don’t list every sub-step).
 
 ###################################################################################
                 PROMPT INPUT DATA (Available for your answer)
