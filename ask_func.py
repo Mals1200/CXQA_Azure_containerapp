@@ -1,4 +1,4 @@
-# version 12b with RENDER_MODE switch ("markdown" or "adaptivecard")
+# version 12bc with RENDER_MODE switch ("markdown" or "adaptivecard")
 # Robust and bulletproof: Always shows references/source, never crashes, 
 # works for both JSON and markdown from ask_func.py
 
@@ -224,7 +224,7 @@ def extract_source_info(user_message, ask_func):
     return file_names, table_names, source
 
 def clean_main_answer(answer_text):
-    # If answer_text is a JSON string with "content", extract the text fields as markdown
+    """Removes any lines that start with 'Source:' (case-insensitive, with or without markdown bold/italic, anywhere in the answer)."""
     cleaned = answer_text.strip()
     if cleaned.startswith("{") and '"content"' in cleaned:
         try:
@@ -240,10 +240,13 @@ def clean_main_answer(answer_text):
                 return markdown_answer
         except Exception:
             pass
-    # Remove any line at the end starting with "Source:"
     lines = answer_text.strip().split('\n')
-    lines = [l for l in lines if not re.match(r"(?i)\s*\**source:", l)]
-    return "\n".join(lines).strip()
+    filtered_lines = []
+    for l in lines:
+        if re.match(r"(?i)^[\s\*\_]*source[\s\*\_]*:", l.strip()):
+            continue
+        filtered_lines.append(l)
+    return "\n".join(filtered_lines).strip()
 
 async def _bot_logic(turn_context: TurnContext):
     conversation_id = turn_context.activity.conversation.id
@@ -279,6 +282,10 @@ async def _bot_logic(turn_context: TurnContext):
         answer_text = "".join(ans_gen)
         state['history'] = ask_func.chat_history
         state['cache'] = ask_func.tool_cache
+
+        # If the answer is empty or only whitespace, do not send anything to Teams
+        if not answer_text.strip():
+            return
 
         file_names, table_names, source = extract_source_info(user_message, ask_func)
         main_answer = clean_main_answer(answer_text)
