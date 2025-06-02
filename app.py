@@ -100,11 +100,41 @@ def make_fallback_card():
 
 def extract_references_from_json_or_markdown(answer_text):
     """
-    Extracts main answer, ref_names, calc_names, source from answer_text.
-    Handles both JSON structure (with content/source) and markdown fallback.
+    Extracts main_answer, ref_names, calc_names, source from answer_text.
+    First tries to parse a well‐formed JSON object at the very beginning (ignoring any trailing "Source: ..." lines).
+    If that fails, falls back to plain‐markdown parsing.
     Returns: (main_answer, ref_names, calc_names, source)
     """
-    # Try JSON first
+
+    def try_parse_leading_json(text):
+        """
+        If `text` starts with '{', find the matching closing '}' (top‐level) and attempt json.loads
+        on that leading portion. Ignore any trailing characters after the matching brace.
+        Returns a tuple (parsed_dict, json_length) on success, or (None, None) on failure.
+        """
+        if not text.lstrip().startswith("{"):
+            return None, None
+
+        # Walk through the string, counting braces to find the matching closing '}'
+        brace_count = 0
+        start_idx = None
+        for idx, ch in enumerate(text):
+            if ch == "{":
+                if brace_count == 0:
+                    start_idx = idx
+                brace_count += 1
+            elif ch == "}":
+                brace_count -= 1
+                if brace_count == 0 and start_idx is not None:
+                    candidate = text[start_idx : idx + 1]
+                    try:
+                        parsed = json.loads(candidate)
+                        return parsed, (idx + 1)
+                    except Exception:
+                        return None, None
+        return None, None
+
+    # 1) Attempt to strip any triple‐backtick wrappers first (so the leading '{' is truly at the start).
     cleaned = answer_text.strip()
     if cleaned.startswith("```json"):
         cleaned = cleaned[7:].strip()
@@ -113,24 +143,28 @@ def extract_references_from_json_or_markdown(answer_text):
     if cleaned.endswith("```"):
         cleaned = cleaned[:-3].strip()
 
-    try:
-        response_json = json.loads(cleaned)
-        # Only treat it as "valid JSON" if it's a dict with a list under "content" and a string under "source"
+    # 2) Try parsing a leading JSON object (even if there is trailing text).
+    parsed_json, json_len = try_parse_leading_json(cleaned)
+    if parsed_json is not None:
+        # We have a dict. Ensure it has the expected structure:
         if (
-            isinstance(response_json, dict)
-            and isinstance(response_json.get("content"), list)
-            and isinstance(response_json.get("source"), str)
+            isinstance(parsed_json, dict)
+            and isinstance(parsed_json.get("content"), list)
+            and isinstance(parsed_json.get("source"), str)
         ):
-            content_items = response_json["content"]
+            content_items = parsed_json["content"]
             main_answer_lines = []
             ref_names = []
             calc_names = []
-            source = ""
+            source = parsed_json.get("source", "").strip()
 
+            # Walk through each block in "content"
+            valid_structure = True
             for item in content_items:
                 if not isinstance(item, dict):
-                    # if any content element is not a dict, bail out to markdown fallback
-                    raise ValueError("Invalid content element")
+                    valid_structure = False
+                    break
+
                 t = item.get("type", "")
                 txt = item.get("text", "")
                 if t in ("heading", "paragraph", "numbered_list", "bullet_list"):
@@ -143,31 +177,30 @@ def extract_references_from_json_or_markdown(answer_text):
                             if line.strip().startswith("-"):
                                 calc_names.append(line.strip()[1:].strip())
                     elif txt.lower().startswith("source:"):
+                        # If there's a "Source:" block inside content, prefer it
                         source = txt.split(":", 1)[-1].strip()
                     else:
                         main_answer_lines.append(txt)
+                else:
+                    # Unexpected type—bail out
+                    valid_structure = False
+                    break
 
-            # If source was not embedded in one of those blocks, fall back to top-level "source"
-            if not source:
-                source = response_json.get("source", "").strip()
+            if valid_structure:
+                main_answer = "\n".join(main_answer_lines).strip()
+                return main_answer, ref_names, calc_names, source
+        # If structure wasn't exactly right, fall back to markdown below.
 
-            main_answer = "\n".join(main_answer_lines).strip()
-            return main_answer, ref_names, calc_names, source
-
-    except Exception:
-        # If JSON parsing fails or structure isn't exactly right, fall through to markdown
-        pass
-
-    # Now fallback to markdown parsing
+    # 3) Fallback to plain‐markdown parsing
     markdown = answer_text.strip()
-    if markdown.startswith('```markdown'):
-        markdown = markdown[len('```markdown'):].strip()
-    if markdown.startswith('```'):
+    if markdown.startswith("```markdown"):
+        markdown = markdown[len("```markdown") :].strip()
+    if markdown.startswith("```"):
         markdown = markdown[3:].strip()
-    if markdown.endswith('```'):
+    if markdown.endswith("```"):
         markdown = markdown[:-3].strip()
 
-    lines = markdown.split('\n')
+    lines = markdown.split("\n")
     main_answer_lines = []
     ref_lines = []
     calc_lines = []
@@ -202,7 +235,7 @@ def extract_references_from_json_or_markdown(answer_text):
 
     def extract_names(lines_list):
         names = []
-        for l in lines_list[1:]:  # skip the first "Referenced:" or "Calculated using:" header
+        for l in lines_list[1:]:  # skip the header line itself ("Referenced:" or "Calculated using:")
             if l.startswith("-"):
                 name = l[1:].strip()
                 if name:
@@ -211,7 +244,6 @@ def extract_references_from_json_or_markdown(answer_text):
 
     ref_names = extract_names(ref_lines)
     calc_names = extract_names(calc_lines)
-    # Strip any formatting around "Source:"
     source = source_line.replace("**", "").replace("*", "").replace("Source:", "").strip()
     main_answer = "\n".join(main_answer_lines).strip()
 
