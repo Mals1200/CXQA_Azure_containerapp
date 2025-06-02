@@ -293,7 +293,7 @@ async def _bot_logic(turn_context: TurnContext):
             sections.append(f"**Source:** {source}")
             if sections:
                 markdown += "\n\n" + "\n\n".join(sections)
-            await turn_context.send_activity(Activity(type="message", text=markdown))
+            await turn_context.send_activity(Activity(type="message", text=markdown.replace('* **Source:** Index','')))
             return
 
         # --- AdaptiveCard mode (everything in one card with toggle) ---
