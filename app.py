@@ -300,10 +300,6 @@ async def _bot_logic(turn_context: TurnContext):
             if sections:
                 markdown += "\n\n" + "\n\n".join(sections)
 
-
-            # 2) Split `markdown` into smaller sentences:
-            def split_into_sentences(text):
-                return [s for s in re.split(r'(?<=[\.!\?])\s+', text.strip()) if s]
         
             pieces = split_into_sentences(markdown)
 
@@ -334,7 +330,6 @@ async def _bot_logic(turn_context: TurnContext):
         main_answer_lines = main_answer.split("\n")
         table_header, table_rows, table_lines = markdown_table_to_adaptive(main_answer_lines)
         body_blocks = []
-        import re
         export_link_match = re.search(r'https?://[^\s\)]+', main_answer)
         is_export = main_answer.strip().lower().startswith("here is your generated")
         export_url = export_link_match.group(0) if export_link_match else None
