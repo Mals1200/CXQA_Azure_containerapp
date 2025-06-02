@@ -1,6 +1,7 @@
 # version 12e
 # the source: AI Generated when on greetings/restart is now gone
 
+
 import os
 import asyncio
 from threading import Lock
@@ -40,7 +41,8 @@ async def send_markdown_typing_effect_by_word(turn_context, full_text, delay=0.0
     words = full_text.split(" ")
     accumulated = ""
 
-    initial_activity = Activity(type=ActivityTypes.message, text="", text_format="markdown")
+
+    initial_activity = Activity(type=ActivityTypes.message, text="...", text_format="markdown")
     response = await turn_context.send_activity(initial_activity)
 
     for word in words:
