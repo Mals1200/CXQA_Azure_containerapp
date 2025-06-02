@@ -240,16 +240,10 @@ def clean_main_answer(answer_text):
                 return markdown_answer
         except Exception:
             pass
-
-    # Remove any line that starts (possibly with bold asterisks) and then "Source:", etc.
+    # Remove any line at the end starting with "Source:"
     lines = answer_text.strip().split('\n')
-    filtered = []
-    for l in lines:
-        if "source:" in l.lower():
-            # skip this line entirely
-            continue
-        filtered.append(l)
-    return "\n".join(filtered).strip()
+    lines = [l for l in lines if not re.match(r"(?i)\s*\**source:", l)]
+    return "\n".join(lines).strip()
 
 async def _bot_logic(turn_context: TurnContext):
     conversation_id = turn_context.activity.conversation.id
@@ -288,6 +282,14 @@ async def _bot_logic(turn_context: TurnContext):
 
         file_names, table_names, source = extract_source_info(user_message, ask_func)
         main_answer = clean_main_answer(answer_text)
+        
+        section_list = main_answer.split("\n")
+        for i, sec in enumerate(section_list):
+            if "Source:" in sec and "Index" in sec:
+                del section_list[i]
+                break
+
+        main_answer = "\n".join(section_list)
 
         if RENDER_MODE == "markdown":
             markdown = main_answer
