@@ -1,3 +1,7 @@
+# 24b
+# made the ai gen a bit more robust
+# fixed the double printing of the source
+
 import os
 import io
 import re
@@ -18,6 +22,7 @@ from functools import lru_cache, wraps
 from collections import OrderedDict
 import difflib
 import time
+from rapidfuzz import process, fuzz
 
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
@@ -183,6 +188,7 @@ def get_file_tier(file_name):
         # Found a good fuzzy match
         # print(f"[DEBUG get_file_tier] Fuzzy matched => ratio={best_ratio:.2f}, tier={best_tier}")
         return best_tier
+
 
 
 #######################################################################################
@@ -692,6 +698,7 @@ Don't give examples, only provide the actual code. If you can't provide the code
 4. Return pure Python code that can run as-is, including necessary imports (like `import pandas as pd`).
 5. The code must produce a final `print()` statement with the answer. If multiple pieces of information are requested, print them clearly labeled.
 6. If a user references a column/table that does not exist in the schemas, return "404".
+7. Do NOT use manually defined data. Load data into dataframes. Do not use pd.DataFrame(data={...}).
 7. Do not use Chat_history information directly within the generated code logic or print statements, but use it for context if needed to understand the user's question.
 
 **Data Handling Rules for Pandas Code**:
@@ -759,105 +766,141 @@ Chat_history:
     return {"result": execution_result, "code": code_str, "table_names": table_names}
 
 def execute_generated_code(code_str, required_tables=None):
+    import re
+    from rapidfuzz import process, fuzz
+
+    def fuzzy_correct_code(code_str, dataframes):
+        corrected_code = code_str
+
+        # Match exact filters: df['col'] == 'val' or df.col == 'val'
+        exact_pattern = r"((\w+)(?:\[['\"]([^'\"]+)['\"]\]|\.(\w+))\s*(?:==|eq)\s*['\"]([^'\"]+)['\"])"
+        exact_matches = re.findall(exact_pattern, code_str)
+        print(f"[FUZZY DEBUG] Found {len(exact_matches)} exact-match filters.")
+
+        for match in exact_matches:
+            full_expr, df_prefix, col1, col2, val = match
+            col = col1 or col2
+            for fname, df in dataframes.items():
+                if col in df.columns and pd.api.types.is_string_dtype(df[col]):
+                    try:
+                        unique_vals = df[col].dropna().astype(str).unique().tolist()
+                        best_match = process.extractOne(val, unique_vals, scorer=fuzz.token_sort_ratio)
+                        if best_match and best_match[1] > 85:
+                            print(f"[FUZZY FIX - EXACT] '{val}' → '{best_match[0]}' in column '{col}' (score={best_match[1]})")
+                            corrected_expr = f"{df_prefix}['{col}'] == '{best_match[0]}'"
+                            corrected_code = corrected_code.replace(full_expr, corrected_expr)
+                    except Exception as e:
+                        print(f"[FUZZY ERROR] {e}")
+
+        # Match fuzzy filters like: df['col'].str.contains('val')
+        contains_pattern = r"((\w+)(?:\[['\"]([^'\"]+)['\"]\]|\.(\w+))\.str\.contains\(\s*['\"]([^'\"]+)['\"])"
+        try:
+            contains_matches = re.findall(contains_pattern, code_str)
+        except re.error as e:
+            print(f"[REGEX ERROR] Invalid contains pattern: {e}")
+            contains_matches = []
+
+        print(f"[FUZZY DEBUG] Found {len(contains_matches)} .str.contains filters.")
+
+        for match in contains_matches:
+            if len(match) >= 5:
+                full_expr, df_prefix, col1, col2, val = match
+                col = col1 or col2
+                for fname, df in dataframes.items():
+                    if col in df.columns and pd.api.types.is_string_dtype(df[col]):
+                        try:
+                            unique_vals = df[col].dropna().astype(str).unique().tolist()
+                            best_match = process.extractOne(val, unique_vals, scorer=fuzz.token_sort_ratio)
+                            if best_match and best_match[1] > 85:
+                                print(f"[FUZZY FIX - CONTAINS] '{val}' → '{best_match[0]}' in column '{col}' (score={best_match[1]})")
+                                corrected_code = corrected_code.replace(
+                                    f".str.contains('{val}'", f".str.contains('{best_match[0]}'"
+                                )
+                        except Exception as e:
+                            print(f"[FUZZY ERROR] {e}")
+            else:
+                print(f"[FUZZY WARN] Unexpected match shape: {match}")
+                continue
+
+        return corrected_code
+
+
     account_url = CONFIG["ACCOUNT_URL"]
     sas_token = CONFIG["SAS_TOKEN"]
     container_name = CONFIG["CONTAINER_NAME"]
     target_folder_path = CONFIG["TARGET_FOLDER_PATH"]
 
-    dataframes = {} # Initialize dict to store loaded dataframes
-    # --- MODIFICATION START ---
-    # Only proceed to load data if specific tables are requested
+    dataframes = {}
+
     if required_tables:
-        #logging.info(f"Attempting to load required tables: {required_tables}")
         try:
             blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
             container_client = blob_service_client.get_container_client(container_name)
 
             for file_name in required_tables:
-                # Construct the full path to the blob
-                blob_name = os.path.join(target_folder_path, file_name).replace("\\", "/") # Ensure forward slashes for blob path
+                blob_name = os.path.join(target_folder_path, file_name).replace("\\", "/")
 
                 try:
-                    #logging.debug(f"Loading blob: {blob_name}")
                     blob_client = container_client.get_blob_client(blob_name)
                     blob_data = blob_client.download_blob().readall()
 
-                    # Read into DataFrame based on file extension
                     if file_name.lower().endswith(('.xlsx', '.xls')):
                         df = pd.read_excel(io.BytesIO(blob_data))
                         dataframes[file_name] = df
-                        #logging.debug(f"Successfully loaded Excel file: {file_name}")
                     elif file_name.lower().endswith('.csv'):
                         df = pd.read_csv(io.BytesIO(blob_data))
                         dataframes[file_name] = df
-                        #logging.debug(f"Successfully loaded CSV file: {file_name}")
-                    #else:
-                        #logging.warning(f"Skipping file with unsupported extension in required list: {file_name}")
-
                 except Exception as blob_error:
-                    # Handle error if a specific required blob is not found or fails to load
                     err_msg = f"Error loading required table '{blob_name}': {blob_error}"
                     print(err_msg)
                     logging.error(err_msg)
-                    # Stop execution and return error if a required file is missing/unreadable
                     return err_msg
 
         except Exception as service_error:
-            # Handle Azure connection errors
             err_msg = f"Azure connection error during selective table loading: {service_error}"
             print(err_msg)
             logging.error(err_msg)
             return err_msg
     else:
-        # If required_tables is empty or None, but code seems to need dataframes
-        # Check if the code likely expects dataframes
-        # This check is basic; might need refinement based on code generation patterns
         if "dataframes.get(" in code_str or "pd.read_excel(" in code_str or "pd.read_csv(" in code_str:
             logging.warning("Code execution might expect tables, but none were identified as required.")
-            # You could return an error, or let it proceed and potentially fail during exec
-            # Returning an error is likely safer.
             return "Error: Code seems to require tables, but specific tables needed were not identified or provided."
         else:
-            # If code doesn't appear to reference dataframes, proceed without loading any.
             logging.info("No required tables specified, proceeding without loading data.")
 
-    # --- MODIFICATION END ---
-
-
-    # --- Safety check before exec ---
-    # If the code expects dataframes but none were loaded (e.g., due to errors above)
-    # This check might overlap with the one above, but adds safety before exec
     if not dataframes and ("dataframes.get(" in code_str):
          return "Error: Failed to load required tables before code execution."
 
-
-    # Modify code string (replace pandas read calls with dataframe dictionary lookups)
-    # This part remains the same
     code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
     code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
 
-    # Execute the code
+    # ✅ Add debug print BEFORE correction
+    print(f"\n[RAW LLM GENERATED CODE]\n{code_str}")
+
+    code_modified = fuzzy_correct_code(code_modified, dataframes)
+
+    # ✅ Add debug print AFTER correction
+    print(f"\n[CODE AFTER FUZZY FIX]\n{code_modified}")
+
     output_buffer = StringIO()
-    try: # Wrap exec in its own try/except
+    try:
         with contextlib.redirect_stdout(output_buffer):
             local_vars = {
-                "dataframes": dataframes, # Pass the (potentially empty) dict
+                "dataframes": dataframes,
                 "pd": pd,
                 "datetime": datetime
             }
-            # Execute in a restricted scope
-            exec(code_modified, {"pd": pd, "datetime": datetime}, local_vars) # Pass pd/datetime also to globals for safety
+            exec(code_modified, {"pd": pd, "datetime": datetime}, local_vars)
 
         output = output_buffer.getvalue().strip()
         return output if output else "Execution completed with no output."
 
     except Exception as exec_error:
-        # Catch errors specifically during the exec() call
         err_msg = f"An error occurred during code execution: {exec_error}"
         print(err_msg)
         logging.error(err_msg)
-        # Include the generated code that failed in the error message for easier debugging
         return f"{err_msg}\n--- Failing Code ---\n{code_modified}\n--- End Code ---"
+
 
 #######################################################################################
 #                              TOOL #3 - LLM Fallback
@@ -885,22 +928,8 @@ def final_answer_llm(user_question, index_dict, python_dict):
 
     if index_top_k.lower() == "no information" and python_result.lower() == "no information":
         fallback_text = tool_3_llm_fallback(user_question)
-        # Format the fallback as JSON to match the expected format
-        try:
-            import json
-            json_response = {
-                "content": [
-                    {
-                        "type": "paragraph",
-                        "text": fallback_text
-                    }
-                ],
-                "source": "AI Generated"
-            }
-            yield json.dumps(json_response)
-        except:
-            # If JSON conversion fails, fall back to plaintext
-            yield f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
+        # Just yield plain text (no JSON wrapper)
+        yield f"{fallback_text}\n\nSource: AI Generated"
         return
 
     combined_info = f"INDEX_DATA:\n{index_top_k}\n\nPYTHON_DATA:\n{python_result}"
@@ -944,7 +973,7 @@ Make sure every table has a header and a separator row (with dashes).
 2. Summarize or merge repetitive/lengthy lists. Never include more than 12 items
    in any bullet or numbered list.
 3. Prefer concise, direct answers—avoid excessive details.
-4. If you couldn’t find relevant information, answer as best you can and use
+4. If you couldn't find relevant information, answer as best you can and use
    "Source: AI Generated" at the end.
 5. If presenting data best shown in a table (such as numbers per month, by location,
    or by category), use Markdown table syntax as shown above.
@@ -956,7 +985,7 @@ Make sure every table has a header and a separator row (with dashes).
 7. If both Index and Python data were used, use "Source: Index & Python".
    If only Index, use "Source: Index". If only Python, use "Source: Python".
 8. For multi-part questions, organize the answer with subheadings or numbered steps.
-9. If the answer is a procedure/SOP, only list key actions (summarize—don’t list every sub-step).
+9. If the answer is a procedure/SOP, only list key actions (summarize—don't list every sub-step).
 
 ###################################################################################
                 PROMPT INPUT DATA (Available for your answer)
@@ -1079,11 +1108,42 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
     except Exception:
         response_json = None
 
-    if (
-        isinstance(response_json, dict)
-        and "content" in response_json
-        and "source"  in response_json
-    ):
+    # ---------- fallback if JSON parsing failed but it looks like an AI-generated JSON string ----------
+    if response_json is None:
+        lower_clean = cleaned.lower()
+        if '"content"' in lower_clean and '"source"' in lower_clean and 'ai generated' in lower_clean:
+            import re
+            text_blocks = re.findall(r'"text"\s*:\s*"([^"]+)"', cleaned)
+            if text_blocks:
+                markdown_answer = "\n\n".join(text_blocks).strip()
+            else:
+                markdown_answer = cleaned  # fallback to raw if regex failed
+            # Ensure Source line
+            if 'source:' not in markdown_answer.lower():
+                markdown_answer += "\n\nSource: AI Generated"
+            return markdown_answer
+
+    # ONLY treat it as "our" JSON if it has:
+    #  1) response_json is a dict
+    #  2) response_json["content"] is a _list_ of dicts, each having both "type" and "text"
+    #  3) response_json["source"] is a string
+    valid_structure = False
+    if isinstance(response_json, dict):
+        content_block = response_json.get("content")
+        source_block  = response_json.get("source")
+
+        if isinstance(content_block, list) and isinstance(source_block, str):
+            all_blocks_ok = True
+            for block in content_block:
+                if not (isinstance(block, dict)
+                        and "type" in block
+                        and "text" in block):
+                    all_blocks_ok = False
+                    break
+            if all_blocks_ok:
+                valid_structure = True
+
+    if valid_structure:
         idx_has  = index_dict .get("top_k" , "").strip().lower() not in ["", "no information"]
         py_has   = python_dict.get("result", "").strip().lower() not in ["", "no information"]
         src = response_json["source"].strip()
@@ -1155,6 +1215,27 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
 
             if not found:
                 response_json["content"].insert(0, {"type": "heading", "text": user_question})
+        # --- SPECIAL HANDLING FOR PURELY "AI Generated" ANSWERS ---
+        # If the only source is "AI Generated", we convert the structured JSON
+        # into a plain Markdown string so that the Teams client displays it
+        # like a normal text message instead of showing raw JSON. This preserves
+        # existing behaviour for Index/Python answers (which still rely on the
+        # JSON format for reference injection) while fixing the issue reported
+        # by the user where AI-generated answers were rendered as JSON.
+        if "ai generated" in src.lower():
+            md_lines = []
+            for block in response_json.get("content", []):
+                if isinstance(block, dict):
+                    text_val = block.get("text", "").strip()
+                    if text_val:
+                        md_lines.append(text_val)
+            markdown_answer = "\n\n".join(md_lines).strip()
+            if markdown_answer:
+                markdown_answer += "\n\nSource: AI Generated"
+            else:
+                markdown_answer = "Source: AI Generated"
+            return markdown_answer
+
         return json.dumps(response_json)
 
     # ---------- legacy plain-text branch (unchanged) ----------
@@ -1173,8 +1254,10 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
             prefix, suffix = final_text[:eol], final_text[eol:]
             file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
             table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
-            final_text = prefix + file_info + table_info + suffix
-        pass
+            # Remove any additional Source: lines from suffix
+            suffix = re.sub(r"(?i)\n*source:.*", "", suffix)
+            final_text = prefix + file_info + table_info + "\nSource: Index & Python"
+        return final_text
 
     elif "source: python" in text_lower:
         code_text   = python_dict.get("code", "")
@@ -1185,8 +1268,10 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
             if eol < 0: eol = len(final_text)
             prefix, suffix = final_text[:eol], final_text[eol:]
             table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
-            final_text = prefix + table_info + suffix
-        pass
+            # Remove any additional Source: lines from suffix
+            suffix = re.sub(r"(?i)\n*source:.*", "", suffix)
+            final_text = prefix + table_info + "\nSource: Python"
+        return final_text
 
     elif "source: index" in text_lower:
         top_k_text = index_dict.get("top_k", "No information")
@@ -1197,8 +1282,10 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
             if eol < 0: eol = len(final_text)
             prefix, suffix = final_text[:eol], final_text[eol:]
             file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
-            final_text = prefix + file_info + suffix
-        pass
+            # Remove any additional Source: lines from suffix
+            suffix = re.sub(r"(?i)\n*source:.*", "", suffix)
+            final_text = prefix + file_info + "\nSource: Index"
+        return final_text
 
     return final_text
 
