@@ -924,8 +924,22 @@ def final_answer_llm(user_question, index_dict, python_dict):
 
     if index_top_k.lower() == "no information" and python_result.lower() == "no information":
         fallback_text = tool_3_llm_fallback(user_question)
-        # Just yield plain text (no JSON wrapper)
-        yield f"{fallback_text}\n\nSource: AI Generated"
+        # Format the fallback as JSON to match the expected format
+        try:
+            import json
+            json_response = {
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "text": fallback_text
+                    }
+                ],
+                "source": "AI Generated"
+            }
+            yield json.dumps(json_response)
+        except:
+            # If JSON conversion fails, fall back to plaintext
+            yield f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
         return
 
     combined_info = f"INDEX_DATA:\n{index_top_k}\n\nPYTHON_DATA:\n{python_result}"
@@ -969,7 +983,7 @@ Make sure every table has a header and a separator row (with dashes).
 2. Summarize or merge repetitive/lengthy lists. Never include more than 12 items
    in any bullet or numbered list.
 3. Prefer concise, direct answers—avoid excessive details.
-4. If you couldn't find relevant information, answer as best you can and use
+4. If you couldn’t find relevant information, answer as best you can and use
    "Source: AI Generated" at the end.
 5. If presenting data best shown in a table (such as numbers per month, by location,
    or by category), use Markdown table syntax as shown above.
@@ -981,7 +995,7 @@ Make sure every table has a header and a separator row (with dashes).
 7. If both Index and Python data were used, use "Source: Index & Python".
    If only Index, use "Source: Index". If only Python, use "Source: Python".
 8. For multi-part questions, organize the answer with subheadings or numbered steps.
-9. If the answer is a procedure/SOP, only list key actions (summarize—don't list every sub-step).
+9. If the answer is a procedure/SOP, only list key actions (summarize—don’t list every sub-step).
 
 ###################################################################################
                 PROMPT INPUT DATA (Available for your answer)
@@ -1104,27 +1118,11 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
     except Exception:
         response_json = None
 
-    # ONLY treat it as "our" JSON if it has:
-    #  1) response_json is a dict
-    #  2) response_json["content"] is a _list_ of dicts, each having both "type" and "text"
-    #  3) response_json["source"] is a string
-    valid_structure = False
-    if isinstance(response_json, dict):
-        content_block = response_json.get("content")
-        source_block  = response_json.get("source")
-
-        if isinstance(content_block, list) and isinstance(source_block, str):
-            all_blocks_ok = True
-            for block in content_block:
-                if not (isinstance(block, dict)
-                        and "type" in block
-                        and "text" in block):
-                    all_blocks_ok = False
-                    break
-            if all_blocks_ok:
-                valid_structure = True
-
-    if valid_structure:
+    if (
+        isinstance(response_json, dict)
+        and "content" in response_json
+        and "source"  in response_json
+    ):
         idx_has  = index_dict .get("top_k" , "").strip().lower() not in ["", "no information"]
         py_has   = python_dict.get("result", "").strip().lower() not in ["", "no information"]
         src = response_json["source"].strip()
@@ -1646,3 +1644,4 @@ def robust_split_question(user_question, use_semantic_parsing=True):
             result.append(sq)
             seen.add(sq)
     return result
+
