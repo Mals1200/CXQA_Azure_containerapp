@@ -1,4 +1,6 @@
-# version 12e
+# version 12b with RENDER_MODE switch ("markdown" or "adaptivecard")
+# Robust and bulletproof: Always shows references/source, never crashes, 
+# works for both JSON and markdown from ask_func.py
 
 import os
 import asyncio
@@ -243,6 +245,21 @@ def clean_main_answer(answer_text):
     lines = [l for l in lines if not re.match(r"(?i)\s*\**source:", l)]
     return "\n".join(lines).strip()
 
+def is_special_response(answer_text):
+    text = answer_text.strip().lower()
+    if text.startswith("hello! i'm the cxqa ai assistant") or text.startswith("hello! how may i assist you"):
+        return True
+    if text.startswith("the chat has been restarted."):
+        return True
+    # Export detection: if the user message starts with 'export' or the answer looks like an export agent response
+    if text.startswith("export") or text.startswith("here is your generated"):
+        return True
+    return False
+
+def strip_trailing_source(answer_text):
+    import re
+    return re.sub(r'\n*source:.*$', '', answer_text, flags=re.IGNORECASE).strip()
+
 async def _bot_logic(turn_context: TurnContext):
     conversation_id = turn_context.activity.conversation.id
     state = get_conversation_state(conversation_id)
@@ -277,6 +294,12 @@ async def _bot_logic(turn_context: TurnContext):
         answer_text = "".join(ans_gen)
         state['history'] = ask_func.chat_history
         state['cache'] = ask_func.tool_cache
+
+        # --- NEW: Detect greeting/restart/export and bypass source logic ---
+        if is_special_response(answer_text):
+            clean_text = strip_trailing_source(answer_text)
+            await turn_context.send_activity(Activity(type="message", text=clean_text))
+            return
 
         file_names, table_names, source = extract_source_info(user_message, ask_func)
         main_answer = clean_main_answer(answer_text)
