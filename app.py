@@ -1,6 +1,6 @@
-# version 12b with RENDER_MODE switch ("markdown" or "adaptivecard")
-# Robust and bulletproof: Always shows references/source, never crashes, 
-# works for both JSON and markdown from ask_func.py
+# version 12d with RENDER_MODE switch ("markdown" or "adaptivecard")
+# removed double source
+
 
 import os
 import asyncio
@@ -240,11 +240,12 @@ def clean_main_answer(answer_text):
                 return markdown_answer
         except Exception:
             pass
-    # Remove any lines that start with "Source:" (case-insensitive, with or without markdown bold, anywhere in the answer)
+    # Remove any lines that start with "Source:" (case-insensitive, with or without markdown bold/italic, anywhere in the answer)
     lines = answer_text.strip().split('\n')
     filtered_lines = []
     for l in lines:
-        if re.match(r"(?i)\s*\**source\**\s*:", l.strip()):
+        # Remove lines like "Source: ...", "**Source:** ...", "*Source:* ...", "  __Source__: ...", etc.
+        if re.match(r"(?i)^[\s\*\_]*source[\s\*\_]*:", l.strip()):
             continue
         filtered_lines.append(l)
     return "\n".join(filtered_lines).strip()
@@ -283,10 +284,6 @@ async def _bot_logic(turn_context: TurnContext):
         answer_text = "".join(ans_gen)
         state['history'] = ask_func.chat_history
         state['cache'] = ask_func.tool_cache
-
-        # If the answer is empty or only whitespace, do not send anything to Teams
-        if not answer_text.strip():
-            return
 
         file_names, table_names, source = extract_source_info(user_message, ask_func)
         main_answer = clean_main_answer(answer_text)
