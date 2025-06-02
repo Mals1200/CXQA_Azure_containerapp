@@ -1104,11 +1104,27 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
     except Exception:
         response_json = None
 
-    if (
-        isinstance(response_json, dict)
-        and "content" in response_json
-        and "source"  in response_json
-    ):
+    # ONLY treat it as "our" JSON if it has:
+    #  1) response_json is a dict
+    #  2) response_json["content"] is a _list_ of dicts, each having both "type" and "text"
+    #  3) response_json["source"] is a string
+    valid_structure = False
+    if isinstance(response_json, dict):
+        content_block = response_json.get("content")
+        source_block  = response_json.get("source")
+
+        if isinstance(content_block, list) and isinstance(source_block, str):
+            all_blocks_ok = True
+            for block in content_block:
+                if not (isinstance(block, dict)
+                        and "type" in block
+                        and "text" in block):
+                    all_blocks_ok = False
+                    break
+            if all_blocks_ok:
+                valid_structure = True
+
+    if valid_structure:
         idx_has  = index_dict .get("top_k" , "").strip().lower() not in ["", "no information"]
         py_has   = python_dict.get("result", "").strip().lower() not in ["", "no information"]
         src = response_json["source"].strip()
