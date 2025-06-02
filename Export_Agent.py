@@ -129,10 +129,10 @@ Data:
 - Answer: {latest_answer}
 - History: {chat_history_str}"""
 
-        endpoint = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview"
+        endpoint = "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/openai/deployments/gpt-4o-2/chat/completions?api-version=2025-01-01-preview"
         headers = {
             "Content-Type": "application/json",
-            "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+            "api-key": "5EgVev7KCYaO758NWn5yL7f2iyrS4U3FaSI5lQhTx7RlePQ7QMESJQQJ99AKACHYHv6XJ3w3AAAAACOGoSfb"
         }
 
         payload = {
@@ -1013,7 +1013,7 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
 
     instructions_lower = instructions.lower()
 
-    # PPT detection
+    # PPT?
     if re.search(
         r"\b("
         r"presentation[s]?|slide[s]?|slideshow[s]?|"
@@ -1022,13 +1022,11 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
         r"seminar|webinar|conference[-\s]?slides|training[-\s]?materials|"
         r"meeting[-\s]?slides|workshop[-\s]?slides|lecture[-\s]?slides|"
         r"presenation|presentaion"
-        r")\b",
-        instructions_lower,
-        re.IGNORECASE
+        r")\b", instructions_lower, re.IGNORECASE
     ):
-        text = generate_ppt()
+        return generate_ppt()
 
-    # Chart detection
+    # Chart?
     elif re.search(
         r"\b("
         r"chart[s]?|graph[s]?|diagram[s]?|"
@@ -1038,45 +1036,28 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
         r"heatmap[s]?|time[-\s]?series|distribution[-\s]?plot|"
         r"statistical[-\s]?graph[s]?|data[-\s]?plot[s]?|"
         r"char|grph|daigram"
-        r")\b",
-        instructions_lower,
-        re.IGNORECASE
+        r")\b", instructions_lower, re.IGNORECASE
     ):
-        text = generate_chart()
+        return generate_chart()
 
-    # Document detection
+    # Document?
     elif re.search(
-        r"\b(document|doc|word|report|pdf|"
+        r"\b("
+        r"document[s]?|report[s]?|word[-\s]?doc[s]?|"
+        r"policy[-\s]?paper[s]?|manual[s]?|write[-\s]?up[s]?|"
+        r"summary|white[-\s]?paper[s]?|memo[s]?|contract[s]?|"
         r"business[-\s]?plan[s]?|research[-\s]?paper[s]?|"
         r"proposal[s]?|guideline[s]?|introduction|conclusion|"
         r"terms[-\s]?of[-\s]?service|agreement|"
         r"contract[-\s]?draft|standard[-\s]?operating[-\s]?procedure|"
         r"documnt|repot|worddoc|proposel"
-        r")\b",
-        instructions_lower,
-        re.IGNORECASE
+        r")\b", instructions_lower, re.IGNORECASE
     ):
-        text = generate_doc()
+        return generate_doc()
+    elif re.search(r"\b(standard operating procedure document|standard operating procedure|sop\.?)\b", instructions_lower, re.IGNORECASE):
+        return Call_SOP(latest_question, latest_answer, chat_history, instructions)
 
-    # SOP detection
-    elif re.search(
-        r"\b(standard operating procedure document|"
-        r"standard[-\s]?operating[-\s]?procedure|sop\.?\b)",
-        instructions_lower,
-        re.IGNORECASE
-    ):
-        text = Call_SOP(latest_question, latest_answer, chat_history, instructions)
+
 
     # Fallback
-    else:
-        text = "Not enough Information to perform export."
-
-    # Ensure a string is returned
-    if text is None:
-        text = "Error: Export function returned None"
-    else:
-        text = str(text)
-
-    # Yield each line so ask_func.py can stream messages properly
-    for line in text.splitlines():
-        yield line
+    return "Not enough Information to perform export."
