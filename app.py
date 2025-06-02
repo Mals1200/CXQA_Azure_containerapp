@@ -224,26 +224,38 @@ def extract_source_info(user_message, ask_func):
     return file_names, table_names, source
 
 def clean_main_answer(answer_text):
-    # If answer_text is a JSON string with "content", extract the text fields as markdown
+    """
+    1. If answer_text is JSON with a "content" array, flatten it to plain text.
+    2. Otherwise (or afterward), strip out any line that begins with "Source:" (case-insensitive).
+    """
     cleaned = answer_text.strip()
+
+    # ——— Step 1: Handle JSON-with-content case ———
     if cleaned.startswith("{") and '"content"' in cleaned:
         try:
             response_json = json.loads(cleaned)
             if isinstance(response_json, dict) and "content" in response_json:
                 md_lines = []
                 for block in response_json["content"]:
+                    # Each block is a dict with keys like "type" and "text"
                     if isinstance(block, dict):
                         text_val = block.get("text", "").strip()
                         if text_val:
                             md_lines.append(text_val)
-                markdown_answer = "\n\n".join(md_lines).strip()
-                return markdown_answer
+                # Join all extracted text blocks with blank lines
+                return "\n\n".join(md_lines).strip()
         except Exception:
+            # If JSON parsing fails, fall back to plain-text stripping below
             pass
-    # Remove any line at the end starting with "Source:"
+
+    # ——— Step 2: Remove any "Source:" lines from plain text ———
     lines = answer_text.strip().split('\n')
-    lines = [l for l in lines if not re.match(r"(?i)\s*\**source:", l)]
-    return "\n".join(lines).strip()
+    # Keep only lines that do NOT start with "Source:" (ignoring leading whitespace and case)
+    filtered = [
+        l for l in lines
+        if not re.match(r'^\s*Source:\s*', l, flags=re.IGNORECASE)
+    ]
+    return "\n".join(filtered).strip()
 
 async def _bot_logic(turn_context: TurnContext):
     conversation_id = turn_context.activity.conversation.id
@@ -282,14 +294,6 @@ async def _bot_logic(turn_context: TurnContext):
 
         file_names, table_names, source = extract_source_info(user_message, ask_func)
         main_answer = clean_main_answer(answer_text)
-        
-        section_list = main_answer.split("\n")
-        for i, sec in enumerate(section_list):
-            if "Source:" in sec and "Index" in sec:
-                del section_list[i]
-                break
-
-        main_answer = "\n".join(section_list)
 
         if RENDER_MODE == "markdown":
             markdown = main_answer
