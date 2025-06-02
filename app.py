@@ -1,5 +1,5 @@
-# version 12e
-# the source: AI Generated when on greetings/restart is now gone
+# version 13
+# token streaming
 
 
 import os
@@ -38,24 +38,13 @@ conversation_states = {}
 state_lock = Lock()
 
 async def send_markdown_typing_effect_by_word(turn_context, full_text, delay=0.05):
-    words = full_text.split(" ")
-    accumulated = ""
-
-
-    initial_activity = Activity(type=ActivityTypes.message, text="...", text_format="markdown")
-    response = await turn_context.send_activity(initial_activity)
-
-    for word in words:
-        accumulated += word + " "
-
-        updated_activity = Activity(
-            type=ActivityTypes.message,
-            id=response.id,
-            text=accumulated.strip(),
-            text_format="markdown"
-        )
-        await turn_context.update_activity(updated_activity)
-        await asyncio.sleep(delay)
+    # Send a typing indicator first
+    typing_activity = Activity(type="typing")
+    await turn_context.send_activity(typing_activity)
+    # Optional: simulate delay for effect
+    await asyncio.sleep(min(1.0, delay * 10))  # short pause for realism
+    # Now send the full message
+    await turn_context.send_activity(Activity(type=ActivityTypes.message, text=full_text, text_format="markdown"))
 
 
 def get_conversation_state(conversation_id):
