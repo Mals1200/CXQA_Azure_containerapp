@@ -54,12 +54,6 @@ def cleanup_old_states():
             if state['last_activity'] and (current_time - state['last_activity']) > 86400:
                 del conversation_states[conv_id]
 
-def split_into_sentences(text):
-    # Splits on punctuation (.!? ) followed by whitespace.
-    # Keeps the punctuation at the end of each sentence.
-    sentences = re.split(r'(?<=[\.!\?])\s+', text.strip())
-    return [s for s in sentences if s]
-
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({"message": "API is running!"}), 200
@@ -248,7 +242,7 @@ def clean_main_answer(answer_text):
             pass
     # Remove any line at the end starting with "Source:"
     lines = answer_text.strip().split('\n')
-    lines = [l for l in lines if not re.match(r"(?i)\s*\*{0,2}\s*source\s*:", l)]
+    lines = [l for l in lines if not re.match(r"(?i)\s*\**source:", l)]
     return "\n".join(lines).strip()
 
 async def _bot_logic(turn_context: TurnContext):
@@ -299,19 +293,7 @@ async def _bot_logic(turn_context: TurnContext):
             sections.append(f"**Source:** {source}")
             if sections:
                 markdown += "\n\n" + "\n\n".join(sections)
-
-        
-            pieces = split_into_sentences(markdown)
-
-            # 3) Send each sentence with a typing indicator in between:
-            for idx, piece in enumerate(pieces):
-                # 3a) Send a typing activity so it “feels” like the bot is thinking
-                await turn_context.send_activity(Activity(type="typing"))
-                await asyncio.sleep(0.4)  # a short pause (400 ms). Tweak as needed.
-
-                # 3b) Send the next chunk
-                await turn_context.send_activity(Activity(type="message", text=piece))
-
+            await turn_context.send_activity(Activity(type="message", text=markdown))
             return
 
         # --- AdaptiveCard mode (everything in one card with toggle) ---
@@ -330,6 +312,7 @@ async def _bot_logic(turn_context: TurnContext):
         main_answer_lines = main_answer.split("\n")
         table_header, table_rows, table_lines = markdown_table_to_adaptive(main_answer_lines)
         body_blocks = []
+        import re
         export_link_match = re.search(r'https?://[^\s\)]+', main_answer)
         is_export = main_answer.strip().lower().startswith("here is your generated")
         export_url = export_link_match.group(0) if export_link_match else None
@@ -352,7 +335,7 @@ async def _bot_logic(turn_context: TurnContext):
             if pre_table:
                 body_blocks.append({
                     "type": "TextBlock",
-                    "text": pre_table,
+                    "text": pre_table.replace('* **Source:** Index',''),
                     "wrap": True,
                     "spacing": "Medium",
                     "fontType": "Default",
@@ -398,7 +381,7 @@ async def _bot_logic(turn_context: TurnContext):
                 if after_table:
                     body_blocks.append({
                         "type": "TextBlock",
-                        "text": after_table,
+                        "text": after_table.replace('* **Source:** Index',''),
                         "wrap": True,
                         "spacing": "Small"
                     })
@@ -406,7 +389,7 @@ async def _bot_logic(turn_context: TurnContext):
             if main_answer:
                 body_blocks.append({
                     "type": "TextBlock",
-                    "text": main_answer,
+                    "text": main_answer.replace('* **Source:** Index',''),
                     "wrap": True,
                     "spacing": "Medium",
                     "fontType": "Default",
