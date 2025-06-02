@@ -1,6 +1,5 @@
-# version 12b with RENDER_MODE switch ("markdown" or "adaptivecard")
-# Robust and bulletproof: Always shows references/source, never crashes, 
-# works for both JSON and markdown from ask_func.py
+# version 13
+# token display streaming
 
 import os
 import asyncio
@@ -313,7 +312,15 @@ async def _bot_logic(turn_context: TurnContext):
         main_answer = "\n".join(section_list)
 
         if RENDER_MODE == "markdown":
-            markdown = main_answer
+            # Simulate token-by-token streaming (word-by-word)
+            tokens = main_answer.split()  # word-by-word; use list(main_answer) for char-by-char
+            streamed_text = ""
+            for token in tokens:
+                streamed_text += token + " "
+                await turn_context.send_activity(Activity(type="message", text=streamed_text.strip()))
+                await asyncio.sleep(0.03)  # adjust for speed
+
+            # After streaming, send the references/source section (if any)
             sections = []
             if source in ("Index", "Index & Python") and file_names:
                 sections.append("**Referenced:**\n" + "\n".join(f"- {f}" for f in file_names))
@@ -321,8 +328,7 @@ async def _bot_logic(turn_context: TurnContext):
                 sections.append("**Calculated using:**\n" + "\n".join(f"- {t}" for t in table_names))
             sections.append(f"**Source:** {source}")
             if sections:
-                markdown += "\n\n" + "\n\n".join(sections)
-            await turn_context.send_activity(Activity(type="message", text=markdown))
+                await turn_context.send_activity(Activity(type="message", text="\n\n".join(sections)))
             return
 
         # --- AdaptiveCard mode (everything in one card with toggle) ---
