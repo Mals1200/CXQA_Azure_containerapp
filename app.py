@@ -1,5 +1,5 @@
-# version 13
-# token display streaming
+# version 12e
+# the source: AI Generated when on greetings/restart is now gone
 
 import os
 import asyncio
@@ -14,7 +14,7 @@ from botbuilder.core import (
     BotFrameworkAdapterSettings,
     TurnContext
 )
-from botbuilder.schema import Activity
+from botbuilder.schema import Activity, ActivityTypes
 from botbuilder.core.teams import TeamsInfo
 
 from ask_func import Ask_Question, chat_history
@@ -35,6 +35,26 @@ MAX_TEAMS_CARD_BYTES = 28 * 1024  # 28KB
 
 conversation_states = {}
 state_lock = Lock()
+
+async def send_markdown_typing_effect_by_word(turn_context, full_text, delay=0.05):
+    words = full_text.split(" ")
+    accumulated = ""
+
+    initial_activity = Activity(type=ActivityTypes.message, text="", text_format="markdown")
+    response = await turn_context.send_activity(initial_activity)
+
+    for word in words:
+        accumulated += word + " "
+
+        updated_activity = Activity(
+            type=ActivityTypes.message,
+            id=response.id,
+            text=accumulated.strip(),
+            text_format="markdown"
+        )
+        await turn_context.update_activity(updated_activity)
+        await asyncio.sleep(delay)
+
 
 def get_conversation_state(conversation_id):
     with state_lock:
@@ -290,41 +310,25 @@ async def _bot_logic(turn_context: TurnContext):
 
     try:
         ans_gen = Ask_Question(user_message, user_id=user_id)
-        # Streaming logic starts here
-        placeholder = await turn_context.send_activity(
-            Activity(type="message", text="…")
-        )
-        activity_id = placeholder.id
-        buffer = ""
-        last_sent_length = 0
-        # Stream tokens and update activity
-        async for token in ans_gen:
-            buffer += token
-            if len(buffer) - last_sent_length >= 20:
-                update = Activity(
-                    type="message",
-                    id=activity_id,
-                    text=buffer
-                )
-                await turn_context.update_activity(update)
-                last_sent_length = len(buffer)
-        # After streaming, update state
+        answer_text = "".join(ans_gen)
         state['history'] = ask_func.chat_history
         state['cache'] = ask_func.tool_cache
 
-        # Special response check (greeting, export, restart)
-        if is_special_response(buffer):
-            clean_text = strip_trailing_source(buffer)
+        # --- NEW: Detect greeting/restart/export and bypass source logic ---
+        if is_special_response(answer_text):
+            clean_text = strip_trailing_source(answer_text)
             await turn_context.send_activity(Activity(type="message", text=clean_text))
             return
 
         file_names, table_names, source = extract_source_info(user_message, ask_func)
-        main_answer = clean_main_answer(buffer)
+        main_answer = clean_main_answer(answer_text)
+        
         section_list = main_answer.split("\n")
         for i, sec in enumerate(section_list):
             if "Source:" in sec and "Index" in sec:
                 del section_list[i]
                 break
+
         main_answer = "\n".join(section_list)
 
         if RENDER_MODE == "markdown":
@@ -337,9 +341,8 @@ async def _bot_logic(turn_context: TurnContext):
             sections.append(f"**Source:** {source}")
             if sections:
                 markdown += "\n\n" + "\n\n".join(sections)
-            # Final update to replace the placeholder with the full answer and footer
-            final_update = Activity(type="message", id=activity_id, text=markdown)
-            await turn_context.update_activity(final_update)
+            #await turn_context.send_activity(Activity(type="message", text=markdown))
+            await send_markdown_typing_effect_by_word(turn_context, markdown)
             return
 
         # --- AdaptiveCard mode (everything in one card with toggle) ---
@@ -579,13 +582,12 @@ async def _bot_logic(turn_context: TurnContext):
 
         message = Activity(
             type="message",
-            id=activity_id,
             attachments=[{
                 "contentType": "application/vnd.microsoft.card.adaptive",
                 "content": adaptive_card
             }]
         )
-        await turn_context.update_activity(message)
+        await turn_context.send_activity(message)
         return
 
     except Exception as e:
