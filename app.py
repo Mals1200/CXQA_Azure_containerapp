@@ -124,7 +124,7 @@ def extract_references_from_json_or_markdown(answer_text):
                 if isinstance(item, dict):
                     t = item.get("type", "")
                     txt = item.get("text", "")
-                    if t in ("heading", "paragraph", "numbered_list", "bullet_list"):
+                    if t == "heading" or t == "paragraph" or t == "numbered_list" or t == "bullet_list":
                         if txt.startswith("Referenced:"):
                             for line in txt.splitlines()[1:]:
                                 if line.strip().startswith("-"):
@@ -224,42 +224,26 @@ def extract_source_info(user_message, ask_func):
     return file_names, table_names, source
 
 def clean_main_answer(answer_text):
-    """
-    1. If answer_text is a JSON string with "content", flatten it to plain-text.
-    2. Otherwise, remove any LLM-provided footer lines: lines starting with
-       "Source:", "Referenced:", or "Calculated using:" (case-insensitive), plus everything after.
-    """
+    # If answer_text is a JSON string with "content", extract the text fields as markdown
     cleaned = answer_text.strip()
-
-    # Step 1: Flatten JSON-with-content if present
     if cleaned.startswith("{") and '"content"' in cleaned:
         try:
             response_json = json.loads(cleaned)
-            if isinstance(response_json, dict) and isinstance(response_json.get("content"), list):
+            if isinstance(response_json, dict) and "content" in response_json:
                 md_lines = []
                 for block in response_json["content"]:
                     if isinstance(block, dict):
                         text_val = block.get("text", "").strip()
                         if text_val:
                             md_lines.append(text_val)
-                return "\n\n".join(md_lines).strip()
+                markdown_answer = "\n\n".join(md_lines).strip()
+                return markdown_answer
         except Exception:
             pass
-
-    # Step 2: Remove any footer lines from plain-text
-    lines = answer_text.strip().split("\n")
-    filtered = []
-    skip_footer = False
-
-    for line in lines:
-        if re.match(r'^\s*(Source:|Referenced:|Calculated using:)', line, flags=re.IGNORECASE):
-            skip_footer = True
-            continue
-        if skip_footer:
-            continue
-        filtered.append(line)
-
-    return "\n".join(filtered).strip()
+    # Remove any line at the end starting with "Source:"
+    lines = answer_text.strip().split('\n')
+    lines = [l for l in lines if not re.match(r"(?i)\s*\**source:", l)]
+    return "\n".join(lines).strip()
 
 async def _bot_logic(turn_context: TurnContext):
     conversation_id = turn_context.activity.conversation.id
@@ -298,6 +282,14 @@ async def _bot_logic(turn_context: TurnContext):
 
         file_names, table_names, source = extract_source_info(user_message, ask_func)
         main_answer = clean_main_answer(answer_text)
+        
+        section_list = main_answer.split("\n")
+        for i, sec in enumerate(section_list):
+            if "Source:" in sec and "Index" in sec:
+                del section_list[i]
+                break
+
+        main_answer = "\n".join(section_list)
 
         if RENDER_MODE == "markdown":
             markdown = main_answer
