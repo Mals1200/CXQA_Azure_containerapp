@@ -240,11 +240,11 @@ def clean_main_answer(answer_text):
                 return markdown_answer
         except Exception:
             pass
-    # Remove any lines that start with "Source:", "Referenced:", or "Calculated using:" (case-insensitive, with or without markdown bold)
+    # Remove any lines that start with "Source:" (case-insensitive, with or without markdown bold, anywhere in the answer)
     lines = answer_text.strip().split('\n')
     filtered_lines = []
     for l in lines:
-        if re.match(r"(?i)\s*\**(source|referenced|calculated using):", l):
+        if re.match(r"(?i)\s*\**source\**\s*:", l.strip()):
             continue
         filtered_lines.append(l)
     return "\n".join(filtered_lines).strip()
