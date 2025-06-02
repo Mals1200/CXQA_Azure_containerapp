@@ -1,6 +1,6 @@
-# version 12c clean and format
-# removed double source print
-# AI generated answers not json 
+# version 12b with RENDER_MODE switch ("markdown" or "adaptivecard")
+# Robust and bulletproof: Always shows references/source, never crashes, 
+# works for both JSON and markdown from ask_func.py
 
 import os
 import asyncio
@@ -224,22 +224,6 @@ def extract_source_info(user_message, ask_func):
     return file_names, table_names, source
 
 def clean_main_answer(answer_text):
-    # If answer_text is a JSON string with "content", extract the text fields as markdown
-    cleaned = answer_text.strip()
-    if cleaned.startswith("{") and '"content"' in cleaned:
-        try:
-            response_json = json.loads(cleaned)
-            if isinstance(response_json, dict) and "content" in response_json:
-                md_lines = []
-                for block in response_json["content"]:
-                    if isinstance(block, dict):
-                        text_val = block.get("text", "").strip()
-                        if text_val:
-                            md_lines.append(text_val)
-                markdown_answer = "\n\n".join(md_lines).strip()
-                return markdown_answer
-        except Exception:
-            pass
     # Remove any line at the end starting with "Source:"
     lines = answer_text.strip().split('\n')
     lines = [l for l in lines if not re.match(r"(?i)\s*\**source:", l)]
