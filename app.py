@@ -240,9 +240,13 @@ def clean_main_answer(answer_text):
                 return markdown_answer
         except Exception:
             pass
-    # Remove any line at the end starting with "Source:"
+
+    # Remove any line that starts (possibly with bold asterisks) and then "Source:", etc.
     lines = answer_text.strip().split('\n')
-    lines = [l for l in lines if not re.match(r"(?i)\s*\**source:", l)]
+    lines = [
+        l for l in lines
+        if not re.match(r"(?i)^\s*\*{0,2}\s*Source\s*:\s*.*$", l)
+    ]
     return "\n".join(lines).strip()
 
 async def _bot_logic(turn_context: TurnContext):
@@ -293,7 +297,7 @@ async def _bot_logic(turn_context: TurnContext):
             sections.append(f"**Source:** {source}")
             if sections:
                 markdown += "\n\n" + "\n\n".join(sections)
-            await turn_context.send_activity(Activity(type="message", text=markdown.replace('* **Source:** Index','')))
+            await turn_context.send_activity(Activity(type="message", text=markdown))
             return
 
         # --- AdaptiveCard mode (everything in one card with toggle) ---
@@ -335,7 +339,7 @@ async def _bot_logic(turn_context: TurnContext):
             if pre_table:
                 body_blocks.append({
                     "type": "TextBlock",
-                    "text": pre_table.replace('* **Source:** Index',''),
+                    "text": pre_table,
                     "wrap": True,
                     "spacing": "Medium",
                     "fontType": "Default",
@@ -381,7 +385,7 @@ async def _bot_logic(turn_context: TurnContext):
                 if after_table:
                     body_blocks.append({
                         "type": "TextBlock",
-                        "text": after_table.replace('* **Source:** Index',''),
+                        "text": after_table,
                         "wrap": True,
                         "spacing": "Small"
                     })
@@ -389,7 +393,7 @@ async def _bot_logic(turn_context: TurnContext):
             if main_answer:
                 body_blocks.append({
                     "type": "TextBlock",
-                    "text": main_answer.replace('* **Source:** Index',''),
+                    "text": main_answer,
                     "wrap": True,
                     "spacing": "Medium",
                     "fontType": "Default",
