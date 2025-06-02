@@ -1,6 +1,4 @@
-# version 12b with RENDER_MODE switch ("markdown" or "adaptivecard")
-# Robust and bulletproof: Always shows references/source, never crashes, 
-# works for both JSON and markdown from ask_func.py
+# version 12e
 
 import os
 import asyncio
