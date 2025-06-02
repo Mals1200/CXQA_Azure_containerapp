@@ -970,22 +970,23 @@ Make sure every table has a header and a separator row (with dashes).
                       GUIDELINES AND RULES
 
 1. Organize the answer using headings and sections for each subquestion, if relevant.
-2. Summarize or merge repetitive/lengthy lists. Never include more than 12 items
+2. **Your total answer should never exceed 1000 characters.**
+3. Summarize or merge repetitive/lengthy lists. Never include more than 12 items
    in any bullet or numbered list.
-3. Prefer concise, direct answers—avoid excessive details.
-4. If you couldn't find relevant information, answer as best you can and use
+4. Prefer concise, direct answers—avoid excessive details.
+5. If you couldn't find relevant information, answer as best you can and use
    "Source: AI Generated" at the end.
-5. If presenting data best shown in a table (such as numbers per month, by location,
+6. If presenting data best shown in a table (such as numbers per month, by location,
    or by category), use Markdown table syntax as shown above.
-6. Always end your answer with a single line showing the data source used, in this format:
+7. Always end your answer with a single line showing the data source used, in this format:
       - **Source:** Index
       - **Source:** Python
       - **Source:** Index & Python
       - **Source:** AI Generated
-7. If both Index and Python data were used, use "Source: Index & Python".
+8. If both Index and Python data were used, use "Source: Index & Python".
    If only Index, use "Source: Index". If only Python, use "Source: Python".
-8. For multi-part questions, organize the answer with subheadings or numbered steps.
-9. If the answer is a procedure/SOP, only list key actions (summarize—don't list every sub-step).
+9. For multi-part questions, organize the answer with subheadings or numbered steps.
+10. If the answer is a procedure/SOP, only list key actions (summarize—don't list every sub-step).
 
 ###################################################################################
                 PROMPT INPUT DATA (Available for your answer)
