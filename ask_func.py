@@ -1678,17 +1678,22 @@ def Ask_Question(question, user_id="anonymous"):
 
 def robust_split_question(user_question, use_semantic_parsing=True):
     """
-    Always include the original user question in the subquestions.
-    Deduplicate results and preserve order.
+    Run the LLM splitter. If it returns exactly one line matching `user_question`,
+    keep [user_question]. Otherwise, drop the combined form and return only
+    the distinct subquestions (deduplicated).
     """
     subqs = split_question_into_subquestions(user_question, use_semantic_parsing)
-    # Always insert the original question first if missing
-    if user_question not in subqs:
-        subqs = [user_question] + subqs
-    # Remove duplicates, keep order
+    # If LLM returned only the original (no split), keep it as-is:
+    if len(subqs) == 1 and subqs[0].strip() == user_question.strip():
+        return [user_question]
+
+    # Otherwise, there are 2+ subquestions—drop the combined string, just return deduped list
     seen = set()
     result = []
     for sq in subqs:
+        sq = sq.strip()
+        if not sq:
+            continue
         if sq not in seen:
             result.append(sq)
             seen.add(sq)
