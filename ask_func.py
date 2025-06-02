@@ -970,7 +970,7 @@ Make sure every table has a header and a separator row (with dashes).
                       GUIDELINES AND RULES
 
 1. Organize the answer using headings and sections for each subquestion, if relevant.
-2. **Your total answer should never exceed 1000 characters.**
+2. **Your total answer should never exceed 1500 characters.**
 3. Summarize or merge repetitive/lengthy lists. Never include more than 12 items
    in any bullet or numbered list.
 4. Prefer concise, direct answers—avoid excessive details.
