@@ -240,10 +240,16 @@ def clean_main_answer(answer_text):
                 return markdown_answer
         except Exception:
             pass
-    # Remove any line at the end starting with "Source:"
+
+    # Remove any line that starts (possibly with bold asterisks) and then "Source:", etc.
     lines = answer_text.strip().split('\n')
-    lines = [l for l in lines if not re.match(r"(?i)\s*\**source:", l)]
-    return "\n".join(lines).strip()
+    filtered = []
+    for l in lines:
+        if "source:" in l.lower():
+            # skip this line entirely
+            continue
+        filtered.append(l)
+    return "\n".join(filtered).strip()
 
 async def _bot_logic(turn_context: TurnContext):
     conversation_id = turn_context.activity.conversation.id
@@ -286,24 +292,13 @@ async def _bot_logic(turn_context: TurnContext):
         if RENDER_MODE == "markdown":
             markdown = main_answer
             sections = []
-
             if source in ("Index", "Index & Python") and file_names:
                 sections.append("**Referenced:**\n" + "\n".join(f"- {f}" for f in file_names))
             if source in ("Python", "Index & Python") and table_names:
                 sections.append("**Calculated using:**\n" + "\n".join(f"- {t}" for t in table_names))
             sections.append(f"**Source:** {source}")
-
             if sections:
                 markdown += "\n\n" + "\n\n".join(sections)
-
-            # Remover a primeira seção que contenha tanto 'Source:' quanto 'Index'
-            section_list = markdown.split("\n\n")
-            for i, sec in enumerate(section_list):
-                if "Source:" in sec and "Index" in sec:
-                    del section_list[i]
-                    break
-
-            markdown = "\n\n".join(section_list)
             await turn_context.send_activity(Activity(type="message", text=markdown))
             return
 
@@ -346,7 +341,7 @@ async def _bot_logic(turn_context: TurnContext):
             if pre_table:
                 body_blocks.append({
                     "type": "TextBlock",
-                    "text": pre_table.replace('* **Source:** Index',''),
+                    "text": pre_table,
                     "wrap": True,
                     "spacing": "Medium",
                     "fontType": "Default",
@@ -392,7 +387,7 @@ async def _bot_logic(turn_context: TurnContext):
                 if after_table:
                     body_blocks.append({
                         "type": "TextBlock",
-                        "text": after_table.replace('* **Source:** Index',''),
+                        "text": after_table,
                         "wrap": True,
                         "spacing": "Small"
                     })
@@ -400,7 +395,7 @@ async def _bot_logic(turn_context: TurnContext):
             if main_answer:
                 body_blocks.append({
                     "type": "TextBlock",
-                    "text": main_answer.replace('* **Source:** Index',''),
+                    "text": main_answer,
                     "wrap": True,
                     "spacing": "Medium",
                     "fontType": "Default",
