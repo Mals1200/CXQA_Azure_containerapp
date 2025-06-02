@@ -1,6 +1,5 @@
-# version 12b with RENDER_MODE switch ("markdown" or "adaptivecard")
-# Robust and bulletproof: Always shows references/source, never crashes, 
-# works for both JSON and markdown from ask_func.py
+# version 12d w
+# Fixed the issue with double printing of the source under the answer and before the file segment.
 
 import os
 import asyncio
