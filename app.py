@@ -290,37 +290,45 @@ async def _bot_logic(turn_context: TurnContext):
 
     try:
         ans_gen = Ask_Question(user_message, user_id=user_id)
-        answer_text = "".join(ans_gen)
+        # Streaming logic starts here
+        placeholder = await turn_context.send_activity(
+            Activity(type="message", text="…")
+        )
+        activity_id = placeholder.id
+        buffer = ""
+        last_sent_length = 0
+        # Stream tokens and update activity
+        async for token in ans_gen:
+            buffer += token
+            if len(buffer) - last_sent_length >= 20:
+                update = Activity(
+                    type="message",
+                    id=activity_id,
+                    text=buffer
+                )
+                await turn_context.update_activity(update)
+                last_sent_length = len(buffer)
+        # After streaming, update state
         state['history'] = ask_func.chat_history
         state['cache'] = ask_func.tool_cache
 
-        # --- NEW: Detect greeting/restart/export and bypass source logic ---
-        if is_special_response(answer_text):
-            clean_text = strip_trailing_source(answer_text)
+        # Special response check (greeting, export, restart)
+        if is_special_response(buffer):
+            clean_text = strip_trailing_source(buffer)
             await turn_context.send_activity(Activity(type="message", text=clean_text))
             return
 
         file_names, table_names, source = extract_source_info(user_message, ask_func)
-        main_answer = clean_main_answer(answer_text)
-        
+        main_answer = clean_main_answer(buffer)
         section_list = main_answer.split("\n")
         for i, sec in enumerate(section_list):
             if "Source:" in sec and "Index" in sec:
                 del section_list[i]
                 break
-
         main_answer = "\n".join(section_list)
 
         if RENDER_MODE == "markdown":
-            # Simulate token-by-token streaming (word-by-word)
-            tokens = main_answer.split()  # word-by-word; use list(main_answer) for char-by-char
-            streamed_text = ""
-            for token in tokens:
-                streamed_text += token + " "
-                await turn_context.send_activity(Activity(type="message", text=streamed_text.strip()))
-                await asyncio.sleep(0.03)  # adjust for speed
-
-            # After streaming, send the references/source section (if any)
+            markdown = main_answer
             sections = []
             if source in ("Index", "Index & Python") and file_names:
                 sections.append("**Referenced:**\n" + "\n".join(f"- {f}" for f in file_names))
@@ -328,7 +336,10 @@ async def _bot_logic(turn_context: TurnContext):
                 sections.append("**Calculated using:**\n" + "\n".join(f"- {t}" for t in table_names))
             sections.append(f"**Source:** {source}")
             if sections:
-                await turn_context.send_activity(Activity(type="message", text="\n\n".join(sections)))
+                markdown += "\n\n" + "\n\n".join(sections)
+            # Final update to replace the placeholder with the full answer and footer
+            final_update = Activity(type="message", id=activity_id, text=markdown)
+            await turn_context.update_activity(final_update)
             return
 
         # --- AdaptiveCard mode (everything in one card with toggle) ---
@@ -568,12 +579,13 @@ async def _bot_logic(turn_context: TurnContext):
 
         message = Activity(
             type="message",
+            id=activity_id,
             attachments=[{
                 "contentType": "application/vnd.microsoft.card.adaptive",
                 "content": adaptive_card
             }]
         )
-        await turn_context.send_activity(message)
+        await turn_context.update_activity(message)
         return
 
     except Exception as e:
