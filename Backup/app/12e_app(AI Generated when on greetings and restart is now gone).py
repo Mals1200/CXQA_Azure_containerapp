@@ -222,27 +222,62 @@ def extract_source_info(user_message, ask_func):
         source = "AI Generated"
     return file_names, table_names, source
 
-def clean_main_answer(answer_text):
-    # If answer_text is a JSON string with "content", extract the text fields as markdown
+
+def clean_main_answer(answer_text: str) -> str:
+    """
+    • Converts any JSON-structured answer into pure markdown (as before).
+    • Then strips *all* inline “Source: …” lines, whatever their casing or markdown
+      decorations:
+        - plain text        →  Source: Python
+        - bold/italic       →  **Source:** Index & Python
+        - list bullets      →  - **Source:** AI Generated
+    """
+    # ---------- JSON ➜ markdown (unchanged) ----------
     cleaned = answer_text.strip()
     if cleaned.startswith("{") and '"content"' in cleaned:
         try:
-            response_json = json.loads(cleaned)
-            if isinstance(response_json, dict) and "content" in response_json:
-                md_lines = []
-                for block in response_json["content"]:
-                    if isinstance(block, dict):
-                        text_val = block.get("text", "").strip()
-                        if text_val:
-                            md_lines.append(text_val)
-                markdown_answer = "\n\n".join(md_lines).strip()
-                return markdown_answer
+            obj = json.loads(cleaned)
+            if isinstance(obj, dict) and "content" in obj:
+                md_blocks = [blk.get("text", "").strip()
+                             for blk in obj["content"]
+                             if isinstance(blk, dict) and blk.get("text")]
+                cleaned = "\n\n".join(md_blocks).strip()
         except Exception:
             pass
-    # Remove any line at the end starting with "Source:"
-    lines = answer_text.strip().split('\n')
-    lines = [l for l in lines if not re.match(r"(?i)\s*\**source:", l)]
+
+    # ---------- universal “Source:” scrubber ----------
+    src_pattern = re.compile(
+        r"""(?ix)            # ignore-case & verbose
+        ^\s*                 #   optional leading white-space
+        (?:[-*]\s*)?         #   optional markdown bullet (-,*,—) plus space
+        \**\s*source\s*:.*$  #   optional **, then “source: …” to end of line
+        """)
+    lines = cleaned.splitlines()
+    lines = [ln for ln in lines if not src_pattern.match(ln)]
     return "\n".join(lines).strip()
+
+# (old) (1dfre)
+# def clean_main_answer(answer_text):
+#     # If answer_text is a JSON string with "content", extract the text fields as markdown
+#     cleaned = answer_text.strip()
+#     if cleaned.startswith("{") and '"content"' in cleaned:
+#         try:
+#             response_json = json.loads(cleaned)
+#             if isinstance(response_json, dict) and "content" in response_json:
+#                 md_lines = []
+#                 for block in response_json["content"]:
+#                     if isinstance(block, dict):
+#                         text_val = block.get("text", "").strip()
+#                         if text_val:
+#                             md_lines.append(text_val)
+#                 markdown_answer = "\n\n".join(md_lines).strip()
+#                 return markdown_answer
+#         except Exception:
+#             pass
+#     # Remove any line at the end starting with "Source:"
+#     lines = answer_text.strip().split('\n')
+#     lines = [l for l in lines if not re.match(r"(?i)\s*\**source:", l)]
+#     return "\n".join(lines).strip()
 
 def is_special_response(answer_text):
     text = answer_text.strip().lower()
@@ -302,14 +337,15 @@ async def _bot_logic(turn_context: TurnContext):
 
         file_names, table_names, source = extract_source_info(user_message, ask_func)
         main_answer = clean_main_answer(answer_text)
-        
-        section_list = main_answer.split("\n")
-        for i, sec in enumerate(section_list):
-            if "Source:" in sec and "Index" in sec:
-                del section_list[i]
-                break
 
-        main_answer = "\n".join(section_list)
+        # with old section commented above (1dfre)
+        # section_list = main_answer.split("\n")
+        # for i, sec in enumerate(section_list):
+        #     if "Source:" in sec and "Index" in sec:
+        #         del section_list[i]
+        #         break
+
+        # main_answer = "\n".join(section_list)
 
         if RENDER_MODE == "markdown":
             markdown = main_answer
