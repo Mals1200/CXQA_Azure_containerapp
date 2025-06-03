@@ -1,6 +1,5 @@
-# version 13
-# token streaming
-
+# version 12e
+# the source: AI Generated when on greetings/restart is now gone
 
 import os
 import asyncio
@@ -15,7 +14,7 @@ from botbuilder.core import (
     BotFrameworkAdapterSettings,
     TurnContext
 )
-from botbuilder.schema import Activity, ActivityTypes
+from botbuilder.schema import Activity
 from botbuilder.core.teams import TeamsInfo
 
 from ask_func import Ask_Question, chat_history
@@ -36,16 +35,6 @@ MAX_TEAMS_CARD_BYTES = 28 * 1024  # 28KB
 
 conversation_states = {}
 state_lock = Lock()
-
-async def send_markdown_typing_effect_by_word(turn_context, full_text, delay=0.05):
-    # Send a typing indicator first
-    typing_activity = Activity(type="typing")
-    await turn_context.send_activity(typing_activity)
-    # Optional: simulate delay for effect
-    await asyncio.sleep(min(1.0, delay * 10))  # short pause for realism
-    # Now send the full message
-    await turn_context.send_activity(Activity(type=ActivityTypes.message, text=full_text, text_format="markdown"))
-
 
 def get_conversation_state(conversation_id):
     with state_lock:
@@ -332,8 +321,7 @@ async def _bot_logic(turn_context: TurnContext):
             sections.append(f"**Source:** {source}")
             if sections:
                 markdown += "\n\n" + "\n\n".join(sections)
-            #await turn_context.send_activity(Activity(type="message", text=markdown))
-            await send_markdown_typing_effect_by_word(turn_context, markdown)
+            await turn_context.send_activity(Activity(type="message", text=markdown))
             return
 
         # --- AdaptiveCard mode (everything in one card with toggle) ---
