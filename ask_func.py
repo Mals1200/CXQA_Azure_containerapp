@@ -24,7 +24,6 @@ from collections import OrderedDict
 import difflib
 import time
 from rapidfuzz import process, fuzz
-import pytz
 
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
@@ -60,6 +59,44 @@ CONFIG = {
     "CONTAINER_NAME"    : "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore",
     "TARGET_FOLDER_PATH": "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
 }
+
+#######################################################################################
+# (3) KSA DATE HELPER (cached, resets 12:01 AM KSA time)
+#######################################################################################
+try:
+    from zoneinfo import ZoneInfo
+    _ksa_tz = ZoneInfo("Asia/Riyadh")
+    def _ksa_now():
+        return datetime.now(_ksa_tz)
+except ImportError:
+    try:
+        import pytz
+        _ksa_tz = pytz.timezone("Asia/Riyadh")
+        def _ksa_now():
+            return datetime.now(_ksa_tz)
+    except ImportError:
+        _ksa_tz = None
+        def _ksa_now():
+            return datetime.utcnow()  # fallback, not timezone aware
+
+from functools import lru_cache
+
+def _ksa_date_cache_key():
+    now = _ksa_now()
+    # Reset cache at 12:01 AM KSA time
+    return now.strftime("%Y-%m-%d") if now.hour > 0 or now.minute > 0 else f"{now.strftime('%Y-%m-%d')}-reset"
+
+@lru_cache(maxsize=1)
+def get_ksa_today_date():
+    """
+    Returns today's date in KSA (Asia/Riyadh) timezone as YYYY-MM-DD string.
+    Cache resets at 12:01 AM KSA time.
+    """
+    now = _ksa_now()
+    return now.strftime("%Y-%m-%d")
+
+todays_date = get_ksa_today_date()
+
 
 
 # Global objects with better initialization
@@ -726,6 +763,9 @@ Dataframes schemas and sample:
 
 Chat_history:
 {rhistory}
+
+Todays date (dd/mm/yyyy): 
+{todays_date}
 """
 
     code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.7)
@@ -1005,6 +1045,9 @@ Python Data:
 
 Chat history:
 {recent_history if recent_history else []}
+
+Todays date (dd/mm/yyyy): 
+{todays_date}
 """
 
 
@@ -1701,21 +1744,3 @@ def robust_split_question(user_question, use_semantic_parsing=True):
             result.append(sq)
             seen.add(sq)
     return result
-
-#######################################################################################
-# (3) KSA DATE HELPER (cached, resets 12:01 AM KSA time)
-#######################################################################################
-def _ksa_now():
-    ksa_tz = pytz.timezone("Asia/Riyadh")
-    return datetime.now(ksa_tz)
-
-@lru_cache(maxsize=1)
-def get_ksa_today_date():
-    """
-    Returns today's date in KSA (Asia/Riyadh) timezone as YYYY-MM-DD string.
-    Cache resets at 12:01 AM KSA time.
-    """
-    now = _ksa_now()
-    return now.strftime("%Y-%m-%d")
-
-todays_date = get_ksa_today_date()
