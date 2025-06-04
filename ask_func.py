@@ -1,8 +1,6 @@
-# 24b
-# made the ai gen a bit more robust
-# fixed the double printing of the source
-# improved robust_split_question (the no answer complex questions issue)
-
+# 24c
+# Added date function that is cached and resets on midnight
+# gave tool_2 code generator and the final_answering_llm access to todays date
 import os
 import io
 import re
