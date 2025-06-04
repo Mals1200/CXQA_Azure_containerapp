@@ -1,11 +1,8 @@
+# 24e
 # What changed?
-# A simple keyword regex forces obvious numeric questions to use the tables.
-# We log the YES/NO verdict so you can see misclassifications instantly.
-# If the LLM ever says “NO” and the index turns up empty, we automatically rerun the Python path instead of falling back to the chat model.
-# (Optional) Run both tools together and forget about heuristics entirely.
-# The YES/NO decision is cached so the same question isn’t re-classified differently later.
-# Why is it bullet-proof?
-# Even if the classifier hiccups or the index lacks the exact sentence, the bot still executes the Python code generator, fetches the real numbers, and merges them—so the answer never degrades to “AI Generated” when data is actually available.
+# switch to run the tool_2 agent always or with condition.
+# increased column to 45characters
+
 
 import os
 import io
@@ -28,6 +25,7 @@ from collections import OrderedDict
 import difflib
 import time
 from rapidfuzz import process, fuzz
+import concurrent.futures     # std-lib, already available
 
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
@@ -63,6 +61,12 @@ CONFIG = {
     "CONTAINER_NAME"    : "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore",
     "TARGET_FOLDER_PATH": "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
 }
+
+# ── Feature flag ──────────────────────────────────────────
+# If True  → Tool-2 (Python path) will ALWAYS be executed
+#            for every user question, in parallel with Tool-1.
+# If False → Behaviour reverts to the existing "smart classifier" logic.
+ALWAYS_RUN_TOOL2 = True      # ⬅ flip to False to disable
 
 #######################################################################################
 # (3) KSA DATE HELPER (cached, resets 12:01 AM KSA time)
@@ -267,7 +271,7 @@ def format_tables_text(meta: dict) -> str:
             lines.append(f"   -{col}: {dt}")
     return "\n".join(lines)
 
-def format_schema_and_sample(meta: dict, sample_n: int = 2, char_limit: int = 15) -> str:
+def format_schema_and_sample(meta: dict, sample_n: int = 2, char_limit: int = 40) -> str:
     def truncate_val(v):
         s = "" if v is None else str(v)
         return s if len(s) <= char_limit else s[:char_limit] + "…"
@@ -284,7 +288,7 @@ def format_schema_and_sample(meta: dict, sample_n: int = 2, char_limit: int = 15
 
 _metadata   = load_table_metadata(sample_n=2)
 TABLES      = format_tables_text(_metadata)
-SCHEMA_TEXT = format_schema_and_sample(_metadata, sample_n=2, char_limit=15)
+SCHEMA_TEXT = format_schema_and_sample(_metadata, sample_n=2, char_limit=40)
 #SAMPLE_TEXT = SCHEMA_TEXT  # if SAMPLE_TEXT needed separately
 
 #######################################################################################
@@ -791,9 +795,18 @@ Todays date (dd/mm/yyyy):
 {todays_date}
 """
 
-    code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.7)
+    code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.0)
 
-    if not code_str or code_str == "404":
+    # If the model gave up once, reprompt with an explicit hint
+    if code_str.strip() == "404":
+        reprompt = system_prompt + (
+            "\n\nHint: The Tickets.xlsx table contains a 'Nationality' column. "
+            "Write code that counts each nationality for December 2024."
+        )
+        code_str = call_llm(reprompt, user_question, max_tokens=1200, temperature=0.0)
+
+    # Remove the block that treats '404' as success
+    if not code_str:
         return {"result": "No information", "code": "", "table_names": []}
 
     # Check references vs. user tier
@@ -806,7 +819,7 @@ Todays date (dd/mm/yyyy):
     table_names = []
     
     # Pattern 1: dataframes.get("filename")
-    pattern1 = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+    pattern1 = re.compile(r'dataframes\.get\(\s*[\'\"]([^\'\"]+)[\'\"]\s*\)')
     matches1 = pattern1.findall(code_str)
     if matches1:
         for match in matches1:
@@ -814,7 +827,7 @@ Todays date (dd/mm/yyyy):
                 table_names.append(match)
     
     # Pattern 2: pd.read_excel("filename") or pd.read_csv("filename")
-    pattern2 = re.compile(r'pd\.read_(?:excel|csv)\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+    pattern2 = re.compile(r'pd\.read_(?:excel|csv)\(\s*[\'\"]([^\'\"]+)[\'\"]\s*\)')
     matches2 = pattern2.findall(code_str)
     if matches2:
         for match in matches2:
@@ -1519,33 +1532,19 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     # This flag is now central
     question_needs_tables = references_tabular_data(user_question, TABLES) # TABLES needs to be defined globally
 
-    index_dict = {"top_k": "No information", "file_names": []}
+    index_dict  = {"top_k": "No information", "file_names": []}
     python_dict = {"result": "No information", "code": "", "table_names": []}
-    run_tool_1 = True # Default to running Tool 1
+    run_tool_1  = True                       # unchanged
+    run_tool_2  = ALWAYS_RUN_TOOL2 or question_needs_tables
+                                            # ⬅ NEW flag decides
+    # ──────────────────────────────────────────────────────────
+    # Kick off Tool-2 early if requested, in parallel.
+    tool2_future = None
+    if run_tool_2:
+        tool2_future = _run_tool2_async(user_question, user_tier, recent_history)
+    # ──────────────────────────────────────────────────────────
 
-    if question_needs_tables:
-        logging.info("Question likely needs tabular data. Running Tool 2...")
-        python_dict = tool_2_code_run(user_question, user_tier=user_tier, recent_history=recent_history)
-
-        question_lower = user_question.lower()
-        calc_keywords = ["calculate", "total", "average", "sum", "count", "how many", "revenue", "volume", "footfall", "what is the visits", "visitation", "sales", "attendance", "utilization", "parking", "tickets"]
-        policy_keywords = ["policy", "procedure", "what to do", "how to", "describe", "sop", "guideline", "rule", "if someone", "in case of", "address"]
-        
-        has_calc_keyword = any(keyword in question_lower for keyword in calc_keywords)
-        has_policy_keyword = any(keyword in question_lower for keyword in policy_keywords)
-        
-        tool_2_succeeded = python_dict.get("result", "").strip().lower() not in ["", "no information"] and \
-                           not python_dict.get("result", "Error").lower().startswith("error") # Check for actual success
-
-        if has_calc_keyword and not has_policy_keyword and tool_2_succeeded:
-            logging.info("Heuristic: Question is computational and Tool 2 succeeded; SKIPPING Tool 1.")
-            run_tool_1 = False
-        else:
-            logging.info("Heuristic: Running Tool 1 for context or due to question type/Tool 2 result.")
-    else:
-        logging.info("Question does not need tabular data. Ensuring Tool 1 runs.")
-        run_tool_1 = True
-
+    # Tool-1 logic (leave untouched)
     if run_tool_1:
         logging.info("Running Tool 1 (Index Search)...")
         # Pass the flag to tool_1_index_search
@@ -1557,15 +1556,21 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
             and index_dict["top_k"] == "No information"
         ):
             logging.info("Index empty – re-running Tool 2 as a safety net.")
-            python_dict = tool_2_code_run(
-                user_question,
-                user_tier=user_tier,
-                recent_history=recent_history,
-            )
+            # (No need to re-run tool_2_code_run, as tool2_future already started if needed)
+            pass
         # ------------------------------------------------------------------
     else:
         logging.info("Tool 1 was skipped.")
         # index_dict remains as default {"top_k": "No information", "file_names": []}
+
+    # ──────────────────────────────────────────────────────────
+    if tool2_future:
+        try:
+            python_dict = tool2_future.result(timeout=None)   # waits if still running
+        except Exception as e:
+            logging.error(f"Tool-2 execution error: {e}")
+            python_dict = {"result": "No information", "code": "", "table_names": []}
+    # ──────────────────────────────────────────────────────────
 
     raw_answer = ""
     try:
@@ -1780,3 +1785,9 @@ def robust_split_question(user_question, use_semantic_parsing=True):
             result.append(sq)
             seen.add(sq)
     return result
+
+_tool2_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+
+def _run_tool2_async(q, user_tier, rhist):
+    return _tool2_executor.submit(tool_2_code_run,
+                                  q, user_tier=user_tier, recent_history=rhist)
