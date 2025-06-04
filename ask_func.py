@@ -1,7 +1,20 @@
-# 24e
+# 24f
+
 # What changed?
-# switch to run the tool_2 agent always or with condition.
-# increased column to 45characters
+# hardening
+# ===============================
+# CHANGELOG: Surgical Edits (June 2024)
+# ===============================
+# 1. Added robust retry logic for LLM '404' errors in tool_2_code_run:
+#    - Retries up to 3 times with a distinct reprompt if '404' is returned.
+#    - Uses a code cache to reuse last good code for identical questions.
+#    - Graceful fallback: if all retries fail, returns a user-friendly message.
+# 2. Added logging in call_llm for finish_reason and content_filter_results.
+# 3. Removed the legacy single-retry block for '404' in tool_2_code_run (now fully superseded).
+# 4. Added 'import numpy as np' to the import section to support generated code using numpy.nan.
+# 5. All changes are fully reversible and do not affect external logic or signatures.
+# ===============================
+
 
 
 import os
@@ -13,6 +26,7 @@ import warnings
 import requests
 import contextlib
 import pandas as pd
+import numpy as np
 import csv
 from io import BytesIO, StringIO
 from datetime import datetime
@@ -318,6 +332,11 @@ def call_llm(system_prompt, user_prompt, max_tokens=500, temperature=0.0):
         data = response.json()
         if "choices" in data and data["choices"]:
             content = data["choices"][0]["message"].get("content", "").strip()
+            finish_reason = data["choices"][0].get("finish_reason", "")
+            if finish_reason and finish_reason != "stop":
+                logging.warning("LLM finish_reason=%s", finish_reason)
+            cfr = data["choices"][0].get("content_filter_results")
+            if cfr: logging.warning("LLM content_filter=%s", cfr)
             if content:
                 return content
             else:
@@ -797,15 +816,34 @@ Todays date (dd/mm/yyyy):
 
     code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.0)
 
-    # If the model gave up once, reprompt with an explicit hint
-    if code_str.strip() == "404":
-        reprompt = system_prompt + (
-            "\n\nHint: The Tickets.xlsx table contains a 'Nationality' column. "
-            "Write code that counts each nationality for December 2024."
+    # 1️⃣ Treat "404" as a retry-able error
+    MAX_RETRIES = 3          # 1 original + 2 more tries
+    attempt = 1
+    while code_str.strip() == "404" and attempt < MAX_RETRIES:
+        # ——— 2️⃣  DISTINCT REPROMPT ———
+        reprompt = (
+            system_prompt.replace("Don't give examples,", f"Retry attempt {attempt:02d} – produce real code,")
+            + "\n\n[Retry] Previous answer was '404'. "
+              "Generate executable pandas code that answers the question."
         )
         code_str = call_llm(reprompt, user_question, max_tokens=1200, temperature=0.0)
+        attempt += 1
 
-    # Remove the block that treats '404' as success
+    # 3️⃣ Cache the last good code
+    cache_key_code = f"code_cache::{user_question.lower().strip()}"
+    if code_str.strip() != "404":
+        tool_cache[cache_key_code] = code_str
+    elif code_str.strip() == "404" and cache_key_code in tool_cache:
+        logging.info("Using cached code for identical question after 404 refusal")
+        code_str = tool_cache[cache_key_code]
+
+    # 4️⃣ Graceful final fallback
+    if code_str.strip() == "404":
+        return {
+            "result": "The data exists, but automatic code generation failed. Please try again later.",
+            "code": "",
+            "table_names": [],
+        }
     if not code_str:
         return {"result": "No information", "code": "", "table_names": []}
 
