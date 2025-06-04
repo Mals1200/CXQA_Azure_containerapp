@@ -1,6 +1,12 @@
-# 24c
-# Added date function that is cached and resets on midnight
-# gave tool_2 code generator and the final_answering_llm access to todays date
+# What changed?
+# A simple keyword regex forces obvious numeric questions to use the tables.
+# We log the YES/NO verdict so you can see misclassifications instantly.
+# If the LLM ever says “NO” and the index turns up empty, we automatically rerun the Python path instead of falling back to the chat model.
+# (Optional) Run both tools together and forget about heuristics entirely.
+# The YES/NO decision is cached so the same question isn’t re-classified differently later.
+# Why is it bullet-proof?
+# Even if the classifier hiccups or the index lacks the exact sentence, the bot still executes the Python code generator, fetches the real numbers, and merges them—so the answer never degrades to “AI Generated” when data is actually available.
+
 import os
 import io
 import re
@@ -466,7 +472,23 @@ def split_question_into_subquestions(user_question, use_semantic_parsing=True):
 #######################################################################################
 #                 REFERENCES CHECK & RELEVANCE CHECK  (Points #3 + #1 synergy)
 #######################################################################################
+# --- NUMERIC_HINT for table-need detection ---
+NUMERIC_HINT = re.compile(
+    r"\b(count|how many|total|sum|average|revenue|visits?|visitation|incidents?|sales|footfall|foreigners?|utili[sz]ation)\b",
+    re.I,
+)
+# ------------------------------------------------------
 def references_tabular_data(question, tables_text):
+    # ---- NEW: cache classifier result ----
+    cache_key = question.lower().strip()
+    if cache_key in tool_cache.get("table_need", {}):
+        return tool_cache["table_need"][cache_key]
+    # ---- NEW: short-circuit obvious numeric questions ----
+    if NUMERIC_HINT.search(question):
+        tool_cache.setdefault("table_need", {})[cache_key] = True
+        logging.info(f"[Table-Need] '{question[:60]}' → YES (regex)")
+        return True
+    # ------------------------------------------------------
     llm_system_message = (
         "You are a strict YES/NO classifier. Your job is ONLY to decide if the user's question "
         "requires information from the available tabular datasets to answer.\n"
@@ -493,7 +515,10 @@ def references_tabular_data(question, tables_text):
     """
     llm_response = call_llm_aux(llm_system_message, llm_user_message, max_tokens=5, temperature=0.0)
     clean_response = llm_response.strip().upper()
-    return "YES" in clean_response
+    logging.info(f"[Table-Need] '{question[:60]}' → {clean_response}")
+    final = "YES" in clean_response
+    tool_cache.setdefault("table_need", {})[cache_key] = final
+    return final
 
 # In ask_func_client_2.py
 # Replace your existing is_text_relevant function with this:
@@ -1525,6 +1550,19 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
         logging.info("Running Tool 1 (Index Search)...")
         # Pass the flag to tool_1_index_search
         index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier, question_primarily_tabular=question_needs_tables)
+        # ------------------------------------------------------------------
+        # Safety net: if the classifier said NO, but index is empty, try Tool 2
+        if (
+            not question_needs_tables          # the LLM said NO
+            and index_dict["top_k"] == "No information"
+        ):
+            logging.info("Index empty – re-running Tool 2 as a safety net.")
+            python_dict = tool_2_code_run(
+                user_question,
+                user_tier=user_tier,
+                recent_history=recent_history,
+            )
+        # ------------------------------------------------------------------
     else:
         logging.info("Tool 1 was skipped.")
         # index_dict remains as default {"top_k": "No information", "file_names": []}
