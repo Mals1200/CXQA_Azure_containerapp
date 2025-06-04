@@ -24,6 +24,7 @@ from collections import OrderedDict
 import difflib
 import time
 from rapidfuzz import process, fuzz
+import pytz
 
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
@@ -1700,3 +1701,21 @@ def robust_split_question(user_question, use_semantic_parsing=True):
             result.append(sq)
             seen.add(sq)
     return result
+
+#######################################################################################
+# (3) KSA DATE HELPER (cached, resets 12:01 AM KSA time)
+#######################################################################################
+def _ksa_now():
+    ksa_tz = pytz.timezone("Asia/Riyadh")
+    return datetime.now(ksa_tz)
+
+@lru_cache(maxsize=1)
+def get_ksa_today_date():
+    """
+    Returns today's date in KSA (Asia/Riyadh) timezone as YYYY-MM-DD string.
+    Cache resets at 12:01 AM KSA time.
+    """
+    now = _ksa_now()
+    return now.strftime("%Y-%m-%d")
+
+todays_date = get_ksa_today_date()
