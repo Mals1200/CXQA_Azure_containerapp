@@ -1559,17 +1559,14 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     run_tool_1  = True
     run_tool_2  = ALWAYS_RUN_TOOL2 or question_needs_tables
 
-    # --- Context injection for ambiguous/follow-up questions ---
-    prepped_question = preprocess_question(user_question, recent_history)
-
     tool2_future = None
     if run_tool_2:
-        tool2_future = _run_tool2_async(prepped_question, user_tier, recent_history)
+        tool2_future = _run_tool2_async(user_question, user_tier, recent_history)
 
     if run_tool_1:
         logging.info("Running Tool 1 (Index Search)...")
         index_dict = tool_1_index_search(
-            prepped_question,
+            user_question,
             top_k=5,
             user_tier=user_tier,
             question_primarily_tabular=question_needs_tables
@@ -1866,47 +1863,3 @@ _tool2_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 def _run_tool2_async(q, user_tier, rhist):
     return _tool2_executor.submit(tool_2_code_run,
                                   q, user_tier=user_tier, recent_history=rhist)
-
-# Add preprocess_question helper after imports
-
-def preprocess_question(user_question, recent_history):
-    import re
-    ambiguous_patterns = [
-        r'^(yes|no|okay|ok|please|this|that|now|sure|go on|continue|and|what else|how about|can you|do you|is it|are there|why|how did|explain|list|show|give me)\b',
-        r'^\s*[.?!]+\s*$',  # Just punctuation
-    ]
-    uq = user_question.strip().lower()
-    is_ambiguous = False
-
-    # Triggers
-    for pat in ambiguous_patterns:
-        if re.match(pat, uq):
-            is_ambiguous = True
-            break
-    if len(uq.split()) < 3:  # single-word/short replies
-        is_ambiguous = True
-
-    # Avoid double context
-    if "previous question:" in uq or "user follow-up:" in uq:
-        return user_question
-
-    # Find last Q/A
-    last_q, last_a = "", ""
-    for entry in reversed(recent_history or []):
-        if entry.startswith("Assistant: ") and not last_a:
-            last_a = entry[11:]
-        elif entry.startswith("User: ") and not last_q:
-            last_q = entry[6:]
-        if last_q and last_a:
-            break
-
-    if is_ambiguous and last_q and last_a:
-        # Context wrapper for easy debug
-        return (
-            f"---context start---\n"
-            f"Previous question: {last_q}\n"
-            f"Previous answer: {last_a}\n"
-            f"---context end---\n"
-            f"User follow-up: {user_question}"
-        )
-    return user_question
