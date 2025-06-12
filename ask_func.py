@@ -1,4 +1,3 @@
-# 26b
 import os
 import io
 import re
@@ -58,7 +57,7 @@ CONFIG = {
     "TARGET_FOLDER_PATH": "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
 }
 
-USE_LLM_FALLBACK = True  # ⬅ Set to False to disable fallback
+USE_LLM_FALLBACK = False  # ⬅ Set to False to disable fallback
 
 # ── Feature flag ──────────────────────────────────────────
 # If True  → Tool-2 (Python path) will ALWAYS be executed
@@ -387,34 +386,6 @@ def call_llm_aux(system_prompt, user_prompt, max_tokens=300, temperature=0.0):
             return f"LLM Error: {e}"
     return "LLM Error: exceeded aux model rate limit"
 
-def rephrase_question_with_history(user_question, recent_history):
-    """
-    Calls the small LLM to rephrase/expand the user question using last 3 exchanges.
-    Returns a single improved question string.
-    """
-    # Compose the last 3 Q/A pairs as context (if available)
-    last_qas = []
-    for entry in reversed(recent_history or []):
-        if entry.startswith("User: ") or entry.startswith("Assistant: "):
-            last_qas.insert(0, entry)
-        if len(last_qas) >= 6:  # 3 Q/A pairs = 6 entries
-            break
-    context = "\n".join(last_qas)
-    
-    system_prompt = (
-        "You are an expert at rewriting user questions for search. "
-        "Given the recent conversation, rewrite the latest user question as a complete, unambiguous question. "
-        "If the latest message is already standalone, just repeat it. "
-        "Return ONLY the rewritten question. Do NOT include any explanations or extra words."
-    )
-    user_prompt = (
-        f"Recent history:\n{context}\n\n"
-        f"Latest user question:\n{user_question}\n\n"
-        "Rewritten standalone question:"
-    )
-    rewritten = call_llm_aux(system_prompt, user_prompt, max_tokens=100, temperature=0.0)
-    # Clean up, return as a single string (no list, no bullets)
-    return rewritten.strip().split("\n")[0]
 
 #######################################################################################
 #                   COMBINED TEXT CLEANING (Point #2 Optimization)
@@ -1588,18 +1559,17 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     run_tool_1  = True
     run_tool_2  = ALWAYS_RUN_TOOL2 or question_needs_tables
 
-    # For Tool-1, always rephrase/expand the question using LLM and recent history
-    prepped_for_index = rephrase_question_with_history(user_question, recent_history)
-    prepped_for_python = user_question  # Don't change Tool-2 input!
+    # --- Context injection for ambiguous/follow-up questions ---
+    prepped_question = preprocess_question(user_question, recent_history)
 
     tool2_future = None
     if run_tool_2:
-        tool2_future = _run_tool2_async(prepped_for_python, user_tier, recent_history)
+        tool2_future = _run_tool2_async(prepped_question, user_tier, recent_history)
 
     if run_tool_1:
         logging.info("Running Tool 1 (Index Search)...")
         index_dict = tool_1_index_search(
-            prepped_for_index,   # <--- PATCHED LINE!
+            prepped_question,
             top_k=5,
             user_tier=user_tier,
             question_primarily_tabular=question_needs_tables
@@ -1896,3 +1866,47 @@ _tool2_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 def _run_tool2_async(q, user_tier, rhist):
     return _tool2_executor.submit(tool_2_code_run,
                                   q, user_tier=user_tier, recent_history=rhist)
+
+# Add preprocess_question helper after imports
+
+def preprocess_question(user_question, recent_history):
+    import re
+    ambiguous_patterns = [
+        r'^(yes|no|okay|ok|please|this|that|now|sure|go on|continue|and|what else|how about|can you|do you|is it|are there|why|how did|explain|list|show|give me)\b',
+        r'^\s*[.?!]+\s*$',  # Just punctuation
+    ]
+    uq = user_question.strip().lower()
+    is_ambiguous = False
+
+    # Triggers
+    for pat in ambiguous_patterns:
+        if re.match(pat, uq):
+            is_ambiguous = True
+            break
+    if len(uq.split()) < 3:  # single-word/short replies
+        is_ambiguous = True
+
+    # Avoid double context
+    if "previous question:" in uq or "user follow-up:" in uq:
+        return user_question
+
+    # Find last Q/A
+    last_q, last_a = "", ""
+    for entry in reversed(recent_history or []):
+        if entry.startswith("Assistant: ") and not last_a:
+            last_a = entry[11:]
+        elif entry.startswith("User: ") and not last_q:
+            last_q = entry[6:]
+        if last_q and last_a:
+            break
+
+    if is_ambiguous and last_q and last_a:
+        # Context wrapper for easy debug
+        return (
+            f"---context start---\n"
+            f"Previous question: {last_q}\n"
+            f"Previous answer: {last_a}\n"
+            f"---context end---\n"
+            f"User follow-up: {user_question}"
+        )
+    return user_question
