@@ -23,6 +23,7 @@ app = Flask(__name__)
 
 # ======== TOP-LEVEL SWITCH ========
 RENDER_MODE = "markdown"  # "markdown" or "adaptivecard"
+SHOW_REFERENCES = True   # <---- FLIP to False to HIDE all sources/files/tables from user answers
 # ==================================
 
 MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
@@ -226,7 +227,7 @@ def extract_source_info(user_message, ask_func):
 def clean_main_answer(answer_text: str) -> str:
     """
     • Converts any JSON-structured answer into pure markdown (as before).
-    • Then strips *all* inline “Source: …” lines, whatever their casing or markdown
+    • Then strips *all* inline "Source: ..." lines, whatever their casing or markdown
       decorations:
         - plain text        →  Source: Python
         - bold/italic       →  **Source:** Index & Python
@@ -245,12 +246,12 @@ def clean_main_answer(answer_text: str) -> str:
         except Exception:
             pass
 
-    # ---------- universal “Source:” scrubber ----------
+    # ---------- universal "Source:" scrubber ----------
     src_pattern = re.compile(
         r"""(?ix)            # ignore-case & verbose
         ^\s*                 #   optional leading white-space
         (?:[-*]\s*)?         #   optional markdown bullet (-,*,—) plus space
-        \**\s*source\s*:.*$  #   optional **, then “source: …” to end of line
+        \**\s*source\s*:.*$  #   optional **, then "source: ..." to end of line
         """)
     lines = cleaned.splitlines()
     lines = [ln for ln in lines if not src_pattern.match(ln)]
@@ -349,14 +350,15 @@ async def _bot_logic(turn_context: TurnContext):
 
         if RENDER_MODE == "markdown":
             markdown = main_answer
-            sections = []
-            if source in ("Index", "Index & Python") and file_names:
-                sections.append("**Referenced:**\n" + "\n".join(f"- {f}" for f in file_names))
-            if source in ("Python", "Index & Python") and table_names:
-                sections.append("**Calculated using:**\n" + "\n".join(f"- {t}" for t in table_names))
-            sections.append(f"**Source:** {source}")
-            if sections:
-                markdown += "\n\n" + "\n\n".join(sections)
+            if SHOW_REFERENCES:
+                sections = []
+                if source in ("Index", "Index & Python") and file_names:
+                    sections.append("**Referenced:**\n" + "\n".join(f"- {f}" for f in file_names))
+                if source in ("Python", "Index & Python") and table_names:
+                    sections.append("**Calculated using:**\n" + "\n".join(f"- {t}" for t in table_names))
+                sections.append(f"**Source:** {source}")
+                if sections:
+                    markdown += "\n\n" + "\n\n".join(sections)
             await turn_context.send_activity(Activity(type="message", text=markdown))
             return
 
@@ -479,119 +481,129 @@ async def _bot_logic(turn_context: TurnContext):
                 "version": "1.5"
             }
         else:
-            # --- Build the source container (only relevant sections, always inside the button) ---
-            source_container = {
-                "type": "Container",
-                "id": "sourceContainer",
-                "isVisible": False,
-                "style": "emphasis",
-                "bleed": True,
-                "maxHeight": "500px",
-                "isScrollable": True,
-                "items": []
-            }
-            if source in ("Index", "Index & Python"):
-                source_container["items"].append({
-                    "type": "TextBlock",
-                    "text": "Referenced:",
-                    "weight": "Bolder",
-                    "spacing": "Small",
-                    "wrap": True
-                })
-                if file_names:
-                    for fname in file_names:
-                        url = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
-                        source_container["items"].append({
-                            "type": "TextBlock",
-                            "text": f"[{fname}]({url})",
-                            "wrap": True,
-                            "color": "Accent"
-                        })
-                else:
+            # --- Build the Adaptive Card body ---
+            if SHOW_REFERENCES:
+                # (full logic as before)
+                source_container = {
+                    "type": "Container",
+                    "id": "sourceContainer",
+                    "isVisible": False,
+                    "style": "emphasis",
+                    "bleed": True,
+                    "maxHeight": "500px",
+                    "isScrollable": True,
+                    "items": []
+                }
+                if source in ("Index", "Index & Python"):
                     source_container["items"].append({
                         "type": "TextBlock",
-                        "text": "(None)",
+                        "text": "Referenced:",
+                        "weight": "Bolder",
+                        "spacing": "Small",
                         "wrap": True
                     })
-            if source in ("Python", "Index & Python"):
-                source_container["items"].append({
-                    "type": "TextBlock",
-                    "text": "Calculated using:",
-                    "weight": "Bolder",
-                    "spacing": "Small",
-                    "wrap": True
-                })
-                if table_names:
-                    for tname in table_names:
-                        url = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
+                    if file_names:
+                        for fname in file_names:
+                            url = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
+                            source_container["items"].append({
+                                "type": "TextBlock",
+                                "text": f"[{fname}]({url})",
+                                "wrap": True,
+                                "color": "Accent"
+                            })
+                    else:
                         source_container["items"].append({
                             "type": "TextBlock",
-                            "text": f"[{tname}]({url})",
-                            "wrap": True,
-                            "color": "Accent"
+                            "text": "(None)",
+                            "wrap": True
                         })
-                else:
+                if source in ("Python", "Index & Python"):
                     source_container["items"].append({
                         "type": "TextBlock",
-                        "text": "(None)",
+                        "text": "Calculated using:",
+                        "weight": "Bolder",
+                        "spacing": "Small",
                         "wrap": True
                     })
-            source_container["items"].append({
-                "type": "TextBlock",
-                "text": f"Source: {source or '(Unknown)'}",
-                "weight": "Bolder",
-                "color": "Accent",
-                "spacing": "Medium",
-            })
+                    if table_names:
+                        for tname in table_names:
+                            url = "https://dgda.sharepoint.com/sites/CXQAData/SitePages/CollabHome.aspx?sw=auth"
+                            source_container["items"].append({
+                                "type": "TextBlock",
+                                "text": f"[{tname}]({url})",
+                                "wrap": True,
+                                "color": "Accent"
+                            })
+                    else:
+                        source_container["items"].append({
+                            "type": "TextBlock",
+                            "text": "(None)",
+                            "wrap": True
+                        })
+                source_container["items"].append({
+                    "type": "TextBlock",
+                    "text": f"Source: {source or '(Unknown)'}",
+                    "weight": "Bolder",
+                    "color": "Accent",
+                    "spacing": "Medium",
+                })
 
-            # --- Show/Hide Source toggle ---
-            show_hide_buttons = {
-                "type": "ColumnSet",
-                "columns": [
-                    {
-                        "type": "Column",
-                        "id": "showSourceBtn",
-                        "isVisible": True,
-                        "items": [
-                            {
-                                "type": "ActionSet",
-                                "actions": [
-                                    {
-                                        "type": "Action.ToggleVisibility",
-                                        "title": "Show Source",
-                                        "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        "type": "Column",
-                        "id": "hideSourceBtn",
-                        "isVisible": False,
-                        "items": [
-                            {
-                                "type": "ActionSet",
-                                "actions": [
-                                    {
-                                        "type": "Action.ToggleVisibility",
-                                        "title": "Hide Source",
-                                        "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                ]
-            }
+                # --- Show/Hide Source toggle ---
+                show_hide_buttons = {
+                    "type": "ColumnSet",
+                    "columns": [
+                        {
+                            "type": "Column",
+                            "id": "showSourceBtn",
+                            "isVisible": True,
+                            "items": [
+                                {
+                                    "type": "ActionSet",
+                                    "actions": [
+                                        {
+                                            "type": "Action.ToggleVisibility",
+                                            "title": "Show Source",
+                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
+                                        }
+                                    ]
+                                }
+                            ]
+                        },
+                        {
+                            "type": "Column",
+                            "id": "hideSourceBtn",
+                            "isVisible": False,
+                            "items": [
+                                {
+                                    "type": "ActionSet",
+                                    "actions": [
+                                        {
+                                            "type": "Action.ToggleVisibility",
+                                            "title": "Hide Source",
+                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
 
-            # --- Assemble the Adaptive Card body ---
-            adaptive_card = {
-                "type": "AdaptiveCard",
-                "body": body_blocks + [source_container, show_hide_buttons],
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "version": "1.5"
-            }
+                adaptive_card = {
+                    "type": "AdaptiveCard",
+                    "body": body_blocks + [source_container, show_hide_buttons],
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "version": "1.5"
+                }
+            else:
+                # HIDE all source and reference info: just show the body blocks (main answer only)
+                adaptive_card = {
+                    "type": "AdaptiveCard",
+                    "body": body_blocks,
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "version": "1.5"
+                }
+
         if not adaptive_card_size_ok(adaptive_card):
             adaptive_card = make_fallback_card()
 
