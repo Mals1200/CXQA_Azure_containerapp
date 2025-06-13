@@ -524,6 +524,18 @@ def references_tabular_data(question, tables_text):
         logging.info(f"[Table-Need] '{question[:60]}' → YES (regex)")
         return True
     # ------------------------------------------------------
+    # --- [CONTEXT ROBUSTNESS] Extract only table names for the classifier ---
+    table_names_only = []
+    for line in tables_text.splitlines():
+        if ".xlsx" in line or ".csv" in line:
+            if '"' in line:
+                name = line.split('"')[1]
+                table_names_only.append(name)
+            else:
+                name = line.strip().split(':')[0].strip()
+                table_names_only.append(name)
+    available_tables_short = "\n".join(table_names_only) if table_names_only else "[No table names found]"
+    # ------------------------------------------------------
     llm_system_message = (
         "You are a strict YES/NO classifier. Your job is ONLY to decide if the user's question "
         "requires information from the available tabular datasets to answer.\n"
@@ -535,7 +547,7 @@ def references_tabular_data(question, tables_text):
     {question}
     
     Available Tables:
-    {tables_text}
+    {available_tables_short}
 
     Decision Rules:
     1. Reply 'YES' ONLY if the question explicitly asks for numerical facts, figures, statistics, totals, direct calculations from table columns, or specific record lookups that are clearly obtainable from the structured datasets listed in Available Tables.
