@@ -1802,11 +1802,6 @@ def Ask_Question(question, user_id="anonymous"):
             yield "The chat has been restarted."
             return
 
-                # Handle "restart chat" command
-        if question_lower in ("", " ", "  ", "   ", "   "):
-
-            yield ""
-            return
 
         # Add user question to chat history
         chat_history.append(f"User: {question}")
