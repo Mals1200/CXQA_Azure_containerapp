@@ -23,7 +23,7 @@ app = Flask(__name__)
 
 # ======== TOP-LEVEL SWITCH ========
 RENDER_MODE = "markdown"  # "markdown" or "adaptivecard"
-SHOW_REFERENCES = False   # <---- FLIP to False to HIDE all sources/files/tables from user answers
+SHOW_REFERENCES = True   # <---- FLIP to False to HIDE all sources/files/tables from user answers
 # ==================================
 
 MICROSOFT_APP_ID = os.environ.get("MICROSOFT_APP_ID", "")
