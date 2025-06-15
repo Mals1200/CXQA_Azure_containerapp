@@ -1,5 +1,5 @@
-# version 12e
-# the source: AI Generated when on greetings/restart is now gone
+# version 12f
+# Added a switch to enable/disable the references/source display
 
 import os
 import asyncio
