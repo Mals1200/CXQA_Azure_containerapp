@@ -1780,19 +1780,28 @@ def Ask_Question(question, user_id="anonymous"):
             try:
                 from Export_Agent import Call_Export
                 chat_history.append(f"User: {question}")
-                for message in Call_Export(
+                export_result = Call_Export(
                     latest_question=question,
                     latest_answer=chat_history[-1] if chat_history else "",
                     chat_history=chat_history,
                     instructions=question[6:].strip()
-                ):
-                    yield message
+                )
+                # Robust handling: If result is str, yield it. If it is iterable (e.g., generator), yield from it.
+                if isinstance(export_result, str):
+                    yield export_result
+                elif hasattr(export_result, '__iter__') and not isinstance(export_result, dict):
+                    for message in export_result:
+                        yield message
+                else:
+                    # Defensive fallback for unknown types
+                    yield str(export_result)
                 return
             except Exception as e:
                 error_msg = f"Error in export processing: {str(e)}"
                 logging.error(error_msg)
                 yield error_msg
                 return
+
 
         # Handle "restart chat" command
         if question_lower in ("restart", "restart chat", "restartchat", "chat restart", "chatrestart"):
