@@ -1,0 +1,44 @@
+name: Trigger auto deployment for cxqacontainerapp
+
+# When this action will be executed
+on:
+  # Automatically trigger it when detected changes in repo
+  push:
+    branches: 
+      [ main ]
+    paths:
+    - '**'
+    - '.github/workflows/cxqacontainerapp-AutoDeployTrigger-eb09f0cb-ae29-4eec-9e77-a4130cf58a08.yml'
+
+  # Allow manual trigger 
+  workflow_dispatch:
+      
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout to the branch
+        uses: actions/checkout@v2
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.CXQACONTAINERAPP_AZURE_CREDENTIALS }}
+
+      - name: Build and push container image to registry
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          appSourcePath: ${{ github.workspace }}
+          _dockerfilePathKey_: _dockerfilePath_
+          registryUrl: cxqacontaineracr.azurecr.io
+          registryUsername: ${{ secrets.CXQACONTAINERAPP_REGISTRY_USERNAME }}
+          registryPassword: ${{ secrets.CXQACONTAINERAPP_REGISTRY_PASSWORD }}
+          containerAppName: cxqacontainerapp
+          resourceGroup: cxqa_resource_group
+          imageToBuild: cxqacontaineracr.azurecr.io/cxqacontainerapp:${{ github.sha }}
+          
+            
+
+     
+
