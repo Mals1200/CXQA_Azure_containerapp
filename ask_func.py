@@ -64,7 +64,7 @@ USE_LLM_FALLBACK = True  # ⬅ Set to False to disable fallback
 #            for every user question, in parallel with Tool-1.
 # If False → Behaviour reverts to the existing "smart classifier" logic.
 ALWAYS_RUN_TOOL2 = True      # ⬅ flip to False to disable
-DEFAULT_USER_TIER = 2        # ⬅ base tier for users not in User_rbac.xlsx
+DEFAULT_USER_TIER = 1        # ⬅ base tier for users not in User_rbac.xlsx
 
 #######################################################################################
 # (3) KSA DATE HELPER (cached, resets 12:01 AM KSA time)
@@ -1580,9 +1580,9 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     user_question_stripped = user_question.strip()
     if is_entirely_greeting_or_punc(user_question_stripped):
         if len(chat_history) < 4:
-            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'."
+            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements.\n- Please remember do not share any personal, secret, or top-secret information, during our conversation."
         else:
-            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'."
+            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements.\n- Please remember do not share any personal, secret, or top-secret information, during our conversation."
         return
 
     cache_key = user_question_stripped.lower()
