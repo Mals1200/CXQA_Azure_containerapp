@@ -904,6 +904,11 @@ Todays date (dd/mm/yyyy):
     #print(f"DEBUG: Extracted table_names: {table_names}")
     #This line was changed to include only the tables needed
     execution_result = execute_generated_code(code_str, required_tables=table_names) # Pass table_names
+    
+    # 🔧 NEW: if nothing meaningful, act as if Tool-2 never ran
+    if _python_output_is_empty(execution_result):
+        return {"result": "No information", "code": "", "table_names": []}
+    
     return {"result": execution_result, "code": code_str, "table_names": table_names}
 
 def execute_generated_code(code_str, required_tables=None):
@@ -1034,7 +1039,12 @@ def execute_generated_code(code_str, required_tables=None):
             exec(code_modified, {"pd": pd, "datetime": datetime}, local_vars)
 
         output = output_buffer.getvalue().strip()
-        return output if output else "Execution completed with no output."
+
+        # 🔧 NEW: standardise useless results
+        if _python_output_is_empty(output):
+            return "No information"
+
+        return output
 
     except Exception as exec_error:
         err_msg = f"An error occurred during code execution: {exec_error}"
@@ -1907,3 +1917,28 @@ _tool2_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 def _run_tool2_async(q, user_tier, rhist):
     return _tool2_executor.submit(tool_2_code_run,
                                   q, user_tier=user_tier, recent_history=rhist)
+
+# ── put this with the other small utilities ─────────────────────────
+def _python_output_is_empty(text: str) -> bool:
+    """
+    Return True if the execution output carries no real information:
+        • empty / whitespace
+        • generic 'execution completed with no output' line
+        • any line that starts with 'error:' / 'an error occurred'
+        • Tool-2's generic failure sentence
+    All checks are case-insensitive.
+    """
+    if not text or not text.strip():
+        return True
+    t = text.strip().lower()
+    useless = {
+        "execution completed with no output.",
+        "execution completed with no output",
+        "no output",
+        "the data exists, but automatic code generation failed. please try again later.",
+    }
+    if t in useless:
+        return True
+    if t.startswith("an error occurred") or t.startswith("error:"):
+        return True
+    return False
