@@ -1,5 +1,5 @@
-# version 12e
-# the source: AI Generated when on greetings/restart is now gone 
+# version 12f
+# Added a switch to enable/disable the references/source display
 
 import os
 import asyncio
@@ -280,22 +280,16 @@ def clean_main_answer(answer_text: str) -> str:
 #     lines = [l for l in lines if not re.match(r"(?i)\s*\**source:", l)]
 #     return "\n".join(lines).strip()
 
-def is_special_response(answer_text: str) -> bool:
+def is_special_response(answer_text):
     text = answer_text.strip().lower()
-
-    # ----- GREETINGS -----            ▼ added two broader heuristics
-    is_greeting = (
-        text.startswith("hello")                       # "hello", "helloooo", "hello!"
-        or text.startswith("hi")
-        or "i'm the cxqa ai assistant" in text         # covers "Helloooo! I'm the CXQA AI Assistant…"
-    )
-
-    return (
-        is_greeting
-        or text.startswith("the chat has been restarted.")
-        or text.startswith("export")
-        or text.startswith("here is your generated")
-    )
+    if text.startswith("hello! i'm the cxqa ai assistant") or text.startswith("hello! how may i assist you"):
+        return True
+    if text.startswith("the chat has been restarted."):
+        return True
+    # Export detection: if the user message starts with 'export' or the answer looks like an export agent response
+    if text.startswith("export") or text.startswith("here is your generated"):
+        return True
+    return False
 
 def strip_trailing_source(answer_text):
     import re
@@ -630,7 +624,3 @@ async def _bot_logic(turn_context: TurnContext):
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=80)
-
-
-    # version 12f
-# Added a switch to enable/disable the references/source display
