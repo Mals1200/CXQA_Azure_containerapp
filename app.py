@@ -1,5 +1,5 @@
-    # version 12g
-# Removed the output "AI Generated" when sending an empty string. which happens on the first message as an automated pst on teams.
+# version 12f
+# Added a switch to enable/disable the references/source display
 
 import os
 import asyncio
@@ -223,7 +223,17 @@ def extract_source_info(user_message, ask_func):
         source = "AI Generated"
     return file_names, table_names, source
 
+
 def clean_main_answer(answer_text: str) -> str:
+    """
+    • Converts any JSON-structured answer into pure markdown (as before).
+    • Then strips *all* inline "Source: ..." lines, whatever their casing or markdown
+      decorations:
+        - plain text        →  Source: Python
+        - bold/italic       →  **Source:** Index & Python
+        - list bullets      →  - **Source:** AI Generated
+    """
+    # ---------- JSON ➜ markdown (unchanged) ----------
     cleaned = answer_text.strip()
     if cleaned.startswith("{") and '"content"' in cleaned:
         try:
@@ -235,6 +245,8 @@ def clean_main_answer(answer_text: str) -> str:
                 cleaned = "\n\n".join(md_blocks).strip()
         except Exception:
             pass
+
+    # ---------- universal "Source:" scrubber ----------
     src_pattern = re.compile(
         r"""(?ix)            # ignore-case & verbose
         ^\s*                 #   optional leading white-space
@@ -245,12 +257,36 @@ def clean_main_answer(answer_text: str) -> str:
     lines = [ln for ln in lines if not src_pattern.match(ln)]
     return "\n".join(lines).strip()
 
+# (old) (1dfre)
+# def clean_main_answer(answer_text):
+#     # If answer_text is a JSON string with "content", extract the text fields as markdown
+#     cleaned = answer_text.strip()
+#     if cleaned.startswith("{") and '"content"' in cleaned:
+#         try:
+#             response_json = json.loads(cleaned)
+#             if isinstance(response_json, dict) and "content" in response_json:
+#                 md_lines = []
+#                 for block in response_json["content"]:
+#                     if isinstance(block, dict):
+#                         text_val = block.get("text", "").strip()
+#                         if text_val:
+#                             md_lines.append(text_val)
+#                 markdown_answer = "\n\n".join(md_lines).strip()
+#                 return markdown_answer
+#         except Exception:
+#             pass
+#     # Remove any line at the end starting with "Source:"
+#     lines = answer_text.strip().split('\n')
+#     lines = [l for l in lines if not re.match(r"(?i)\s*\**source:", l)]
+#     return "\n".join(lines).strip()
+
 def is_special_response(answer_text):
     text = answer_text.strip().lower()
     if text.startswith("hello! i'm the cxqa ai assistant") or text.startswith("hello! how may i assist you"):
         return True
     if text.startswith("the chat has been restarted."):
         return True
+    # Export detection: if the user message starts with 'export' or the answer looks like an export agent response
     if text.startswith("export") or text.startswith("here is your generated"):
         return True
     return False
@@ -271,12 +307,6 @@ async def _bot_logic(turn_context: TurnContext):
     ask_func.tool_cache = state['cache']
 
     user_message = turn_context.activity.text or ""
-    
-    # -------------- PATCH START ---------------
-    # Robustly ignore all-empty or whitespace-only user messages (NO reply)
-    if not user_message or not user_message.strip():
-        return
-    # -------------- PATCH END -----------------
 
     user_id = "anonymous"
     try:
@@ -300,6 +330,7 @@ async def _bot_logic(turn_context: TurnContext):
         state['history'] = ask_func.chat_history
         state['cache'] = ask_func.tool_cache
 
+        # --- NEW: Detect greeting/restart/export and bypass source logic ---
         if is_special_response(answer_text):
             clean_text = strip_trailing_source(answer_text)
             await turn_context.send_activity(Activity(type="message", text=clean_text))
@@ -307,6 +338,15 @@ async def _bot_logic(turn_context: TurnContext):
 
         file_names, table_names, source = extract_source_info(user_message, ask_func)
         main_answer = clean_main_answer(answer_text)
+
+        # with old section commented above (1dfre)
+        # section_list = main_answer.split("\n")
+        # for i, sec in enumerate(section_list):
+        #     if "Source:" in sec and "Index" in sec:
+        #         del section_list[i]
+        #         break
+
+        # main_answer = "\n".join(section_list)
 
         if RENDER_MODE == "markdown":
             markdown = main_answer
@@ -343,6 +383,7 @@ async def _bot_logic(turn_context: TurnContext):
         is_export = main_answer.strip().lower().startswith("here is your generated")
         export_url = export_link_match.group(0) if export_link_match else None
         if export_url and not is_export:
+            # Insert a "Download File" button at the TOP of the card body for non-export
             main_answer = main_answer.replace(export_url, '').strip()
             body_blocks.insert(0, {
                 "type": "ActionSet",
@@ -366,6 +407,7 @@ async def _bot_logic(turn_context: TurnContext):
                     "fontType": "Default",
                     "size": "Default"
                 })
+            # Render header
             body_blocks.append({
                 "type": "ColumnSet",
                 "columns": [
@@ -382,6 +424,7 @@ async def _bot_logic(turn_context: TurnContext):
                     } for h in table_header
                 ]
             })
+            # Render rows
             for row in table_rows:
                 body_blocks.append({
                     "type": "ColumnSet",
@@ -398,6 +441,7 @@ async def _bot_logic(turn_context: TurnContext):
                         } for c in row
                     ]
                 })
+            # Add any text after the table (e.g., notes)
             if table_lines:
                 after_table = main_answer.split(table_lines[-1])[-1].strip()
                 if after_table:
@@ -419,6 +463,7 @@ async def _bot_logic(turn_context: TurnContext):
                 })
 
         if is_export and export_url:
+            # For export responses, put the Download button at the bottom and omit source/show source
             body_blocks.append({
                 "type": "ActionSet",
                 "actions": [
@@ -436,7 +481,9 @@ async def _bot_logic(turn_context: TurnContext):
                 "version": "1.5"
             }
         else:
+            # --- Build the Adaptive Card body ---
             if SHOW_REFERENCES:
+                # (full logic as before)
                 source_container = {
                     "type": "Container",
                     "id": "sourceContainer",
@@ -500,6 +547,8 @@ async def _bot_logic(turn_context: TurnContext):
                     "color": "Accent",
                     "spacing": "Medium",
                 })
+
+                # --- Show/Hide Source toggle ---
                 show_hide_buttons = {
                     "type": "ColumnSet",
                     "columns": [
@@ -524,4 +573,54 @@ async def _bot_logic(turn_context: TurnContext):
                             "type": "Column",
                             "id": "hideSourceBtn",
                             "isVisible": False,
-                            "
+                            "items": [
+                                {
+                                    "type": "ActionSet",
+                                    "actions": [
+                                        {
+                                            "type": "Action.ToggleVisibility",
+                                            "title": "Hide Source",
+                                            "targetElements": ["sourceContainer", "showSourceBtn", "hideSourceBtn"]
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+
+                adaptive_card = {
+                    "type": "AdaptiveCard",
+                    "body": body_blocks + [source_container, show_hide_buttons],
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "version": "1.5"
+                }
+            else:
+                # HIDE all source and reference info: just show the body blocks (main answer only)
+                adaptive_card = {
+                    "type": "AdaptiveCard",
+                    "body": body_blocks,
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "version": "1.5"
+                }
+
+        if not adaptive_card_size_ok(adaptive_card):
+            adaptive_card = make_fallback_card()
+
+        message = Activity(
+            type="message",
+            attachments=[{
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": adaptive_card
+            }]
+        )
+        await turn_context.send_activity(message)
+        return
+
+    except Exception as e:
+        error_message = f"An error occurred while processing your request: {str(e)}"
+        print(f"Error in bot logic: {e}")
+        await turn_context.send_activity(Activity(type="message", text=error_message))
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=80)
