@@ -715,17 +715,20 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_
             #print("DEBUG: [Tool 1] No documents remaining after RBAC/Relevance filtering.")
             return {"top_k": "No information", "file_names": []}
 
-        # Weighted scoring (Keep as is)
-        for doc in relevant_docs:
-            ttl = doc["title"].lower()
-            score = 0
-            if "policy" in ttl: score += 10
-            if "report" in ttl: score += 5
-            if "sop" in ttl: score += 3
-            doc["weight_score"] = score
+        # Weighted scoring (switch to use)
+        # for doc in relevant_docs:
+        #     ttl = doc["title"].lower()
+        #     score = 0
+        #     if "policy" in ttl: score += 10
+        #     if "report" in ttl: score += 5
+        #     if "sop" in ttl: score += 3
+        #     doc["weight_score"] = score
 
-        docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
-        docs_top_k = docs_sorted[:top_k]
+        # docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
+        # docs_top_k = docs_sorted[:top_k]
+
+        # if no weighted: use natural order or keep all results
+        docs_top_k = relevant_docs[:top_k]
 
         # Extract file names and texts separately - ensure no duplicates
         # Corrected this logic slightly from previous thought
