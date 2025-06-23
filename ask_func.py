@@ -1404,14 +1404,12 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
         
         src_idx = final_text.lower().find("source:")
         if src_idx >= 0:
-            eol = final_text.find("\n", src_idx)
-            if eol < 0: eol = len(final_text)
-            prefix, suffix = final_text[:eol], final_text[eol:]
+            # -------------------- remove existing Source line completely -----------------
+            prefix = final_text[:src_idx].rstrip()        # <-- stop BEFORE "Source:"
+            # we throw away the old trailing part, then rebuild it
             file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
             table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
-            # Remove any additional Source: lines from suffix
-            suffix = re.sub(r"(?i)\n*source:.*", "", suffix)
-            final_text = prefix + file_info + table_info + "\nSource: Index & Python"
+            final_text = f"{prefix}{file_info}{table_info}\nSource: Index & Python"
         return final_text
 
     elif "source: python" in text_lower:
@@ -1419,13 +1417,10 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
         table_names = python_dict.get("table_names", [])
         src_idx = final_text.lower().find("source:")
         if src_idx >= 0:
-            eol = final_text.find("\n", src_idx)
-            if eol < 0: eol = len(final_text)
-            prefix, suffix = final_text[:eol], final_text[eol:]
+            # for "source: python"
+            prefix = final_text[:src_idx].rstrip()
             table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
-            # Remove any additional Source: lines from suffix
-            suffix = re.sub(r"(?i)\n*source:.*", "", suffix)
-            final_text = prefix + table_info + "\nSource: Python"
+            final_text = f"{prefix}{table_info}\nSource: Python"
         return final_text
 
     elif "source: index" in text_lower:
@@ -1433,13 +1428,10 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
         file_names = index_dict.get("file_names", [])
         src_idx = final_text.lower().find("source:")
         if src_idx >= 0:
-            eol = final_text.find("\n", src_idx)
-            if eol < 0: eol = len(final_text)
-            prefix, suffix = final_text[:eol], final_text[eol:]
+            # for "source: index & python"
+            prefix = final_text[:src_idx].rstrip()
             file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
-            # Remove any additional Source: lines from suffix
-            suffix = re.sub(r"(?i)\n*source:.*", "", suffix)
-            final_text = prefix + file_info + "\nSource: Index"
+            final_text = f"{prefix}{file_info}\nSource: Index"
         return final_text
 
     return final_text
