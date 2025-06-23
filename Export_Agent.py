@@ -2,7 +2,7 @@
 # call SOP has more efficient prompt & has a better layout:
     # The logo and art images are centered
     # Can manipulate the art image using ratios and scalinf
-    # The prompt is more effiecient and uses less tokens.
+    # The prompt is more effiecient and uses less tokens. 
 
 
 import re
