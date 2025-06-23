@@ -20,7 +20,7 @@ from collections import OrderedDict
 import difflib
 import time
 from rapidfuzz import process, fuzz
-import concurrent.futures     # std-lib, already available 
+import concurrent.futures     # std-lib, already available
 
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
@@ -904,6 +904,11 @@ Todays date (dd/mm/yyyy):
     #print(f"DEBUG: Extracted table_names: {table_names}")
     #This line was changed to include only the tables needed
     execution_result = execute_generated_code(code_str, required_tables=table_names) # Pass table_names
+    
+    # 🔧 NEW: if nothing meaningful, act as if Tool-2 never ran
+    if _python_output_is_empty(execution_result):
+        return {"result": "No information", "code": "", "table_names": []}
+    
     return {"result": execution_result, "code": code_str, "table_names": table_names}
 
 def execute_generated_code(code_str, required_tables=None):
@@ -1034,7 +1039,12 @@ def execute_generated_code(code_str, required_tables=None):
             exec(code_modified, {"pd": pd, "datetime": datetime}, local_vars)
 
         output = output_buffer.getvalue().strip()
-        return output if output else "Execution completed with no output."
+
+        # 🔧 NEW: standardise useless results
+        if _python_output_is_empty(output):
+            return "No information"
+
+        return output
 
     except Exception as exec_error:
         err_msg = f"An error occurred during code execution: {exec_error}"
@@ -1394,14 +1404,12 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
         
         src_idx = final_text.lower().find("source:")
         if src_idx >= 0:
-            eol = final_text.find("\n", src_idx)
-            if eol < 0: eol = len(final_text)
-            prefix, suffix = final_text[:eol], final_text[eol:]
+            # -------------------- remove existing Source line completely -----------------
+            prefix = final_text[:src_idx].rstrip()        # <-- stop BEFORE "Source:"
+            # we throw away the old trailing part, then rebuild it
             file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
             table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
-            # Remove any additional Source: lines from suffix
-            suffix = re.sub(r"(?i)\n*source:.*", "", suffix)
-            final_text = prefix + file_info + table_info + "\nSource: Index & Python"
+            final_text = f"{prefix}{file_info}{table_info}\nSource: Index & Python"
         return final_text
 
     elif "source: python" in text_lower:
@@ -1409,13 +1417,10 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
         table_names = python_dict.get("table_names", [])
         src_idx = final_text.lower().find("source:")
         if src_idx >= 0:
-            eol = final_text.find("\n", src_idx)
-            if eol < 0: eol = len(final_text)
-            prefix, suffix = final_text[:eol], final_text[eol:]
+            # for "source: python"
+            prefix = final_text[:src_idx].rstrip()
             table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
-            # Remove any additional Source: lines from suffix
-            suffix = re.sub(r"(?i)\n*source:.*", "", suffix)
-            final_text = prefix + table_info + "\nSource: Python"
+            final_text = f"{prefix}{table_info}\nSource: Python"
         return final_text
 
     elif "source: index" in text_lower:
@@ -1423,13 +1428,10 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
         file_names = index_dict.get("file_names", [])
         src_idx = final_text.lower().find("source:")
         if src_idx >= 0:
-            eol = final_text.find("\n", src_idx)
-            if eol < 0: eol = len(final_text)
-            prefix, suffix = final_text[:eol], final_text[eol:]
+            # for "source: index & python"
+            prefix = final_text[:src_idx].rstrip()
             file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
-            # Remove any additional Source: lines from suffix
-            suffix = re.sub(r"(?i)\n*source:.*", "", suffix)
-            final_text = prefix + file_info + "\nSource: Index"
+            final_text = f"{prefix}{file_info}\nSource: Index"
         return final_text
 
     return final_text
@@ -1580,9 +1582,9 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     user_question_stripped = user_question.strip()
     if is_entirely_greeting_or_punc(user_question_stripped):
         if len(chat_history) < 4:
-            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+            yield "Helloooo! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements.\n- Please remember do not share any personal, secret, or top-secret information, during our conversation."
         else:
-            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+            yield "Helloooo! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements.\n- Please remember do not share any personal, secret, or top-secret information, during our conversation."
         return
 
     cache_key = user_question_stripped.lower()
@@ -1907,3 +1909,28 @@ _tool2_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 def _run_tool2_async(q, user_tier, rhist):
     return _tool2_executor.submit(tool_2_code_run,
                                   q, user_tier=user_tier, recent_history=rhist)
+
+# ── put this with the other small utilities ─────────────────────────
+def _python_output_is_empty(text: str) -> bool:
+    """
+    Return True if the execution output carries no real information:
+        • empty / whitespace
+        • generic 'execution completed with no output' line
+        • any line that starts with 'error:' / 'an error occurred'
+        • Tool-2's generic failure sentence
+    All checks are case-insensitive.
+    """
+    if not text or not text.strip():
+        return True
+    t = text.strip().lower()
+    useless = {
+        "execution completed with no output.",
+        "execution completed with no output",
+        "no output",
+        "the data exists, but automatic code generation failed. please try again later.",
+    }
+    if t in useless:
+        return True
+    if t.startswith("an error occurred") or t.startswith("error:"):
+        return True
+    return False
