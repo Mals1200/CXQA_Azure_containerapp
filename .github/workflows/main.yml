@@ -50,7 +50,8 @@ jobs:
           az containerapp update \
             --resource-group cxqa_resource_group \
             --name cxqacontainerapp \
-            --image cxqacontaineracr.azurecr.io/cxqacontainerapp:${{ github.sha
+            --image cxqacontaineracr.azurecr.io/cxqacontainerapp:${{ github.sha }}
+
 
 
 
