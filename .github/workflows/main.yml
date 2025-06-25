@@ -1,41 +1,37 @@
 name: Build and Deploy to Azure Container Apps
-
 on:
-  push:            # rebuild on every commit to main
-    branches: [ main ]
-  workflow_dispatch:   # allow manual runs from the Actions tab
+  push: { branches: [ main ] }
+  workflow_dispatch:
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-
-    # allow OIDC-based login to Azure and ACR
     permissions:
-      id-token: write     # needed for azure/login
+      id-token: write    # <-- lets azure/login obtain an OIDC token
       contents: read
 
     steps:
-    # 1️⃣  Check out the repo
-    - name: Check out repository
+    - name: Check out repo
       uses: actions/checkout@v4
 
-    # 2️⃣  Sign in to Azure with the service principal stored in AZURE_CREDENTIALS
+    # 1️⃣  Sign in to Azure with the service-principal JSON in AZURE_CREDENTIALS
     - name: Azure login (OIDC)
       uses: azure/login@v1
       with:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-    # 3️⃣  Log in to **Azure Container Registry** (gives `docker` a push token)
-    - name: ACR login
-      uses: azure/docker-login@v1
+    # 2️⃣  Log in to ACR using that Azure context
+    - name: ACR login (az acr login)
+      uses: azure/cli@v2
       with:
-        login-server: cxqacontaineracr.azurecr.io
+        inlineScript: |
+          az acr login --name cxqacontaineracr
 
-    # 4️⃣  Set up Buildx
+    # 3️⃣  Set up Buildx
     - name: Set up Buildx
       uses: docker/setup-buildx-action@v3
 
-    # 5️⃣  Build the image and push to ACR (single-platform → no “0-byte” tags)
+    # 4️⃣  Build & push single-arch image (no 0-byte tags)
     - name: Build & push image
       uses: docker/build-push-action@v5
       with:
@@ -44,8 +40,8 @@ jobs:
         platforms: linux/amd64
         tags: cxqacontaineracr.azurecr.io/cxqacontainerapp:${{ github.sha }}
 
-    # 6️⃣  Deploy the new image to Container Apps
-    - name: Deploy to Azure Container Apps
+    # 5️⃣  Deploy that image to Container Apps
+    - name: Deploy to Container Apps
       uses: azure/cli@v2
       with:
         inlineScript: |
