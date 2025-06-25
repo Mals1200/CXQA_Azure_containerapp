@@ -1,62 +1,57 @@
-name: Build and Deploy cxqabotcontainerapp   # Shows in the Actions list
+name: Build & Deploy cxqabotcontainerapp  # <-- new container
 
 on:
   push:
-    branches:
-      - main              # Any push to main triggers a rollout
-  workflow_dispatch:       # Manual trigger button in Actions tab
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  ACR_LOGIN_SERVER: cxqacontaineracr.azurecr.io
+  IMAGE_REPO: cxqabotcontainerapp
+  RESOURCE_GROUP: cxqa_resource_group
+  CONTAINER_APP: cxqabotcontainerapp
+  IMAGE_TAG: ${{ github.sha }}
+  IMAGE_FULL: ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }}
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
-  build-and-deploy:
+  build-deploy:
     runs-on: ubuntu-latest
 
-    env:
-      # ---- reusable values -------------------------
-      ACR_NAME: cxqacontaineracr
-      ACR_LOGIN_SERVER: cxqacontaineracr.azurecr.io
-      IMAGE_REPO: cxqabotcontainerapp           # <─ NEW repo name inside ACR
-      RESOURCE_GROUP: cxqa_resource_group
-      CONTAINER_APP: cxqabotcontainerapp        # <─ NEW container-app name
-      IMAGE_TAG: ${{ github.sha }}              # Use commit SHA for traceability
-      IMAGE_FULL: ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }}
-      # ----------------------------------------------
-
     steps:
-    # 1) Check out your code
-    - name: Check out repository
+    # 1) Pull code
+    - name: Checkout
       uses: actions/checkout@v3
 
-    # 2) Azure login with Service Principal creds stored in AZURE_CREDENTIALS secret
+    # 2) Azure login (uses the NEW secret)
     - name: Azure login
       uses: azure/login@v1
       with:
-        creds: ${{ secrets.AZURE_CREDENTIALS }}
+        creds: ${{ secrets.AZURE_CREDENTIALS2 }}
 
-    # 3) Build the Docker image in ACR (no local Docker daemon needed) and push it
-    - name: Build & push image to ACR
+    # 3) Build & push image to ACR
+    - name: Build & push image
       run: |
         az acr build \
-          --registry $ACR_NAME \
-          --image $IMAGE_REPO:$IMAGE_TAG \
+          --registry ${{ env.ACR_LOGIN_SERVER }} \
+          --image ${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }} \
           .
 
-    # 4) (Re)configure the Container App to use that registry
-    - name: Configure Container App registry
-      run: |
-        az containerapp registry set \
-          --resource-group $RESOURCE_GROUP \
-          --name $CONTAINER_APP \
-          --server $ACR_LOGIN_SERVER \
-          --username ${{ secrets.ACR_USERNAME }} \
-          --password ${{ secrets.ACR_PASSWORD }}
+    # 4) Deploy that image to the Container App
+    - name: Deploy to Container Apps
+      uses: azure/container-apps-deploy@v1
+      with:
+        resourceGroup: ${{ env.RESOURCE_GROUP }}
+        containerAppName: ${{ env.CONTAINER_APP }}
+        imageToDeploy: ${{ env.IMAGE_FULL }}
+        registryUrl: ${{ env.ACR_LOGIN_SERVER }}
+        registryUsername: ${{ secrets.ACR_USERNAME2 }}
+        registryPassword: ${{ secrets.ACR_PASSWORD2 }}
 
-    # 5) Update the Container App to the newly-built image
-    - name: Deploy image to Azure Container App
-      run: |
-        az containerapp update \
-          --resource-group $RESOURCE_GROUP \
-          --name $CONTAINER_APP \
-          --image $IMAGE_FULL
+
 
 
 ################
