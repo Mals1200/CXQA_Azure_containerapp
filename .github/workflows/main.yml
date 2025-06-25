@@ -1,20 +1,20 @@
-name: Build & Deploy cxqabotcontainerapp   # uses the “2” secret set
+name: Build & Deploy cxqabotcontainerapp   # uses the “2” secrets
 
 # ───── Triggers ───────────────────────────────────────────────
 on:
   push:
-    branches: [ main ]      # deploy on every push to main
-  workflow_dispatch:        # add “Run workflow” button in Actions tab
+    branches: [ main ]            # deploy on every push to main
+  workflow_dispatch:              # manual “Run workflow” button
 
-# ───── Global constants ───────────────────────────────────────
+# ───── Global environment variables ───────────────────────────
 env:
-  ACR_LOGIN_SERVER: cxqacontaineracr.azurecr.io
-  IMAGE_REPO:        cxqabotcontainerapp
-  RESOURCE_GROUP:    cxqa_resource_group
-  CONTAINER_APP:     cxqabotcontainerapp
+  ACR_LOGIN_SERVER: cxqacontaineracr.azurecr.io   # <── your ACR
+  IMAGE_REPO:        cxqabotcontainerapp          # repo inside ACR
+  RESOURCE_GROUP:    cxqa_resource_group          # RG that has the app
+  CONTAINER_APP:     cxqabotcontainerapp          # target Container App
 
 permissions:
-  id-token: write          # required for azure/login
+  id-token: write
   contents:  read
 
 # ───── Job: build container → push → deploy ───────────────────
@@ -22,41 +22,39 @@ jobs:
   build-deploy:
     runs-on: ubuntu-latest
 
-    env:                   # anything that needs ${{ … }} must be inside this block
-      IMAGE_TAG: ${{ github.sha }}
-      IMAGE_FULL: ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }}
+    # Job-level env (may reference GitHub contexts but NOT other env vars)
+    env:
+      IMAGE_TAG:  ${{ github.sha }}               # tag = commit-SHA
 
     steps:
-      # 1 ▸ Pull repo
-      - name: Checkout repository
-        uses: actions/checkout@v3
+    # 1 ▸ Pull repo
+    - name: Checkout repository
+      uses: actions/checkout@v3
 
-      # 2 ▸ Azure login with the “2” secret
-      - name: Azure login
-        uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS2 }}
+    # 2 ▸ Azure login with the “…2” SP credentials
+    - name: Azure login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS2 }}
 
-      # 3 ▸ Build the image in ACR and push it
-      - name: Build & push image to ACR
-        run: |
-          az acr build \
-            --registry $ACR_LOGIN_SERVER \
-            --image    $IMAGE_REPO:$IMAGE_TAG \
-            .
+    # 3 ▸ Build & push image to ACR
+    - name: Build and push image
+      run: |
+        az acr build \
+          --registry $ACR_LOGIN_SERVER \
+          --image    $IMAGE_REPO:$IMAGE_TAG \
+          .
 
-      # 4 ▸ Deploy that image to the new Container App
-      - name: Deploy to Container App
-        uses: azure/container-apps-deploy@v1
-        with:
-          resourceGroup:     ${{ env.RESOURCE_GROUP }}
-          containerAppName:  ${{ env.CONTAINER_APP }}
-          imageToDeploy:     ${{ env.IMAGE_FULL }}
-          registryUrl:       ${{ env.ACR_LOGIN_SERVER }}
-          registryUsername:  ${{ secrets.ACR_USERNAME2 }}
-          registryPassword:  ${{ secrets.ACR_PASSWORD2 }}
-
-
+    # 4 ▸ Deploy that image to the new Container App
+    - name: Deploy to Container Apps
+      uses: azure/container-apps-deploy@v1
+      with:
+        resourceGroup:     ${{ env.RESOURCE_GROUP }}
+        containerAppName:  ${{ env.CONTAINER_APP }}
+        imageToDeploy:     ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }}
+        registryUrl:       ${{ env.ACR_LOGIN_SERVER }}
+        registryUsername:  ${{ secrets.ACR_USERNAME2 }}
+        registryPassword:  ${{ secrets.ACR_PASSWORD2 }}
 
 
 
