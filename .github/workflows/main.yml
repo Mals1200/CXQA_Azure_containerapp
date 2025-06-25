@@ -1,104 +1,55 @@
 name: Build and Deploy to Azure Container Apps
 
-# ---------- Triggers ----------
 on:
-  push:
-    branches: [ main ]          # change if your default branch is different
-  workflow_dispatch:            # allow manual runs from the Actions tab
+  push:            # rebuild on every commit to main
+    branches: [ main ]
+  workflow_dispatch:   # allow manual runs from the Actions tab
 
-# ---------- Jobs ----------
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
-    # Needed so the workflow can push to ACR with OIDC
+    # allow OIDC-based login to Azure and ACR
     permissions:
+      id-token: write     # needed for azure/login
       contents: read
-      id-token: write
 
     steps:
-    # 1️⃣  Check out repo
+    # 1️⃣  Check out the repo
     - name: Check out repository
       uses: actions/checkout@v4
 
-    # 2️⃣  Log in to Azure (service-principal creds stored in repo secrets)
-    - name: Log in to Azure
+    # 2️⃣  Sign in to Azure with the service principal stored in AZURE_CREDENTIALS
+    - name: Azure login (OIDC)
       uses: azure/login@v1
       with:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-    # 3️⃣  Set up Docker Buildx (enables build-and-push in one step)
-    - name: Set up Docker Buildx
+    # 3️⃣  Log in to **Azure Container Registry** (gives `docker` a push token)
+    - name: ACR login
+      uses: azure/docker-login@v1
+      with:
+        login-server: cxqacontaineracr.azurecr.io
+
+    # 4️⃣  Set up Buildx
+    - name: Set up Buildx
       uses: docker/setup-buildx-action@v3
 
-    # 4️⃣  Build **and** push the image to ACR
-    - name: Build & push image to ACR
+    # 5️⃣  Build the image and push to ACR (single-platform → no “0-byte” tags)
+    - name: Build & push image
       uses: docker/build-push-action@v5
       with:
         context: .
         push: true
+        platforms: linux/amd64
         tags: cxqacontaineracr.azurecr.io/cxqacontainerapp:${{ github.sha }}
-        platforms: linux/amd64        # prevents “empty manifest”/0-byte tags
-        provenance: false             # smaller manifest, optional
 
-    # 5️⃣  Deploy the image to Azure Container Apps
+    # 6️⃣  Deploy the new image to Container Apps
     - name: Deploy to Azure Container Apps
       uses: azure/cli@v2
       with:
-        azcliversion: 2.59.0          # pin for reproducibility
         inlineScript: |
           az containerapp update \
             --resource-group cxqa_resource_group \
             --name cxqacontainerapp \
             --image cxqacontaineracr.azurecr.io/cxqacontainerapp:${{ github.sha }}
-
-
-
-
-# name: Build and Deploy to Azure Container Apps
-
-# on:
-#   push:
-#     branches:
-#       - main  # If your default branch is different, update this.
-
-# jobs:
-#   build-and-deploy:
-#     runs-on: ubuntu-latest
-
-#     steps:
-#       # 1) Check out repository
-#       - name: Check out repository
-#         uses: actions/checkout@v3
-
-#       # 2) Log in to Azure
-#       - name: Log in to Azure
-#         uses: azure/login@v1
-#         with:
-#           creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-#       # 3) Build & push Docker image to ACR
-#       - name: Build and push Docker image
-#         run: |
-#           az acr build \
-#             --registry cxqacontaineracr \
-#             --image cxqacontainerapp:${{ github.sha }} \
-#             .
-
-#       # 4) Configure Container App to use ACR registry
-#       - name: Configure Container App registry
-#         run: |
-#           az containerapp registry set \
-#             --resource-group cxqa_resource_group \
-#             --name cxqacontainerapp \
-#             --server cxqacontaineracr.azurecr.io \
-#             --username ${{ secrets.ACR_USERNAME }} \
-#             --password ${{ secrets.ACR_PASSWORD }}
-
-#       # 5) Deploy the new image to Azure Container Apps..
-#       - name: Deploy to Azure Container Apps
-#         run: |
-#           az containerapp update \
-#             --resource-group cxqa_resource_group \
-#             --name cxqacontainerapp \
-#             --image cxqacontaineracr.azurecr.io/cxqacontainerapp:${{ github.sha }}
