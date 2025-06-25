@@ -1,47 +1,111 @@
-name: Build and Deploy to Azure Container Apps
+name: Build and Deploy cxqabotcontainerapp   # Shows in the Actions list
 
 on:
   push:
     branches:
-      - main   # If your default branch is different, update this. 
+      - main              # Any push to main triggers a rollout
+  workflow_dispatch:       # Manual trigger button in Actions tab
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
+    env:
+      # ---- reusable values -------------------------
+      ACR_NAME: cxqacontaineracr
+      ACR_LOGIN_SERVER: cxqacontaineracr.azurecr.io
+      IMAGE_REPO: cxqabotcontainerapp           # <─ NEW repo name inside ACR
+      RESOURCE_GROUP: cxqa_resource_group
+      CONTAINER_APP: cxqabotcontainerapp        # <─ NEW container-app name
+      IMAGE_TAG: ${{ github.sha }}              # Use commit SHA for traceability
+      IMAGE_FULL: ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }}
+      # ----------------------------------------------
+
     steps:
-      # 1) Check out repository
-      - name: Check out repository
-        uses: actions/checkout@v3
+    # 1) Check out your code
+    - name: Check out repository
+      uses: actions/checkout@v3
 
-      # 2) Log in to Azure
-      - name: Log in to Azure
-        uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+    # 2) Azure login with Service Principal creds stored in AZURE_CREDENTIALS secret
+    - name: Azure login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # 3) Build & push Docker image to ACR
-      - name: Build and push Docker image
-        run: |
-          az acr build \
-            --registry cxqacontaineracr \
-            --image cxqacontainerapp:${{ github.sha }} \
-            .
+    # 3) Build the Docker image in ACR (no local Docker daemon needed) and push it
+    - name: Build & push image to ACR
+      run: |
+        az acr build \
+          --registry $ACR_NAME \
+          --image $IMAGE_REPO:$IMAGE_TAG \
+          .
 
-      # 4) Configure Container App to use ACR registry
-      - name: Configure Container App registry
-        run: |
-          az containerapp registry set \
-            --resource-group cxqa_resource_group \
-            --name cxqacontainerapp \
-            --server cxqacontaineracr.azurecr.io \
-            --username ${{ secrets.ACR_USERNAME }} \
-            --password ${{ secrets.ACR_PASSWORD }}
+    # 4) (Re)configure the Container App to use that registry
+    - name: Configure Container App registry
+      run: |
+        az containerapp registry set \
+          --resource-group $RESOURCE_GROUP \
+          --name $CONTAINER_APP \
+          --server $ACR_LOGIN_SERVER \
+          --username ${{ secrets.ACR_USERNAME }} \
+          --password ${{ secrets.ACR_PASSWORD }}
 
-      # 5) Deploy the new image to Azure Container Apps..
-      - name: Deploy to Azure Container Apps
-        run: |
-          az containerapp update \
-            --resource-group cxqa_resource_group \
-            --name cxqacontainerapp \
-            --image cxqacontaineracr.azurecr.io/cxqacontainerapp:${{ github.sha }}
+    # 5) Update the Container App to the newly-built image
+    - name: Deploy image to Azure Container App
+      run: |
+        az containerapp update \
+          --resource-group $RESOURCE_GROUP \
+          --name $CONTAINER_APP \
+          --image $IMAGE_FULL
+
+
+################
+# Older container
+################
+# name: Build and Deploy to Azure Container Apps
+
+# on:
+#   push:
+#     branches:
+#       - main   # If your default branch is different, update this. 
+
+# jobs:
+#   build-and-deploy:
+#     runs-on: ubuntu-latest
+
+#     steps:
+#       # 1) Check out repository
+#       - name: Check out repository
+#         uses: actions/checkout@v3
+
+#       # 2) Log in to Azure
+#       - name: Log in to Azure
+#         uses: azure/login@v1
+#         with:
+#           creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+#       # 3) Build & push Docker image to ACR
+#       - name: Build and push Docker image
+#         run: |
+#           az acr build \
+#             --registry cxqacontaineracr \
+#             --image cxqacontainerapp:${{ github.sha }} \
+#             .
+
+#       # 4) Configure Container App to use ACR registry
+#       - name: Configure Container App registry
+#         run: |
+#           az containerapp registry set \
+#             --resource-group cxqa_resource_group \
+#             --name cxqacontainerapp \
+#             --server cxqacontaineracr.azurecr.io \
+#             --username ${{ secrets.ACR_USERNAME }} \
+#             --password ${{ secrets.ACR_PASSWORD }}
+
+#       # 5) Deploy the new image to Azure Container Apps..
+#       - name: Deploy to Azure Container Apps
+#         run: |
+#           az containerapp update \
+#             --resource-group cxqa_resource_group \
+#             --name cxqacontainerapp \
+#             --image cxqacontaineracr.azurecr.io/cxqacontainerapp:${{ github.sha }}
