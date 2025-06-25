@@ -1,4 +1,4 @@
-name: Build & Deploy cxqabotcontainerapp  # <-- new container
+name: Build & Deploy cxqabotcontainerapp   # uses the “2” secrets
 
 on:
   push:
@@ -20,36 +20,33 @@ permissions:
 jobs:
   build-deploy:
     runs-on: ubuntu-latest
-
     steps:
-    # 1) Pull code
-    - name: Checkout
-      uses: actions/checkout@v3
+      # 1 ▸ Pull your code
+      - uses: actions/checkout@v3
 
-    # 2) Azure login (uses the NEW secret)
-    - name: Azure login
-      uses: azure/login@v1
-      with:
-        creds: ${{ secrets.AZURE_CREDENTIALS2 }}
+      # 2 ▸ Azure login with the NEW secret
+      - uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS2 }}
 
-    # 3) Build & push image to ACR
-    - name: Build & push image
-      run: |
-        az acr build \
-          --registry ${{ env.ACR_LOGIN_SERVER }} \
-          --image ${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }} \
-          .
+      # 3 ▸ Build & push to ACR
+      - name: Build & push image
+        run: |
+          az acr build \
+            --registry ${{ env.ACR_LOGIN_SERVER }} \
+            --image ${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }} \
+            .
 
-    # 4) Deploy that image to the Container App
-    - name: Deploy to Container Apps
-      uses: azure/container-apps-deploy@v1
-      with:
-        resourceGroup: ${{ env.RESOURCE_GROUP }}
-        containerAppName: ${{ env.CONTAINER_APP }}
-        imageToDeploy: ${{ env.IMAGE_FULL }}
-        registryUrl: ${{ env.ACR_LOGIN_SERVER }}
-        registryUsername: ${{ secrets.ACR_USERNAME2 }}
-        registryPassword: ${{ secrets.ACR_PASSWORD2 }}
+      # 4 ▸ Deploy that image to the new Container App
+      - name: Deploy to Container Apps
+        uses: azure/container-apps-deploy@v1
+        with:
+          resourceGroup: ${{ env.RESOURCE_GROUP }}
+          containerAppName: ${{ env.CONTAINER_APP }}
+          imageToDeploy: ${{ env.IMAGE_FULL }}
+          registryUrl: ${{ env.ACR_LOGIN_SERVER }}
+          registryUsername: ${{ secrets.ACR_USERNAME2 }}
+
 
 
 
