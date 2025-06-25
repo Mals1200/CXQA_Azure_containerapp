@@ -1,67 +1,61 @@
 name: Build & Deploy cxqabotcontainerapp   # uses the “2” secret set
 
-# ──────────────────────────────────────────────────────────────
-# Trigger:
-#   • Any push to main
-#   • Manual run via the Actions tab  (workflow_dispatch)
-# ──────────────────────────────────────────────────────────────
+# ───── Triggers ───────────────────────────────────────────────
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch:
+    branches: [ main ]      # deploy on every push to main
+  workflow_dispatch:        # add “Run workflow” button in Actions tab
 
-# ──────────────────────────────────────────────────────────────
-# Environmentwide constants
-# ──────────────────────────────────────────────────────────────
+# ───── Global constants ───────────────────────────────────────
 env:
-  ACR_LOGIN_SERVER: cxqacontaineracr.azurecr.io          # ACR login server
-  IMAGE_REPO:        cxqabotcontainerapp                 # Repo name inside ACR
-  RESOURCE_GROUP:    cxqa_resource_group                 # RG that holds the app
-  CONTAINER_APP:     cxqabotcontainerapp                 # Target Container App
-  IMAGE_TAG:         ${{ github.sha }}                   # Image tag = commit SHA
-  IMAGE_FULL:        ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }}
+  ACR_LOGIN_SERVER: cxqacontaineracr.azurecr.io
+  IMAGE_REPO:        cxqabotcontainerapp
+  RESOURCE_GROUP:    cxqa_resource_group
+  CONTAINER_APP:     cxqabotcontainerapp
 
-# Needed for azure/login with OIDC; keeps permissions tight
 permissions:
-  id-token: write
-  contents: read
+  id-token: write          # required for azure/login
+  contents:  read
 
-# ──────────────────────────────────────────────────────────────
-# Single job: build container image → push to ACR → update app
-# ──────────────────────────────────────────────────────────────
+# ───── Job: build container → push → deploy ───────────────────
 jobs:
   build-deploy:
     runs-on: ubuntu-latest
 
+    env:                   # anything that needs ${{ … }} must be inside this block
+      IMAGE_TAG: ${{ github.sha }}
+      IMAGE_FULL: ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }}
+
     steps:
-    # 1 ▸ Pull repo contents
-    - name: Checkout repository
-      uses: actions/checkout@v3
+      # 1 ▸ Pull repo
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-    # 2 ▸ Azure login with the SECOND service-principal creds
-    - name: Azure login
-      uses: azure/login@v1
-      with:
-        creds: ${{ secrets.AZURE_CREDENTIALS2 }}
+      # 2 ▸ Azure login with the “2” secret
+      - name: Azure login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS2 }}
 
-    # 3 ▸ Build the Docker image in ACR and push
-    - name: Build & push image to ACR
-      run: |
-        az acr build \
-          --registry ${{ env.ACR_LOGIN_SERVER }} \
-          --image    ${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }} \
-          .
+      # 3 ▸ Build the image in ACR and push it
+      - name: Build & push image to ACR
+        run: |
+          az acr build \
+            --registry $ACR_LOGIN_SERVER \
+            --image    $IMAGE_REPO:$IMAGE_TAG \
+            .
 
-    # 4 ▸ Deploy that image to the new Container App
-    - name: Deploy to Azure Container Apps
-      uses: azure/container-apps-deploy@v1
-      with:
-        resourceGroup:     ${{ env.RESOURCE_GROUP }}
-        containerAppName:  ${{ env.CONTAINER_APP }}
-        imageToDeploy:     ${{ env.IMAGE_FULL }}
-        registryUrl:       ${{ env.ACR_LOGIN_SERVER }}
-        registryUsername:  ${{ secrets.ACR_USERNAME2 }}
-        registryPassword:  ${{ secrets.ACR_PASSWORD2 }}
+      # 4 ▸ Deploy that image to the new Container App
+      - name: Deploy to Container App
+        uses: azure/container-apps-deploy@v1
+        with:
+          resourceGroup:     ${{ env.RESOURCE_GROUP }}
+          containerAppName:  ${{ env.CONTAINER_APP }}
+          imageToDeploy:     ${{ env.IMAGE_FULL }}
+          registryUrl:       ${{ env.ACR_LOGIN_SERVER }}
+          registryUsername:  ${{ secrets.ACR_USERNAME2 }}
+          registryPassword:  ${{ secrets.ACR_PASSWORD2 }}
+
 
 
 
