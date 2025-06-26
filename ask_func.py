@@ -1,9 +1,47 @@
-# version 22
-# Brahims UW version 23.
-# fixed display of all agents (still compounded not working) testing 
-# Optimised:
-# (put optimizations here)
-# works with app.py version #11
+# ─────────────────────────────────────────────────────────────────────────────
+# version 21  –  CHANGE-LOG / UPGRADE NOTES  (drop straight on top of the file)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# 1. Dual-deployment LLM architecture
+#    • CONFIG now contains two endpoints:
+#        - LLM_ENDPOINT      → gpt-4o-3  (heavy-duty: Tool-1 Index, Tool-2 Python, Tool-3 Fallback)
+#        - LLM_ENDPOINT_AUX  → gpt-4o    (lightweight: classifiers, splitters, misc.)
+#    • New helper  call_llm_aux()  with built-in 429 back-off / retry.
+#
+# 2. Aux-model wiring (token & rate-limit relief)
+#    The following helpers now call the AUX model instead of the main model:
+#      - split_question_into_subquestions()
+#      - references_tabular_data()
+#      - is_text_relevant()
+#      - classify_topic()
+#    ▶  Typically saves 60-70 % tokens on meta prompts and reduces throttling.
+#
+# 3. Tool-2 prompt hardening
+#    • Rule #8 explicitly forbids embedding chat_history in generated code.
+#    • tool_2_code_run now receives  recent_history  (≤4 turns) instead of full history.
+#
+# 4. post_process_source() overhaul
+#    • Strips ```json / ``` / '''json fences before attempting JSON parse.
+#    • Auto-fixes “source” field:
+#          "Python"  + index data → "Index & Python"
+#          "Index"   + python data → "Index & Python"
+#    • Injects reference paragraphs directly into response_json["content"]:
+#          – “Referenced: …”   (file names)
+#          – “Calculated using: …” (table names)
+#    • Populates response_json["source_details"] for UI use (files, code, etc.).
+#
+# 5. Fallback improvements
+#    • When python_dict["table_names"] is empty we now regex-extract *.xlsx/ *.csv
+#      from the code block to keep the UI consistent.
+#
+# 6. Robust rate-limit handling
+#    • call_llm_aux(): 3 attempts, incremental sleep after every HTTP 429.
+#    • Main call_llm() path unchanged (still wrapped by azure_retry() where used).
+#
+# 7. No RBAC / storage / search logic changed
+#    All access-control and Azure-Blob interactions remain exactly as in v20.
+#
+# ─────────────────────────────────────────────────────────────────────────────
 
 import os
 import io
@@ -26,28 +64,30 @@ from collections import OrderedDict
 import difflib
 import time
 
-
+#######################################################################################
+#                               GLOBAL CONFIG / CONSTANTS
+#######################################################################################
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
 #######################################################################################
 CONFIG = {
     # ── MAIN, high-capacity model (Tool-1 Index, Tool-2 Python, Tool-3 Fallback) ──
-    "LLM_ENDPOINT"     : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
-                         "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
+    "LLM_ENDPOINT"     : "https://cxqaazureaihub2358016269.openai.azure.com/"
+                         "openai/deployments/gpt-4o-3/chat/completions?api-version=2025-01-01-preview",
 
     # same key used for both deployments
-    "LLM_API_KEY"      : "5EgVev7KCYaO758NWn5yL7f2iyrS4U3FaSI5lQhTx7RlePQ7QMESJQQJ99AKACHYHv6XJ3w3AAAAACOGoSfb",
+    "LLM_API_KEY"      : "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor",
 
     # ── AUXILIARY model (classifiers, splitters, etc.) ────────────────────────────
-    "LLM_ENDPOINT_AUX" : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
+    "LLM_ENDPOINT_AUX" : "https://cxqaazureaihub2358016269.openai.azure.com/"
                          "openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview",
 
     # (unchanged settings below) ───────────────────────────────────────────────────
     "SEARCH_SERVICE_NAME": "cxqa-azureai-search",
     "SEARCH_ENDPOINT"    : "https://cxqa-azureai-search.search.windows.net",
     "ADMIN_API_KEY"      : "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv",
-    "INDEX_NAME"         : "vector-1746718296853-08-05-2025",  #"vector-1741865904949",
-    "SEMANTIC_CONFIG_NAME": "vector-1746718296853-08-05-2025-semantic-configuration", #"vector-1741865904949-semantic-configuration",
+    "INDEX_NAME"         : "vector-1741865904949",
+    "SEMANTIC_CONFIG_NAME": "vector-1741865904949-semantic-configuration",
     "CONTENT_FIELD"      : "chunk",
     "ACCOUNT_URL"        : "https://cxqaazureaihub8779474245.blob.core.windows.net",
     "SAS_TOKEN"          : (
@@ -435,17 +475,20 @@ def references_tabular_data(question, tables_text):
     llm_user_message = f"""
     User Question:
     {question}
+
+    chat_history
+    {recent_history}
     
     Available Tables:
     {tables_text}
 
     Decision Rules:
-    1. Reply 'YES' if the question needs facts, statistics, totals, calculations, historical data, comparisons, or analysis typically stored in structured datasets listed in Available Tables.
-    2. Reply 'NO' if the question is general, opinion-based, theoretical, policy-related, or does not require specific data from these tables.
+    1. Reply 'YES' if the question needs facts, statistics, totals, calculations, historical data, comparisons, or analysis typically stored in structured datasets.
+    2. Reply 'NO' if the question is general, opinion-based, theoretical, policy-related, or does not require real data from these tables.
     3. Completely ignore the sample rows of the tables. Assume full datasets exist beyond the samples.
     4. Be STRICT: only reply 'NO' if you are CERTAIN the tables are not needed.
-    5. Do NOT create or assume data. Only decide if the listed tabular data is NEEDED to answer the User Question.
-    6. Base your decision ONLY on the User Question and the list of Available Tables. IGNORE any potential chat history.
+    5. Do NOT create or assume data. Only decide if the tabular data is NEEDED to answer.
+    6. Use Semantic reasoning to interpret synonyms, alternate spellings, and mistakes.
 
     Final instruction: Reply ONLY with 'YES' or 'NO'.
     """
@@ -453,60 +496,28 @@ def references_tabular_data(question, tables_text):
     clean_response = llm_response.strip().upper()
     return "YES" in clean_response
 
-# In ask_func_client_2.py
-# Replace your existing is_text_relevant function with this:
-def is_text_relevant(question, snippet, question_needs_tables_too: bool): # Added new parameter
-    if not snippet or not snippet.strip():
-        logging.debug("[Relevance Check] Snippet is empty, returning False.")
+def is_text_relevant(question, snippet):
+    if not snippet.strip():
         return False
 
-    context_guidance = ""
-    if question_needs_tables_too:
-        context_guidance = (
-            "The User Question is also expected to be answered by data from tables. "
-            "Therefore, this Text Snippet is relevant ONLY IF it provides crucial context, "
-            "definitions, or directly related information that the tables might not offer for this specific question. "
-            "General mentions of the same topics, entities, or dates found in broad reports are LESS LIKELY to be relevant "
-            "if the core answer is expected from a table."
-        )
-    else: # Question does NOT need tables, so index is primary source for it
-        context_guidance = (
-            "The User Question is expected to be answered primarily by text documents like this Snippet. "
-            "Therefore, consider it relevant if it addresses the question's topic, keywords, or provides background."
-        )
-
     system_prompt = (
-        "You are an expert relevance classifier. Your goal is to determine if the provided text Snippet "
-        "contains information that could DIRECTLY help answer the User Question or is highly related.\n"
-        f"{context_guidance}\n"
-        "Focus on keywords, topics, and entities. "
-        "Consider the snippet relevant even if it only partially answers the question or provides essential background context, "
-        "especially if it's from a policy or procedure document for a how-to question.\n"
-        "Be critical for general report snippets if the question is very specific and likely answerable by data tables.\n"
-        "Respond ONLY with 'YES' or 'NO'."
+        "You are a classifier. We have a user question and a snippet of text. "
+        "Decide if the snippet is truly relevant to answering the question. "
+        "Return ONLY 'YES' or 'NO'."
     )
-    max_snippet_len = 500 # Truncate long snippets for the prompt
-    snippet_for_prompt = snippet[:max_snippet_len] + "..." if len(snippet) > max_snippet_len else snippet
-    
-    user_prompt = f"User Question:\n{question}\n\nText Snippet:\n{snippet_for_prompt}\n\nIs this snippet relevant? Respond YES or NO."
-    
+    user_prompt = f"Question: {question}\nSnippet: {snippet}\nRelevant? Return 'YES' or 'NO' only."
+
     content = call_llm_aux(system_prompt, user_prompt, max_tokens=10, temperature=0.0)
-    # Keep this one debug line to see the direct output of the relevance check
-    #print(f"DEBUG: [Relevance Check] Q: '{question[:50]}...' NeedsTables: {question_needs_tables_too} -> LLM Raw Response: '{content}'")
-    is_relevant_flag = content.strip().upper().startswith("YES")
-    return is_relevant_flag
-    
+    return content.strip().upper().startswith("YES")
 
 #######################################################################################
 #                              TOOL #1 - Index Search
 #######################################################################################
-# --- Modified tool_1_index_search with detailed logging ---
 @azure_retry()
-def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_tabular: bool = False):
+def tool_1_index_search(user_question, top_k=5, user_tier=1):
     """
     Modified version: uses split_question_into_subquestions to handle multi-part queries.
     Then filters out docs the user has no access to, before final top_k selection.
-    Includes detailed DEBUG logging.
     """
     SEARCH_SERVICE_NAME = CONFIG["SEARCH_SERVICE_NAME"]
     SEARCH_ENDPOINT = CONFIG["SEARCH_ENDPOINT"]
@@ -515,14 +526,9 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_
     SEMANTIC_CONFIG_NAME = CONFIG["SEMANTIC_CONFIG_NAME"]
     CONTENT_FIELD = CONFIG["CONTENT_FIELD"]
 
-    # --- Added Log ---
-    #print(f"DEBUG: [Tool 1] Entering for question '{user_question[:50]}...'")
-
     subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
     if not subquestions:
         subquestions = [user_question]
-    # --- Added Log ---
-    #print(f"DEBUG: [Tool 1] Subquestions: {subquestions}")
 
     try:
         search_client = SearchClient(
@@ -532,111 +538,71 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_
         )
 
         merged_docs = []
-        all_raw_results_count = 0 # To count total raw results
         for subq in subquestions:
-            # --- Added Log ---
-            #print(f"DEBUG: [Tool 1] Searching index for subquestion: '{subq}'")
+            logging.info(f"🔍 Searching in Index for subquestion: {subq}")
             results = search_client.search(
                 search_text=subq,
                 query_type="semantic",
                 semantic_configuration_name=SEMANTIC_CONFIG_NAME,
                 top=top_k,
                 select=["title", CONTENT_FIELD],
-                include_total_count=True # Get total count if possible (check API support)
+                include_total_count=False
             )
 
-            # --- Log raw results found BEFORE filtering ---
-            raw_results_list = list(results) # Convert iterator to list to inspect
-            current_batch_count = len(raw_results_list)
-            all_raw_results_count += current_batch_count
-            #print(f"DEBUG: [Tool 1] Raw search returned {current_batch_count} results for '{subq}':")
-            for i, r in enumerate(raw_results_list):
-                 snippet = r.get(CONTENT_FIELD, "").strip()
-                 title = r.get("title", "").strip()
-                 #print(f"DEBUG: [Tool 1]   Raw {i+1}: Title='{title}', Snippet='{snippet[:60]}...'")
-                 if snippet:
-                     # Add to merged_docs only if snippet exists
-                     merged_docs.append({"title": title, "snippet": snippet})
-            # --- End log raw results ---
+            for r in results:
+                snippet = r.get(CONTENT_FIELD, "").strip()
+                title = r.get("title", "").strip()
+                if snippet:
+                    merged_docs.append({"title": title, "snippet": snippet})
 
-        # --- Added Log ---
-        #print(f"DEBUG: [Tool 1] Total raw results found across subquestions: {all_raw_results_count}")
         if not merged_docs:
-            # --- Added Log ---
-            #print("DEBUG: [Tool 1] No documents found with non-empty snippets after initial search.")
             return {"top_k": "No information", "file_names": []}
 
         # Filter by access + relevance
         relevant_docs = []
-        # --- Added Log ---
-        #print(f"DEBUG: [Tool 1] Filtering {len(merged_docs)} merged docs by RBAC + Relevance...")
-        for i, doc in enumerate(merged_docs):
+        for doc in merged_docs:
             snippet = doc["snippet"]
-            title = doc["title"]
-             # --- Added Log ---
-            #print(f"DEBUG: [Tool 1]  Filtering doc {i+1}/{len(merged_docs)}: Title='{title}'")
-            file_tier = get_file_tier(title)
-            rbac_pass = user_tier >= file_tier
-            # --- Added Log ---
-            #print(f"DEBUG: [Tool 1]   RBAC Check: UserTier={user_tier}, FileTier={file_tier}, Pass={rbac_pass}")
-            if rbac_pass:
-                # --- Log relevance check ---
-                #print(f"DEBUG: [Tool 1]   Checking relevance for snippet: '{snippet[:60]}...'")
-                is_relevant_result = is_text_relevant(user_question, snippet, question_primarily_tabular) # Call relevance check
-                # --- Added Log ---
-                #print(f"DEBUG: [Tool 1]   Relevance Check Result: {is_relevant}")
-                # --- End log relevance check ---
-                if is_relevant_result: # Actually use the result for filtering
+            # get tier for doc["title"]
+            file_tier = get_file_tier(doc["title"])
+            if user_tier >= file_tier:
+                if is_text_relevant(user_question, snippet):
                     relevant_docs.append(doc)
-                #print(f"DEBUG: [Tool 1]   >>> Doc {i+1} passed RBAC, ADDED to relevant_docs (Relevance ignored).")
-            #else:
-                 # --- Added Log ---
-                 #print(f"DEBUG: [Tool 1]   --- Doc {i+1} failed RBAC check.")
 
         if not relevant_docs:
-             # --- Added Log ---
-            #print("DEBUG: [Tool 1] No documents remaining after RBAC/Relevance filtering.")
             return {"top_k": "No information", "file_names": []}
 
-        # Weighted scoring (Keep as is)
+        # Weighted scoring
         for doc in relevant_docs:
             ttl = doc["title"].lower()
             score = 0
-            if "policy" in ttl: score += 10
-            if "report" in ttl: score += 5
-            if "sop" in ttl: score += 3
+            if "policy" in ttl:
+                score += 10
+            if "report" in ttl:
+                score += 5
+            if "sop" in ttl:
+                score += 3
             doc["weight_score"] = score
 
         docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
         docs_top_k = docs_sorted[:top_k]
-
+        
         # Extract file names and texts separately - ensure no duplicates
-        # Corrected this logic slightly from previous thought
-        file_names_final = []
-        seen_titles = set()
+        file_names = []
         for d in docs_top_k:
-            title = d["title"]
-            if title not in seen_titles:
-                file_names_final.append(title)
-                seen_titles.add(title)
-        file_names_final = file_names_final[:3] # Apply limit after ensuring uniqueness
-
+            if d["title"] not in file_names:  # Avoid duplicates
+                file_names.append(d["title"])
+        
+        # Limit to max 3 file names
+        file_names = file_names[:3]
+        
         re_ranked_texts = [d["snippet"] for d in docs_top_k]
         combined = "\n\n---\n\n".join(re_ranked_texts)
 
-        # --- Log final return ---
-        final_dict = {"top_k": combined, "file_names": file_names_final}
-        #print(f"DEBUG: [Tool 1] Returning: file_names={final_dict['file_names']}, top_k snippet count={len(docs_top_k)}")
-        return final_dict
-        # --- End log final return ---
+        return {"top_k": combined, "file_names": file_names}
 
     except Exception as e:
         logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}")
-        # --- Added Log ---
-        #print(f"DEBUG: [Tool 1] Error encountered: {e}")
         return {"top_k": "No information", "file_names": []}
-
-# --- End of modified tool_1_index_search ---
 
 #######################################################################################
 #                 HELPER to check table references vs. user tier
@@ -651,29 +617,23 @@ def reference_table_data(code_str, user_tier):
     If all references are okay, return None (meaning "all good").
     """
     # We'll look for patterns like "dataframes.get("SomeFile.xlsx") or the actual file references 
-    pattern = re.compile(
-    r'(?:dataframes\.get|pd\.read_(?:excel|csv))\(\s*[\'"]([^\'"]+)[\'"]\s*\)'
-    )
+    pattern = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
     found_files = pattern.findall(code_str)
-    unique_files = list(set(found_files))
 
-    # Modify the loop to iterate over unique_files instead of found_files:
-    for fname in unique_files:
-        # ... rest of the loop checking required_tier ...
+    for fname in found_files:
         required_tier = get_file_tier(fname)
         if user_tier < required_tier:
             return f"User does not have access to {fname} (requires tier {required_tier})."
 
-    return None # all good
+    return None  # all good
 
 #######################################################################################
 #                              TOOL #2 - Code Run
 #######################################################################################
 @azure_retry()
-@azure_retry()
 def tool_2_code_run(user_question, user_tier=1, recent_history=None):
-    #if not references_tabular_data(user_question, TABLES):
-        #return {"result": "No information", "code": "", "table_names": []}
+    if not references_tabular_data(user_question, TABLES):
+        return {"result": "No information", "code": "", "table_names": []}
 
     # Centralize fallback logic for chat history
     rhistory = recent_history if recent_history else []
@@ -693,7 +653,6 @@ Don't give examples, only provide the actual code. If you can't provide the code
 6. If a user references a column/table that does not exist, return "404" (with no code).
 7. Use semantic reasoning to handle synonyms or minor typos (e.g., "Al Bujairy," "albujairi," etc.), as long as they reasonably map to the real table names.
 8. Do not use Chat_history embed Information or Answers in the code. 
-9. when working with 2 tables with date/time, Its  Very important TO make them the same format 
 
 User question:
 {user_question}
@@ -713,25 +672,8 @@ Chat_history:
     # Check references vs. user tier
     access_issue = reference_table_data(code_str, user_tier)
     if access_issue:
-        # Extract table names from the code even if access is denied
-        table_names = []
-        # Pattern 1: dataframes.get("filename")
-        pattern1 = re.compile(r'dataframes\.get\(\s*[\'\"]([^\'\"]+)[\'\"]\s*\)')
-        matches1 = pattern1.findall(code_str)
-        if matches1:
-            for match in matches1:
-                if match not in table_names:
-                    table_names.append(match)
-        # Pattern 2: pd.read_excel("filename") or pd.read_csv("filename")
-        pattern2 = re.compile(r'pd\.read_(?:excel|csv)\(\s*[\'\"]([^\'\"]+)[\'\"]\s*\)')
-        matches2 = pattern2.findall(code_str)
-        if matches2:
-            for match in matches2:
-                if match not in table_names:
-                    table_names.append(match)
-        # Limit to max 3 table names, but keep file extensions
-        table_names = table_names[:3]
-        return {"result": access_issue, "code": code_str, "table_names": table_names}
+        # Return a short "no access" style message
+        return {"result": access_issue, "code": "", "table_names": []}
     
     # Extract table names from the code - check both patterns
     table_names = []
@@ -755,113 +697,55 @@ Chat_history:
     # Limit to max 3 table names, but keep file extensions
     table_names = table_names[:3]
 
-    #print(f"DEBUG: For question '{user_question[:50]}...'") # Identify which question run
-    #print(f"DEBUG: Generated code_str:\n---\n{code_str}\n---")
-    #print(f"DEBUG: Extracted table_names: {table_names}")
-    #This line was changed to include only the tables needed
-    execution_result = execute_generated_code(code_str, required_tables=table_names) # Pass table_names
+    execution_result = execute_generated_code(code_str)
     return {"result": execution_result, "code": code_str, "table_names": table_names}
 
-def execute_generated_code(code_str, required_tables=None):
+def execute_generated_code(code_str):
     account_url = CONFIG["ACCOUNT_URL"]
     sas_token = CONFIG["SAS_TOKEN"]
     container_name = CONFIG["CONTAINER_NAME"]
     target_folder_path = CONFIG["TARGET_FOLDER_PATH"]
 
-    dataframes = {} # Initialize dict to store loaded dataframes
-    # --- MODIFICATION START ---
-    # Only proceed to load data if specific tables are requested
-    if required_tables:
-        #logging.info(f"Attempting to load required tables: {required_tables}")
-        try:
-            blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
-            container_client = blob_service_client.get_container_client(container_name)
+    try:
+        blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
+        container_client = blob_service_client.get_container_client(container_name)
 
-            for file_name in required_tables:
-                # Construct the full path to the blob
-                blob_name = os.path.join(target_folder_path, file_name).replace("\\", "/") # Ensure forward slashes for blob path
+        dataframes = {}
+        blobs = container_client.list_blobs(name_starts_with=target_folder_path)
 
-                try:
-                    #logging.debug(f"Loading blob: {blob_name}")
-                    blob_client = container_client.get_blob_client(blob_name)
-                    blob_data = blob_client.download_blob().readall()
+        for blob in blobs:
+            file_name = blob.name.split('/')[-1]
+            blob_client = container_client.get_blob_client(blob.name)
+            blob_data = blob_client.download_blob().readall()
 
-                    # Read into DataFrame based on file extension
-                    if file_name.lower().endswith(('.xlsx', '.xls')):
-                        df = pd.read_excel(io.BytesIO(blob_data))
-                        dataframes[file_name] = df
-                        #logging.debug(f"Successfully loaded Excel file: {file_name}")
-                    elif file_name.lower().endswith('.csv'):
-                        df = pd.read_csv(io.BytesIO(blob_data))
-                        dataframes[file_name] = df
-                        #logging.debug(f"Successfully loaded CSV file: {file_name}")
-                    #else:
-                        #logging.warning(f"Skipping file with unsupported extension in required list: {file_name}")
+            if file_name.endswith('.xlsx') or file_name.endswith('.xls'):
+                df = pd.read_excel(io.BytesIO(blob_data))
+            elif file_name.endswith('.csv'):
+                df = pd.read_csv(io.BytesIO(blob_data))
+            else:
+                continue
 
-                except Exception as blob_error:
-                    # Handle error if a specific required blob is not found or fails to load
-                    err_msg = f"Error loading required table '{blob_name}': {blob_error}"
-                    print(err_msg)
-                    logging.error(err_msg)
-                    # Stop execution and return error if a required file is missing/unreadable
-                    return err_msg
+            dataframes[file_name] = df
 
-        except Exception as service_error:
-            # Handle Azure connection errors
-            err_msg = f"Azure connection error during selective table loading: {service_error}"
-            print(err_msg)
-            logging.error(err_msg)
-            return err_msg
-    else:
-        # If required_tables is empty or None, but code seems to need dataframes
-        # Check if the code likely expects dataframes
-        # This check is basic; might need refinement based on code generation patterns
-        if "dataframes.get(" in code_str or "pd.read_excel(" in code_str or "pd.read_csv(" in code_str:
-            logging.warning("Code execution might expect tables, but none were identified as required.")
-            # You could return an error, or let it proceed and potentially fail during exec
-            # Returning an error is likely safer.
-            return "Error: Code seems to require tables, but specific tables needed were not identified or provided."
-        else:
-            # If code doesn't appear to reference dataframes, proceed without loading any.
-            logging.info("No required tables specified, proceeding without loading data.")
+        code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
+        code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
 
-    # --- MODIFICATION END ---
-
-
-    # --- Safety check before exec ---
-    # If the code expects dataframes but none were loaded (e.g., due to errors above)
-    # This check might overlap with the one above, but adds safety before exec
-    if not dataframes and ("dataframes.get(" in code_str):
-         return "Error: Failed to load required tables before code execution."
-
-
-    # Modify code string (replace pandas read calls with dataframe dictionary lookups)
-    # This part remains the same
-    code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
-    code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
-
-    # Execute the code
-    output_buffer = StringIO()
-    try: # Wrap exec in its own try/except
+        output_buffer = StringIO()
         with contextlib.redirect_stdout(output_buffer):
             local_vars = {
-                "dataframes": dataframes, # Pass the (potentially empty) dict
+                "dataframes": dataframes,
                 "pd": pd,
                 "datetime": datetime
             }
-            # Execute in a restricted scope
-            exec(code_modified, {"pd": pd, "datetime": datetime}, local_vars) # Pass pd/datetime also to globals for safety
+            exec(code_modified, {}, local_vars)
 
         output = output_buffer.getvalue().strip()
         return output if output else "Execution completed with no output."
 
-    except Exception as exec_error:
-        # Catch errors specifically during the exec() call
-        err_msg = f"An error occurred during code execution: {exec_error}"
-        print(err_msg)
-        logging.error(err_msg)
-        # Include the generated code that failed in the error message for easier debugging
-        return f"{err_msg}\n--- Failing Code ---\n{code_modified}\n--- End Code ---"
+    except Exception as e:
+        err_msg = f"An error occurred during code execution: {e}"
+        print(err_msg)            
+        return err_msg
 
 #######################################################################################
 #                              TOOL #3 - LLM Fallback
@@ -1035,30 +919,28 @@ Chat_history:
 #######################################################################################
 #                          POST-PROCESS SOURCE  (adds file / table refs)
 #######################################################################################
-def post_process_source(final_text, index_dict, python_dict, user_question=None):
+def post_process_source(final_text, index_dict, python_dict):
     """
     • If the answer is valid JSON, inject file/table info into BOTH
         – response_json["source_details"]   (for your UI)
         – response_json["content"]          (visible paragraphs)
     • Otherwise fall back to the legacy plain-text logic.
-    • Optionally, always ensure the user's question is present as the first heading or paragraph.
     """
     import json, re
 
+    # ---------- helper to append visible reference paragraphs ----------
     def _inject_refs(resp, files=None, tables=None):
         if not isinstance(resp.get("content"), list):
             resp["content"] = []
         if files:
-            bullet_block = "Referenced:\n- " + "\n- ".join(files)
             resp["content"].append({
                 "type": "paragraph",
-                "text": bullet_block
+                "text": f"Referenced: {', '.join(files)}"
             })
         if tables:
-            bullet_block = "Calculated using:\n- " + "\n- ".join(tables)
             resp["content"].append({
                 "type": "paragraph",
-                "text": bullet_block
+                "text": f"Calculated using: {', '.join(tables)}"
             })
 
     # ---------- strip code-fence wrappers before JSON parse ----------
@@ -1079,32 +961,39 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
         and "content" in response_json
         and "source"  in response_json
     ):
+        # ---- normalise / override "source" field ----
         idx_has  = index_dict .get("top_k" , "").strip().lower() not in ["", "no information"]
         py_has   = python_dict.get("result", "").strip().lower() not in ["", "no information"]
+
         src = response_json["source"].strip()
         if src == "Python" and idx_has:
             src = "Index & Python"
         elif src == "Index" and py_has:
             src = "Index & Python"
         response_json["source"] = src
+
+        # ---- attach source_details & visible refs ----
         if src == "Index & Python":
             files  = index_dict .get("file_names", [])
             tables = python_dict.get("table_names", [])
             response_json["source_details"] = {
-                "files"       : "", #index_dict.get("top_k", "No information"),
-                "code"        : "", #python_dict.get("code", ""),
+                "files"       : index_dict.get("top_k", "No information"),
+                "code"        : python_dict.get("code", ""),
                 "file_names"  : files,
                 "table_names" : tables
             }
             _inject_refs(response_json, files, tables)
+
         elif src == "Index":
             files = index_dict.get("file_names", [])
             response_json["source_details"] = {
-                "files"      : "",
+                "files"      : index_dict.get("top_k", "No information"),
                 "file_names" : files
             }
             _inject_refs(response_json, files=files)
+
         elif src == "Python":
+            # fallback extraction if table_names list is empty
             if not python_dict.get("table_names"):
                 python_dict["table_names"] = re.findall(
                     r'["\']([^"\']+\.(?:xlsx|xls|csv))["\']',
@@ -1113,42 +1002,12 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
                 )
             tables = python_dict.get("table_names", [])
             response_json["source_details"] = {
-                "code"        : "",
+                "code"        : python_dict.get("code", ""),
                 "table_names" : tables
             }
             _inject_refs(response_json, tables=tables)
-        else:
-            response_json["source_details"] = {}
-                
-        # --- Ensure the user's question is present as first heading or paragraph ---
-        if user_question:
-            import difflib
-            def _is_similar(a, b, threshold=0.7):
-                a, b = a.strip().lower(), b.strip().lower()
-                seq_sim = difflib.SequenceMatcher(None, a, b).ratio()
-                a_tokens = set(a.split())
-                b_tokens = set(b.split())
-                if not a_tokens or not b_tokens:
-                    return False
-                overlap = len(a_tokens & b_tokens) / max(len(a_tokens), len(b_tokens))
-                return seq_sim > threshold or overlap > 0.7
 
-            uq_norm = user_question.strip().lower()
-            found = False
-            if isinstance(response_json.get("content"), list):
-                 for i, block in enumerate(response_json["content"]):
-                    # Check if block is a dict before accessing keys
-                    if isinstance(block, dict) and block.get("type") in ("heading", "paragraph"):
-                        block_text = block.get("text", "").strip().lower()
-                        if _is_similar(uq_norm, block_text):
-                            found = True
-                            break
-            else:
-                 # Initialize content as list if missing or not a list
-                 response_json["content"] = []
-
-            if not found:
-                response_json["content"].insert(0, {"type": "heading", "text": user_question})
+        # AI Generated or anything else → leave unchanged
         return json.dumps(response_json)
 
     # ---------- legacy plain-text branch (unchanged) ----------
@@ -1165,10 +1024,11 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
             eol = final_text.find("\n", src_idx)
             if eol < 0: eol = len(final_text)
             prefix, suffix = final_text[:eol], final_text[eol:]
-            file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
-            table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
+            file_info  = f"\nReferenced: {', '.join(file_names)}"  if file_names  else ""
+            table_info = f"\nCalculated using: {', '.join(table_names)}" if table_names else ""
             final_text = prefix + file_info + table_info + suffix
-        pass
+
+        return f"{final_text}\n\nThe Files:\n{top_k_text}\n\nThe code:\n{code_text}"
 
     elif "source: python" in text_lower:
         code_text   = python_dict.get("code", "")
@@ -1178,9 +1038,9 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
             eol = final_text.find("\n", src_idx)
             if eol < 0: eol = len(final_text)
             prefix, suffix = final_text[:eol], final_text[eol:]
-            table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
+            table_info = f"\nCalculated using: {', '.join(table_names)}" if table_names else ""
             final_text = prefix + table_info + suffix
-        pass
+        return f"{final_text}\n\nThe code:\n{code_text}"
 
     elif "source: index" in text_lower:
         top_k_text = index_dict.get("top_k", "No information")
@@ -1190,9 +1050,9 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
             eol = final_text.find("\n", src_idx)
             if eol < 0: eol = len(final_text)
             prefix, suffix = final_text[:eol], final_text[eol:]
-            file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
+            file_info = f"\nReferenced: {', '.join(file_names)}" if file_names else ""
             final_text = prefix + file_info + suffix
-        pass
+        return f"{final_text}\n\nThe Files:\n{top_k_text}"
 
     return final_text
 
@@ -1322,7 +1182,6 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     if not user_question.strip():
         return
 
-    # is_entirely_greeting_or_punc definition remains the same
     def is_entirely_greeting_or_punc(phrase):
         greet_words = {
             "hello", "hi", "hey", "morning", "evening", "goodmorning", "good morning", "Good morning", "goodevening", "good evening",
@@ -1340,84 +1199,36 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
 
     user_question_stripped = user_question.strip()
     if is_entirely_greeting_or_punc(user_question_stripped):
-        if len(chat_history) < 4: # Assuming chat_history is a global or properly scoped variable
-            yield "Hello Hello Hello Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+        if len(chat_history) < 4:
+            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         else:
-            yield "Hello Hello Hello Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         return
 
+    # Check cache
     cache_key = user_question_stripped.lower()
-    if cache_key in tool_cache: # Assuming tool_cache is a global or properly scoped variable
-        logging.info(f"Cache hit for question: {user_question_stripped}")
-        yield tool_cache[cache_key][2] 
+    if cache_key in tool_cache:
+        _, _, cached_answer = tool_cache[cache_key]
+        yield cached_answer
         return
-    logging.info(f"Cache miss for question: {user_question_stripped}")
 
-    # This flag is now central
-    question_needs_tables = references_tabular_data(user_question, TABLES) # TABLES needs to be defined globally
+    needs_tabular_data = references_tabular_data(user_question, TABLES)
+    index_dict = {"top_k": "No information"}
+    python_dict = {"result": "No information", "code": ""}
 
-    index_dict = {"top_k": "No information", "file_names": []}
-    python_dict = {"result": "No information", "code": "", "table_names": []}
-    run_tool_1 = True # Default to running Tool 1
-
-    if question_needs_tables:
-        logging.info("Question likely needs tabular data. Running Tool 2...")
+    if needs_tabular_data:
         python_dict = tool_2_code_run(user_question, user_tier=user_tier, recent_history=recent_history)
 
-        question_lower = user_question.lower()
-        calc_keywords = ["calculate", "total", "average", "sum", "count", "how many", "revenue", "volume", "footfall", "what is the visits", "visitation", "sales", "attendance", "utilization", "parking", "tickets"]
-        policy_keywords = ["policy", "procedure", "what to do", "how to", "describe", "sop", "guideline", "rule", "if someone", "in case of", "address"]
-        
-        has_calc_keyword = any(keyword in question_lower for keyword in calc_keywords)
-        has_policy_keyword = any(keyword in question_lower for keyword in policy_keywords)
-        
-        tool_2_succeeded = python_dict.get("result", "").strip().lower() not in ["", "no information"] and \
-                           not python_dict.get("result", "Error").lower().startswith("error") # Check for actual success
-
-        if has_calc_keyword and not has_policy_keyword and tool_2_succeeded:
-            logging.info("Heuristic: Question is computational and Tool 2 succeeded; SKIPPING Tool 1.")
-            run_tool_1 = False
-        else:
-            logging.info("Heuristic: Running Tool 1 for context or due to question type/Tool 2 result.")
-    else:
-        logging.info("Question does not need tabular data. Ensuring Tool 1 runs.")
-        run_tool_1 = True
-
-    if run_tool_1:
-        logging.info("Running Tool 1 (Index Search)...")
-        # Pass the flag to tool_1_index_search
-        index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier, question_primarily_tabular=question_needs_tables)
-    else:
-        logging.info("Tool 1 was skipped.")
-        # index_dict remains as default {"top_k": "No information", "file_names": []}
+    index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
 
     raw_answer = ""
-    try:
-        for token in final_answer_llm(user_question, index_dict, python_dict):
-            raw_answer += token
-    except Exception as final_llm_error:
-         logging.error(f"Error during final_answer_llm generation: {final_llm_error}")
-         error_json = json.dumps({
-             "content": [{"type": "paragraph", "text": "Sorry, an error occurred while generating the final response."}],
-             "source": "Error", "source_details": {"error": str(final_llm_error)}
-         })
-         yield error_json
-         return
+    for token in final_answer_llm(user_question, index_dict, python_dict):
+        raw_answer += token
 
-    # Consider if clean_text is safe for JSON strings. Usually, it's not.
-    # raw_answer = clean_text(raw_answer) 
+    # Now unify repeated text cleaning
+    raw_answer = clean_text(raw_answer)
 
-    try:
-        final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict, user_question=user_question)
-    except Exception as post_process_error:
-        logging.error(f"Error during post_process_source: {post_process_error}")
-        error_json = json.dumps({
-             "content": [{"type": "paragraph", "text": "Sorry, an error occurred while processing the response."}],
-             "source": "Error", "source_details": {"error": str(post_process_error), "raw_llm_output": raw_answer}
-         })
-        yield error_json
-        return
-
+    final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict)
     tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
     yield final_answer_with_source
 
