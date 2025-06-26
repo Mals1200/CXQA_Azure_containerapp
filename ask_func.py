@@ -1,32 +1,5 @@
-# V 27
-# Switch to Enable/Disable Doc ranking
-# Location: Tool_1
-
-# ================================
-# Document Ranking Behavior Toggle
-# ================================
-# USE_WEIGHTED_RANKING = False  # Set to True to enable ranking by keywords like 'policy', 'report', etc.
-
-# if USE_WEIGHTED_RANKING:
-#     # -------------------------------
-#     # 🔼 WEIGHTED RANKING (Enabled)
-#     # -------------------------------
-#     for doc in relevant_docs:
-#         ttl = doc["title"].lower()
-#         score = 0
-#         if "policy" in ttl: score += 10
-#         if "report" in ttl: score += 5
-#         if "sop" in ttl: score += 3
-#         doc["weight_score"] = score
-
-#     docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
-#     docs_top_k = docs_sorted[:top_k]
-# else:
-#     # -------------------------------
-#     # 🔽 UNRANKED (Preserve Search Order)
-#     # -------------------------------
-#     docs_sorted = relevant_docs[:top_k]
-#     docs_top_k = docs_sorted
+# V 27b
+# Disabled source from is greeting.
 
 import os
 import io
@@ -1624,11 +1597,26 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
 
     user_question_stripped = user_question.strip()
     if is_entirely_greeting_or_punc(user_question_stripped):
-        if len(chat_history) < 4:
-            yield "Helloooo! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements.\n- Please remember do not share any personal, secret, or top-secret information, during our conversation."
-        else:
-            yield "Helloooo! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements.\n- Please remember do not share any personal, secret, or top-secret information, during our conversation."
+        greeting_text = (
+            "Helloooo! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n"
+            "- To reset the conversation type 'restart chat'.\n"
+            "- To generate Slides, Charts or Document, type 'export followed by your requirements.\n"
+            "- Please remember do not share any personal, secret, or top-secret information, during our conversation."
+            if len(chat_history) < 4 else
+            "Helloooo! How may I assist you?\n"
+            "- To reset the conversation type 'restart chat'.\n"
+            "- To generate Slides, Charts or Document, type 'export followed by your requirements.\n"
+            "- Please remember do not share any personal, secret, or top-secret information, during our conversation."
+        )
+    
+        # Yield a response object that is recognized as structured — no source tag needed
+        yield json.dumps({
+            "source": "Greeting",
+            "content": [{"type": "paragraph", "text": greeting_text}],
+            "source_details": {}
+        })
         return
+
 
     cache_key = user_question_stripped.lower()
     if cache_key in tool_cache:
