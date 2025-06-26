@@ -1,32 +1,6 @@
-# V 27
-# Switch to Enable/Disable Doc ranking
-# Location: Tool_1
+# V 28
+# Source always included python (python for python Qs), (Index & Python for index Qs and for Qs that use both ), (Python for Ai Generated Qs)
 
-# ================================
-# Document Ranking Behavior Toggle
-# ================================
-# USE_WEIGHTED_RANKING = False  # Set to True to enable ranking by keywords like 'policy', 'report', etc.
-
-# if USE_WEIGHTED_RANKING:
-#     # -------------------------------
-#     # 🔼 WEIGHTED RANKING (Enabled)
-#     # -------------------------------
-#     for doc in relevant_docs:
-#         ttl = doc["title"].lower()
-#         score = 0
-#         if "policy" in ttl: score += 10
-#         if "report" in ttl: score += 5
-#         if "sop" in ttl: score += 3
-#         doc["weight_score"] = score
-
-#     docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
-#     docs_top_k = docs_sorted[:top_k]
-# else:
-#     # -------------------------------
-#     # 🔽 UNRANKED (Preserve Search Order)
-#     # -------------------------------
-#     docs_sorted = relevant_docs[:top_k]
-#     docs_top_k = docs_sorted
 
 import os
 import io
@@ -1114,8 +1088,13 @@ def final_answer_llm(user_question, index_dict, python_dict):
 
     if index_top_k.lower() == "no information" and python_result.lower() == "no information":
         fallback_text = tool_3_llm_fallback(user_question)
-        # Just yield plain text (no JSON wrapper)
-        yield f"{fallback_text}\n\nSource: AI Generated"
+        final_response = fallback_text.strip() + "\n\nSource: AI Generated"
+        tool_cache[user_question.lower().strip()] = (
+            {"top_k": "No information", "file_names": []},
+            {"result": "No information", "code": "", "table_names": []},
+            final_response
+        )
+        yield final_response
         return
 
     combined_info = f"INDEX_DATA:\n{index_top_k}\n\nPYTHON_DATA:\n{python_result}"
@@ -1250,6 +1229,21 @@ Todays date (dd/mm/yyyy):
             yield fallback_text
             return
 
+        # --- Append accurate source line ---
+        source_label = None
+        if index_top_k.lower() != "no information" and python_result.lower() != "no information":
+            source_label = "Index & Python"
+        elif index_top_k.lower() != "no information":
+            source_label = "Index"
+        elif python_result.lower() != "no information":
+            source_label = "Python"
+        else:
+            source_label = "AI Generated"
+
+        # Make sure it's not already included (to prevent duplication)
+        if "source:" not in final_text.lower():
+            final_text = final_text.strip() + f"\n\nSource: {source_label}"
+
         yield final_text
     except Exception as e:
         logging.error(f"Error in final_answer_llm: {str(e)}")
@@ -1337,10 +1331,24 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
         idx_has  = index_dict .get("top_k" , "").strip().lower() not in ["", "no information"]
         py_has   = python_dict.get("result", "").strip().lower() not in ["", "no information"]
         src = response_json["source"].strip()
-        if src == "Python" and idx_has:
+        src_idx = index_dict.get("top_k", "").strip().lower()
+        src_py  = python_dict.get("result", "").strip().lower()
+
+        # Recompute the source in case LLM gave wrong label
+        if src.lower() not in ["index", "python", "index & python", "ai generated"]:
+            if src_idx != "no information" and src_py != "no information":
+                src = "Index & Python"
+            elif src_idx != "no information":
+                src = "Index"
+            elif src_py != "no information":
+                src = "Python"
+            else:
+                src = "AI Generated"
+        elif src == "Python" and idx_has:
             src = "Index & Python"
         elif src == "Index" and py_has:
             src = "Index & Python"
+        
         response_json["source"] = src
         if src == "Index & Python":
             files  = index_dict .get("file_names", [])
