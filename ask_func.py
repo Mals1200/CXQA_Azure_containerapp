@@ -1,5 +1,32 @@
-# V 27b
-# Disabled source from is greeting.
+# V 27
+# Switch to Enable/Disable Doc ranking
+# Location: Tool_1
+
+# ================================
+# Document Ranking Behavior Toggle
+# ================================
+# USE_WEIGHTED_RANKING = False  # Set to True to enable ranking by keywords like 'policy', 'report', etc.
+
+# if USE_WEIGHTED_RANKING:
+#     # -------------------------------
+#     # 🔼 WEIGHTED RANKING (Enabled)
+#     # -------------------------------
+#     for doc in relevant_docs:
+#         ttl = doc["title"].lower()
+#         score = 0
+#         if "policy" in ttl: score += 10
+#         if "report" in ttl: score += 5
+#         if "sop" in ttl: score += 3
+#         doc["weight_score"] = score
+
+#     docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
+#     docs_top_k = docs_sorted[:top_k]
+# else:
+#     # -------------------------------
+#     # 🔽 UNRANKED (Preserve Search Order)
+#     # -------------------------------
+#     docs_sorted = relevant_docs[:top_k]
+#     docs_top_k = docs_sorted
 
 import os
 import io
@@ -1385,10 +1412,6 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
         # existing behaviour for Index/Python answers (which still rely on the
         # JSON format for reference injection) while fixing the issue reported
         # by the user where AI-generated answers were rendered as JSON.
-        # --- SHORT-CIRCUIT for greeting ---
-        if src.lower() == "greeting":
-            return json.dumps(response_json)
-            
         if "ai generated" in src.lower():
             md_lines = []
             for block in response_json.get("content", []):
@@ -1601,26 +1624,11 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
 
     user_question_stripped = user_question.strip()
     if is_entirely_greeting_or_punc(user_question_stripped):
-        greeting_text = (
-            "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n"
-            "- To reset the conversation type 'restart chat'.\n"
-            "- To generate Slides, Charts or Document, type 'export followed by your requirements.\n"
-            "- Please remember do not share any personal, secret, or top-secret information, during our conversation."
-            if len(chat_history) < 4 else
-            "Hello! How may I assist you?\n"
-            "- To reset the conversation type 'restart chat'.\n"
-            "- To generate Slides, Charts or Document, type 'export followed by your requirements.\n"
-            "- Please remember do not share any personal, secret, or top-secret information, during our conversation."
-        )
-    
-        # Yield a response object that is recognized as structured — no source tag needed
-        yield json.dumps({
-            "source": "Greeting",
-            "content": [{"type": "paragraph", "text": greeting_text}],
-            "source_details": {}
-        })
+        if len(chat_history) < 4:
+            yield "Helloooo! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements.\n- Please remember do not share any personal, secret, or top-secret information, during our conversation."
+        else:
+            yield "Helloooo! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements.\n- Please remember do not share any personal, secret, or top-secret information, during our conversation."
         return
-
 
     cache_key = user_question_stripped.lower()
     if cache_key in tool_cache:
