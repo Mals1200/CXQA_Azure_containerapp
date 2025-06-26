@@ -1385,6 +1385,10 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
         # existing behaviour for Index/Python answers (which still rely on the
         # JSON format for reference injection) while fixing the issue reported
         # by the user where AI-generated answers were rendered as JSON.
+        # --- SHORT-CIRCUIT for greeting ---
+        if src.lower() == "greeting":
+            return json.dumps(response_json)
+            
         if "ai generated" in src.lower():
             md_lines = []
             for block in response_json.get("content", []):
