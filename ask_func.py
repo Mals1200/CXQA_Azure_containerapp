@@ -1,48 +1,3 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# version 21  –  CHANGE-LOG / UPGRADE NOTES  (drop straight on top of the file)
-# ─────────────────────────────────────────────────────────────────────────────
-#
-# 1. Dual-deployment LLM architecture
-#    • CONFIG now contains two endpoints:
-#        - LLM_ENDPOINT      → gpt-4o-3  (heavy-duty: Tool-1 Index, Tool-2 Python, Tool-3 Fallback)
-#        - LLM_ENDPOINT_AUX  → gpt-4o    (lightweight: classifiers, splitters, misc.)
-#    • New helper  call_llm_aux()  with built-in 429 back-off / retry.
-#
-# 2. Aux-model wiring (token & rate-limit relief)
-#    The following helpers now call the AUX model instead of the main model:
-#      - split_question_into_subquestions()
-#      - references_tabular_data()
-#      - is_text_relevant()
-#      - classify_topic()
-#    ▶  Typically saves 60-70 % tokens on meta prompts and reduces throttling.
-#
-# 3. Tool-2 prompt hardening
-#    • Rule #8 explicitly forbids embedding chat_history in generated code.
-#    • tool_2_code_run now receives  recent_history  (≤4 turns) instead of full history.
-#
-# 4. post_process_source() overhaul
-#    • Strips ```json / ``` / '''json fences before attempting JSON parse.
-#    • Auto-fixes “source” field:
-#          "Python"  + index data → "Index & Python"
-#          "Index"   + python data → "Index & Python"
-#    • Injects reference paragraphs directly into response_json["content"]:
-#          – “Referenced: …”   (file names)
-#          – “Calculated using: …” (table names)
-#    • Populates response_json["source_details"] for UI use (files, code, etc.).
-#
-# 5. Fallback improvements
-#    • When python_dict["table_names"] is empty we now regex-extract *.xlsx/ *.csv
-#      from the code block to keep the UI consistent.
-#
-# 6. Robust rate-limit handling
-#    • call_llm_aux(): 3 attempts, incremental sleep after every HTTP 429.
-#    • Main call_llm() path unchanged (still wrapped by azure_retry() where used).
-#
-# 7. No RBAC / storage / search logic changed
-#    All access-control and Azure-Blob interactions remain exactly as in v20.
-#
-# ─────────────────────────────────────────────────────────────────────────────
-
 import os
 import io
 import re
@@ -52,6 +7,7 @@ import warnings
 import requests
 import contextlib
 import pandas as pd
+import numpy as np
 import csv
 from io import BytesIO, StringIO
 from datetime import datetime
@@ -63,31 +19,33 @@ from functools import lru_cache, wraps
 from collections import OrderedDict
 import difflib
 import time
+from rapidfuzz import process, fuzz
+import concurrent.futures     # std-lib, already available
 
-#######################################################################################
-#                               GLOBAL CONFIG / CONSTANTS
-#######################################################################################
 #######################################################################################
 #                               GLOBAL CONFIG / CONSTANTS
 #######################################################################################
 CONFIG = {
     # ── MAIN, high-capacity model (Tool-1 Index, Tool-2 Python, Tool-3 Fallback) ──
-    "LLM_ENDPOINT"     : "https://cxqaazureaihub2358016269.openai.azure.com/"
-                         "openai/deployments/gpt-4o-3/chat/completions?api-version=2025-01-01-preview",
+    "LLM_ENDPOINT"     : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
+                         "openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview",
+    # Add CODE LLM endpoint (same as main)
+    "LLM_ENDPOINT_CODE": "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
+                         "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
 
     # same key used for both deployments
-    "LLM_API_KEY"      : "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor",
+    "LLM_API_KEY"      : "5EgVev7KCYaO758NWn5yL7f2iyrS4U3FaSI5lQhTx7RlePQ7QMESJQQJ99AKACHYHv6XJ3w3AAAAACOGoSfb",
 
     # ── AUXILIARY model (classifiers, splitters, etc.) ────────────────────────────
-    "LLM_ENDPOINT_AUX" : "https://cxqaazureaihub2358016269.openai.azure.com/"
-                         "openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview",
+    "LLM_ENDPOINT_AUX" : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
+                         "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
 
     # (unchanged settings below) ───────────────────────────────────────────────────
     "SEARCH_SERVICE_NAME": "cxqa-azureai-search",
     "SEARCH_ENDPOINT"    : "https://cxqa-azureai-search.search.windows.net",
     "ADMIN_API_KEY"      : "COsLVxYSG0Az9eZafD03MQe7igbjamGEzIElhCun2jAzSeB9KDVv",
-    "INDEX_NAME"         : "vector-1741865904949",
-    "SEMANTIC_CONFIG_NAME": "vector-1741865904949-semantic-configuration",
+    "INDEX_NAME"         : "vector-1746718296853-08-05-2025",  #"vector-1741865904949",
+    "SEMANTIC_CONFIG_NAME": "vector-1746718296853-08-05-2025-semantic-configuration", #"vector-1741865904949-semantic-configuration",
     "CONTENT_FIELD"      : "chunk",
     "ACCOUNT_URL"        : "https://cxqaazureaihub8779474245.blob.core.windows.net",
     "SAS_TOKEN"          : (
@@ -98,6 +56,53 @@ CONFIG = {
     "CONTAINER_NAME"    : "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore",
     "TARGET_FOLDER_PATH": "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
 }
+
+USE_LLM_FALLBACK = False  # ⬅ Set to False to disable fallback
+
+# ── Feature flag ──────────────────────────────────────────
+# If True  → Tool-2 (Python path) will ALWAYS be executed
+#            for every user question, in parallel with Tool-1.
+# If False → Behaviour reverts to the existing "smart classifier" logic.
+ALWAYS_RUN_TOOL2 = True      # ⬅ flip to False to disable
+DEFAULT_USER_TIER = 2        # ⬅ base tier for users not in User_rbac.xlsx
+
+#######################################################################################
+# (3) KSA DATE HELPER (cached, resets 12:01 AM KSA time)
+#######################################################################################
+try:
+    from zoneinfo import ZoneInfo
+    _ksa_tz = ZoneInfo("Asia/Riyadh")
+    def _ksa_now():
+        return datetime.now(_ksa_tz)
+except ImportError:
+    try:
+        import pytz
+        _ksa_tz = pytz.timezone("Asia/Riyadh")
+        def _ksa_now():
+            return datetime.now(_ksa_tz)
+    except ImportError:
+        _ksa_tz = None
+        def _ksa_now():
+            return datetime.utcnow()  # fallback, not timezone aware
+
+from functools import lru_cache
+
+def _ksa_date_cache_key():
+    now = _ksa_now()
+    # Reset cache at 12:01 AM KSA time
+    return now.strftime("%Y-%m-%d") if now.hour > 0 or now.minute > 0 else f"{now.strftime('%Y-%m-%d')}-reset"
+
+@lru_cache(maxsize=1)
+def get_ksa_today_date():
+    """
+    Returns today's date in KSA (Asia/Riyadh) timezone as YYYY-MM-DD string.
+    Cache resets at 12:01 AM KSA time.
+    """
+    now = _ksa_now()
+    return now.strftime("%Y-%m-%d")
+
+todays_date = get_ksa_today_date()
+
 
 
 # Global objects with better initialization
@@ -130,6 +135,7 @@ def azure_retry(max_attempts=3, delay=2):
 #######################################################################################
 #                           RBAC HELPERS (User & File Tiers)
 #######################################################################################
+@lru_cache(maxsize=1)
 @azure_retry()
 def load_rbac_files():
     """
@@ -230,6 +236,7 @@ def get_file_tier(file_name):
         return best_tier
 
 
+
 #######################################################################################
 #                           TABLES / SCHEMA / SAMPLE GENERATION (DYNAMIC)
 #######################################################################################
@@ -262,7 +269,7 @@ def format_tables_text(meta: dict) -> str:
             lines.append(f"   -{col}: {dt}")
     return "\n".join(lines)
 
-def format_schema_and_sample(meta: dict, sample_n: int = 2, char_limit: int = 15) -> str:
+def format_schema_and_sample(meta: dict, sample_n: int = 2, char_limit: int = 40) -> str:
     def truncate_val(v):
         s = "" if v is None else str(v)
         return s if len(s) <= char_limit else s[:char_limit] + "…"
@@ -279,7 +286,7 @@ def format_schema_and_sample(meta: dict, sample_n: int = 2, char_limit: int = 15
 
 _metadata   = load_table_metadata(sample_n=2)
 TABLES      = format_tables_text(_metadata)
-SCHEMA_TEXT = format_schema_and_sample(_metadata, sample_n=2, char_limit=15)
+SCHEMA_TEXT = format_schema_and_sample(_metadata, sample_n=2, char_limit=40)
 #SAMPLE_TEXT = SCHEMA_TEXT  # if SAMPLE_TEXT needed separately
 
 #######################################################################################
@@ -309,6 +316,11 @@ def call_llm(system_prompt, user_prompt, max_tokens=500, temperature=0.0):
         data = response.json()
         if "choices" in data and data["choices"]:
             content = data["choices"][0]["message"].get("content", "").strip()
+            finish_reason = data["choices"][0].get("finish_reason", "")
+            if finish_reason and finish_reason != "stop":
+                logging.warning("LLM finish_reason=%s", finish_reason)
+            cfr = data["choices"][0].get("content_filter_results")
+            if cfr: logging.warning("LLM content_filter=%s", cfr)
             if content:
                 return content
             else:
@@ -374,6 +386,34 @@ def call_llm_aux(system_prompt, user_prompt, max_tokens=300, temperature=0.0):
             return f"LLM Error: {e}"
     return "LLM Error: exceeded aux model rate limit"
 
+def rephrase_question_with_history(user_question, recent_history):
+    """
+    Calls the small LLM to rephrase/expand the user question using last 3 exchanges.
+    Returns a single improved question string.
+    """
+    # Compose the last 3 Q/A pairs as context (if available)
+    last_qas = []
+    for entry in reversed(recent_history or []):
+        if entry.startswith("User: ") or entry.startswith("Assistant: "):
+            last_qas.insert(0, entry)
+        if len(last_qas) >= 6:  # 3 Q/A pairs = 6 entries
+            break
+    context = "\n".join(last_qas)
+    
+    system_prompt = (
+        "You are an expert at rewriting user questions for search. "
+        "Given the recent conversation, rewrite the latest user question as a complete, unambiguous question. "
+        "If the latest message is already standalone, just repeat it. "
+        "Return ONLY the rewritten question. Do NOT include any explanations or extra words."
+    )
+    user_prompt = (
+        f"Recent history:\n{context}\n\n"
+        f"Latest user question:\n{user_question}\n\n"
+        "Rewritten standalone question:"
+    )
+    rewritten = call_llm_aux(system_prompt, user_prompt, max_tokens=100, temperature=0.0)
+    # Clean up, return as a single string (no list, no bullets)
+    return rewritten.strip().split("\n")[0]
 
 #######################################################################################
 #                   COMBINED TEXT CLEANING (Point #2 Optimization)
@@ -437,12 +477,14 @@ def split_question_into_subquestions(user_question, use_semantic_parsing=True):
         return subqs
     else:
         system_prompt = (
-            "You are a helpful assistant. "
-            "You receive a user question which may have multiple parts. "
-            "Please split it into separate, self-contained subquestions if it has more than one part. "
-            "If it's only a single question, simply return that one. "
-            "Return each subquestion on a separate line or as bullet points."
-        )
+    "You are a helpful assistant. "
+    "Your job is to split a user's question into the smallest number of necessary, self-contained subquestions. "
+    "• Only split if the question clearly asks for multiple independent answers."
+    "• Never split into more than 4 subquestions, no matter how long or complex the user query."
+    "• If the question can be answered as a whole, just return the original."
+    "• If you split, ensure that each subquestion is essential for a complete answer."
+    "Return each subquestion on a separate line or as bullet points."
+)
 
         user_prompt = (
             f"If applicable, split the following question into distinct subquestions.\n\n"
@@ -465,7 +507,35 @@ def split_question_into_subquestions(user_question, use_semantic_parsing=True):
 #######################################################################################
 #                 REFERENCES CHECK & RELEVANCE CHECK  (Points #3 + #1 synergy)
 #######################################################################################
+# --- NUMERIC_HINT for table-need detection ---
+NUMERIC_HINT = re.compile(
+    r"\b(count|how many|total|sum|average|revenue|visits?|visitation|incidents?|sales|footfall|foreigners?|utili[sz]ation)\b",
+    re.I,
+)
+# ------------------------------------------------------
 def references_tabular_data(question, tables_text):
+    # ---- NEW: cache classifier result ----
+    cache_key = question.lower().strip()
+    if cache_key in tool_cache.get("table_need", {}):
+        return tool_cache["table_need"][cache_key]
+    # ---- NEW: short-circuit obvious numeric questions ----
+    if NUMERIC_HINT.search(question):
+        tool_cache.setdefault("table_need", {})[cache_key] = True
+        logging.info(f"[Table-Need] '{question[:60]}' → YES (regex)")
+        return True
+    # ------------------------------------------------------
+    # --- [CONTEXT ROBUSTNESS] Extract only table names for the classifier ---
+    table_names_only = []
+    for line in tables_text.splitlines():
+        if ".xlsx" in line or ".csv" in line:
+            if '"' in line:
+                name = line.split('"')[1]
+                table_names_only.append(name)
+            else:
+                name = line.strip().split(':')[0].strip()
+                table_names_only.append(name)
+    available_tables_short = "\n".join(table_names_only) if table_names_only else "[No table names found]"
+    # ------------------------------------------------------
     llm_system_message = (
         "You are a strict YES/NO classifier. Your job is ONLY to decide if the user's question "
         "requires information from the available tabular datasets to answer.\n"
@@ -475,49 +545,82 @@ def references_tabular_data(question, tables_text):
     llm_user_message = f"""
     User Question:
     {question}
-
-    chat_history
-    {recent_history}
     
     Available Tables:
-    {tables_text}
+    {available_tables_short}
 
     Decision Rules:
-    1. Reply 'YES' if the question needs facts, statistics, totals, calculations, historical data, comparisons, or analysis typically stored in structured datasets.
-    2. Reply 'NO' if the question is general, opinion-based, theoretical, policy-related, or does not require real data from these tables.
+    1. Reply 'YES' ONLY if the question explicitly asks for numerical facts, figures, statistics, totals, direct calculations from table columns, or specific record lookups that are clearly obtainable from the structured datasets listed in Available Tables.
+    2. Reply 'NO' if the question is general, opinion-based, theoretical, policy-related, or does not require specific numerical data directly from these tables.
     3. Completely ignore the sample rows of the tables. Assume full datasets exist beyond the samples.
-    4. Be STRICT: only reply 'NO' if you are CERTAIN the tables are not needed.
-    5. Do NOT create or assume data. Only decide if the tabular data is NEEDED to answer.
-    6. Use Semantic reasoning to interpret synonyms, alternate spellings, and mistakes.
+    4. Be STRICT: only reply 'NO' if you are CERTAIN the tables are not needed for direct data extraction.
+    5. Do NOT create or assume data. Only decide if the listed tabular data is NEEDED to answer the User Question by directly querying the table.
+    6. Base your decision ONLY on the User Question and the list of Available Tables. IGNORE any potential chat history.
+    7. Questions asking for qualitative summaries, opinions, 'areas of improvement', 'key findings', or general topics often found in narrative reports or policy documents should be classified as 'NO', even if they mention dates or entities that might also appear in tables, UNLESS the question specifically asks for quantifiable metrics, counts, or statistics directly from those tables.
 
     Final instruction: Reply ONLY with 'YES' or 'NO'.
     """
     llm_response = call_llm_aux(llm_system_message, llm_user_message, max_tokens=5, temperature=0.0)
     clean_response = llm_response.strip().upper()
-    return "YES" in clean_response
+    logging.info(f"[Table-Need] '{question[:60]}' → {clean_response}")
+    final = "YES" in clean_response
+    tool_cache.setdefault("table_need", {})[cache_key] = final
+    return final
 
-def is_text_relevant(question, snippet):
-    if not snippet.strip():
+# In ask_func_client_2.py
+# Replace your existing is_text_relevant function with this:
+def is_text_relevant(question, snippet, question_needs_tables_too: bool): # Added new parameter
+    if not snippet or not snippet.strip():
+        logging.debug("[Relevance Check] Snippet is empty, returning False.")
         return False
 
-    system_prompt = (
-        "You are a classifier. We have a user question and a snippet of text. "
-        "Decide if the snippet is truly relevant to answering the question. "
-        "Return ONLY 'YES' or 'NO'."
-    )
-    user_prompt = f"Question: {question}\nSnippet: {snippet}\nRelevant? Return 'YES' or 'NO' only."
+    context_guidance = ""
+    if question_needs_tables_too:
+        context_guidance = (
+            "The User Question is also expected to be answered by data from tables. "
+            "Therefore, this Text Snippet is relevant ONLY IF it provides crucial context, "
+            "definitions, or directly related information that the tables might not offer for this specific question. "
+            "General mentions of the same topics, entities, or dates found in broad reports are LESS LIKELY to be relevant "
+            "if the core answer is expected from a table."
+        )
+    else: # Question does NOT need tables, so index is primary source for it
+        context_guidance = (
+            "The User Question is expected to be answered primarily by text documents like this Snippet. "
+            "Therefore, consider it relevant if it addresses the question's topic, keywords, or provides background."
+        )
 
+    system_prompt = (
+        "You are an expert relevance classifier. Your goal is to determine if the provided text Snippet "
+        "contains information that could DIRECTLY help answer the User Question or is highly related.\n"
+        f"{context_guidance}\n"
+        "Focus on keywords, topics, and entities. "
+        "Consider the snippet relevant even if it only partially answers the question or provides essential background context, "
+        "especially if it's from a policy or procedure document for a how-to question.\n"
+        "Be critical for general report snippets if the question is very specific and likely answerable by data tables.\n"
+        "Respond ONLY with 'YES' or 'NO'."
+    )
+    max_snippet_len = 500 # Truncate long snippets for the prompt
+    snippet_for_prompt = snippet[:max_snippet_len] + "..." if len(snippet) > max_snippet_len else snippet
+    
+    user_prompt = f"User Question:\n{question}\n\nText Snippet:\n{snippet_for_prompt}\n\nIs this snippet relevant? Respond YES or NO."
+    
     content = call_llm_aux(system_prompt, user_prompt, max_tokens=10, temperature=0.0)
-    return content.strip().upper().startswith("YES")
+    # Keep this one debug line to see the direct output of the relevance check
+    #print(f"DEBUG: [Relevance Check] Q: '{question[:50]}...' NeedsTables: {question_needs_tables_too} -> LLM Raw Response: '{content}'")
+    is_relevant_flag = content.strip().upper().startswith("YES")
+    return is_relevant_flag
+    
 
 #######################################################################################
 #                              TOOL #1 - Index Search
 #######################################################################################
+# --- Modified tool_1_index_search with detailed logging ---
 @azure_retry()
-def tool_1_index_search(user_question, top_k=5, user_tier=1):
+def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_tabular: bool = False):
     """
     Modified version: uses split_question_into_subquestions to handle multi-part queries.
     Then filters out docs the user has no access to, before final top_k selection.
+    Includes detailed DEBUG logging.
     """
     SEARCH_SERVICE_NAME = CONFIG["SEARCH_SERVICE_NAME"]
     SEARCH_ENDPOINT = CONFIG["SEARCH_ENDPOINT"]
@@ -526,9 +629,17 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1):
     SEMANTIC_CONFIG_NAME = CONFIG["SEMANTIC_CONFIG_NAME"]
     CONTENT_FIELD = CONFIG["CONTENT_FIELD"]
 
-    subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
+    # --- Added Log ---
+    #print(f"DEBUG: [Tool 1] Entering for question '{user_question[:50]}...'")
+
+    #subquestions = split_question_into_subquestions(user_question, use_semantic_parsing=True)
+    # Optionally, you can normalize here:
+    # subquestions = robust_split_question(normalize_question(user_question), use_semantic_parsing=True)
+    subquestions = robust_split_question(user_question, use_semantic_parsing=True)
     if not subquestions:
         subquestions = [user_question]
+    # --- Added Log ---
+    #print(f"DEBUG: [Tool 1] Subquestions: {subquestions}")
 
     try:
         search_client = SearchClient(
@@ -538,71 +649,111 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1):
         )
 
         merged_docs = []
+        all_raw_results_count = 0 # To count total raw results
         for subq in subquestions:
-            logging.info(f"🔍 Searching in Index for subquestion: {subq}")
+            # --- Added Log ---
+            #print(f"DEBUG: [Tool 1] Searching index for subquestion: '{subq}'")
             results = search_client.search(
                 search_text=subq,
                 query_type="semantic",
                 semantic_configuration_name=SEMANTIC_CONFIG_NAME,
                 top=top_k,
                 select=["title", CONTENT_FIELD],
-                include_total_count=False
+                include_total_count=True # Get total count if possible (check API support)
             )
 
-            for r in results:
-                snippet = r.get(CONTENT_FIELD, "").strip()
-                title = r.get("title", "").strip()
-                if snippet:
-                    merged_docs.append({"title": title, "snippet": snippet})
+            # --- Log raw results found BEFORE filtering ---
+            raw_results_list = list(results) # Convert iterator to list to inspect
+            current_batch_count = len(raw_results_list)
+            all_raw_results_count += current_batch_count
+            #print(f"DEBUG: [Tool 1] Raw search returned {current_batch_count} results for '{subq}':")
+            for i, r in enumerate(raw_results_list):
+                 snippet = r.get(CONTENT_FIELD, "").strip()
+                 title = r.get("title", "").strip()
+                 #print(f"DEBUG: [Tool 1]   Raw {i+1}: Title='{title}', Snippet='{snippet[:60]}...'")
+                 if snippet:
+                     # Add to merged_docs only if snippet exists
+                     merged_docs.append({"title": title, "snippet": snippet})
+            # --- End log raw results ---
 
+        # --- Added Log ---
+        #print(f"DEBUG: [Tool 1] Total raw results found across subquestions: {all_raw_results_count}")
         if not merged_docs:
+            # --- Added Log ---
+            #print("DEBUG: [Tool 1] No documents found with non-empty snippets after initial search.")
             return {"top_k": "No information", "file_names": []}
 
         # Filter by access + relevance
         relevant_docs = []
-        for doc in merged_docs:
+        # --- Added Log ---
+        #print(f"DEBUG: [Tool 1] Filtering {len(merged_docs)} merged docs by RBAC + Relevance...")
+        for i, doc in enumerate(merged_docs):
             snippet = doc["snippet"]
-            # get tier for doc["title"]
-            file_tier = get_file_tier(doc["title"])
-            if user_tier >= file_tier:
-                if is_text_relevant(user_question, snippet):
+            title = doc["title"]
+             # --- Added Log ---
+            #print(f"DEBUG: [Tool 1]  Filtering doc {i+1}/{len(merged_docs)}: Title='{title}'")
+            file_tier = get_file_tier(title)
+            rbac_pass = user_tier >= file_tier
+            # --- Added Log ---
+            #print(f"DEBUG: [Tool 1]   RBAC Check: UserTier={user_tier}, FileTier={file_tier}, Pass={rbac_pass}")
+            if rbac_pass:
+                # --- Log relevance check ---
+                #print(f"DEBUG: [Tool 1]   Checking relevance for snippet: '{snippet[:60]}...'")
+                is_relevant_result = is_text_relevant(user_question, snippet, question_primarily_tabular) # Call relevance check
+                # --- Added Log ---
+                #print(f"DEBUG: [Tool 1]   Relevance Check Result: {is_relevant}")
+                # --- End log relevance check ---
+                if is_relevant_result: # Actually use the result for filtering
                     relevant_docs.append(doc)
+                #print(f"DEBUG: [Tool 1]   >>> Doc {i+1} passed RBAC, ADDED to relevant_docs (Relevance ignored).")
+            #else:
+                 # --- Added Log ---
+                 #print(f"DEBUG: [Tool 1]   --- Doc {i+1} failed RBAC check.")
 
         if not relevant_docs:
+             # --- Added Log ---
+            #print("DEBUG: [Tool 1] No documents remaining after RBAC/Relevance filtering.")
             return {"top_k": "No information", "file_names": []}
 
-        # Weighted scoring
+        # Weighted scoring (Keep as is)
         for doc in relevant_docs:
             ttl = doc["title"].lower()
             score = 0
-            if "policy" in ttl:
-                score += 10
-            if "report" in ttl:
-                score += 5
-            if "sop" in ttl:
-                score += 3
+            if "policy" in ttl: score += 10
+            if "report" in ttl: score += 5
+            if "sop" in ttl: score += 3
             doc["weight_score"] = score
 
         docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
         docs_top_k = docs_sorted[:top_k]
-        
+
         # Extract file names and texts separately - ensure no duplicates
-        file_names = []
+        # Corrected this logic slightly from previous thought
+        file_names_final = []
+        seen_titles = set()
         for d in docs_top_k:
-            if d["title"] not in file_names:  # Avoid duplicates
-                file_names.append(d["title"])
-        
-        # Limit to max 3 file names
-        file_names = file_names[:3]
-        
+            title = d["title"]
+            if title not in seen_titles:
+                file_names_final.append(title)
+                seen_titles.add(title)
+        file_names_final = file_names_final[:3] # Apply limit after ensuring uniqueness
+
         re_ranked_texts = [d["snippet"] for d in docs_top_k]
         combined = "\n\n---\n\n".join(re_ranked_texts)
 
-        return {"top_k": combined, "file_names": file_names}
+        # --- Log final return ---
+        final_dict = {"top_k": combined, "file_names": file_names_final}
+        #print(f"DEBUG: [Tool 1] Returning: file_names={final_dict['file_names']}, top_k snippet count={len(docs_top_k)}")
+        return final_dict
+        # --- End log final return ---
 
     except Exception as e:
         logging.error(f"⚠️ Error in Tool1 (Index Search): {str(e)}")
+        # --- Added Log ---
+        #print(f"DEBUG: [Tool 1] Error encountered: {e}")
         return {"top_k": "No information", "file_names": []}
+
+# --- End of modified tool_1_index_search ---
 
 #######################################################################################
 #                 HELPER to check table references vs. user tier
@@ -617,42 +768,62 @@ def reference_table_data(code_str, user_tier):
     If all references are okay, return None (meaning "all good").
     """
     # We'll look for patterns like "dataframes.get("SomeFile.xlsx") or the actual file references 
-    pattern = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+    pattern = re.compile(
+    r'(?:dataframes\.get|pd\.read_(?:excel|csv))\(\s*[\'"]([^\'"]+)[\'"]\s*\)'
+    )
     found_files = pattern.findall(code_str)
+    unique_files = list(set(found_files))
 
-    for fname in found_files:
+    # Modify the loop to iterate over unique_files instead of found_files:
+    for fname in unique_files:
+        # ... rest of the loop checking required_tier ...
         required_tier = get_file_tier(fname)
         if user_tier < required_tier:
             return f"User does not have access to {fname} (requires tier {required_tier})."
 
-    return None  # all good
+    return None # all good
 
 #######################################################################################
 #                              TOOL #2 - Code Run
 #######################################################################################
 @azure_retry()
+@azure_retry()
 def tool_2_code_run(user_question, user_tier=1, recent_history=None):
-    if not references_tabular_data(user_question, TABLES):
-        return {"result": "No information", "code": "", "table_names": []}
+    #if not references_tabular_data(user_question, TABLES):
+        #return {"result": "No information", "code": "", "table_names": []}
 
     # Centralize fallback logic for chat history
     rhistory = recent_history if recent_history else []
 
     system_prompt = f"""
-You are a python expert. Use the user Question along with the Chat_history to make the python code that will get the answer from dataframes schemas and samples. 
-Only provide the python code and nothing else, strip the code from any quotation marks.
-Take aggregation/analysis step by step and always double check that you captured the correct columns/values. 
-Don't give examples, only provide the actual code. If you can't provide the code, say "404" and make sure it's a string.
+You are a python expert. Use the User Question along with the Chat_history to make the python code that will get the answer from the provided Dataframes schemas and samples.
+Only provide the python code and nothing else, without any markdown fences like ```python or ```.
+Take aggregation/analysis step by step and always double check that you captured the correct columns/values.
+Don't give examples, only provide the actual code. If you can't provide the code, say "404" as a string.
 
-**Rules**:
-1. Only use columns that actually exist. Do NOT invent columns or table names.
-2. Don't rely on sample rows; the real dataset can have more data. Just reference the correct columns as shown in the schemas.
-3. Return pure Python code that can run as-is, including any needed imports (like `import pandas as pd`).
-4. The code must produce a final print statement with the answer.
-5. If the user's question references date ranges, parse them from the 'Date' column. If monthly data is requested, group by month or similar.
-6. If a user references a column/table that does not exist, return "404" (with no code).
-7. Use semantic reasoning to handle synonyms or minor typos (e.g., "Al Bujairy," "albujairi," etc.), as long as they reasonably map to the real table names.
-8. Do not use Chat_history embed Information or Answers in the code. 
+**General Rules**:
+1. Only use columns that actually exist as per the schemas. Do NOT invent columns or table names.
+2. Use semantic reasoning to handle synonyms, minor typos or punctuation for table/column names if they reasonably map to the provided schemas.
+3. Don't rely on sample rows for data content; the real dataset can have more/different data. Always reference columns as shown in the schemas.
+4. Return pure Python code that can run as-is, including necessary imports (like `import pandas as pd`).
+5. The code must produce a final `print()` statement with the answer. If multiple pieces of information are requested, print them clearly labeled.
+6. If a user references a column/table that does not exist in the schemas, return "404".
+7. Do NOT use manually defined data. Load data into dataframes. Do not use pd.DataFrame(data={...}).
+7. Do not use Chat_history information directly within the generated code logic or print statements, but use it for context if needed to understand the user's question.
+
+**Data Handling Rules for Pandas Code**:
+A. **Numeric Conversion:** When a column is expected to be numeric for calculations (e.g., for .sum(), .mean(), comparisons):
+   - First, replace common non-numeric placeholders (like '-', 'N/A', or strings containing only spaces) with `pd.NA` or `numpy.nan`. For example: `df['column_name'] = df['column_name'].replace(['-', 'N/A', ' ', '  '], pd.NA)`
+   - Then, explicitly convert the column to a numeric type using `pd.to_numeric(df['column_name'], errors='coerce')`. This will turn any remaining unparseable values into `NaN`.
+B. **Handle NaN Values:** Before performing aggregate functions (like `.sum()`, `.mean()`) or arithmetic operations on numeric columns, ensure `NaN` values are handled, e.g., by using `skipna=True` (which is default for many aggregations like `.sum()`) or by explicitly filling them (e.g., `df['numeric_column'].fillna(0).sum()`).
+C. **Date Columns:** If the question involves dates:
+   - Convert date-like columns to datetime objects using `pd.to_datetime(df['Date_column'], errors='coerce')`.
+   - When comparing or merging data based on dates across multiple dataframes, ensure date columns are of a consistent datetime type and format. Be careful with operations that require aligned date indexes.
+D. **Complex Lookups:** For questions requiring data from multiple tables (e.g., "find X in table A on the date of max Y in table B"):
+   - First, determine the intermediate value (e.g., the date of max Y).
+   - Then, use that value to filter/query the second table.
+   - Ensure data types are compatible for lookups or merges.
+E. **Error Avoidance:** Generate code that is robust. If a filtering step might result in an empty DataFrame or Series, check for this (e.g., `if not df_filtered.empty:`) before trying to access elements by index (e.g., `.iloc[0]`) or perform calculations that would fail on empty data. If data is not found after filtering, print a message like "No data available for the specified criteria." 
 
 User question:
 {user_question}
@@ -662,11 +833,42 @@ Dataframes schemas and sample:
 
 Chat_history:
 {rhistory}
+
+Todays date (dd/mm/yyyy): 
+{todays_date}
 """
 
-    code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.7)
+    code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.0)
 
-    if not code_str or code_str == "404":
+    # 1️⃣ Treat "404" as a retry-able error
+    MAX_RETRIES = 3          # 1 original + 2 more tries
+    attempt = 1
+    while code_str.strip() == "404" and attempt < MAX_RETRIES:
+        # ——— 2️⃣  DISTINCT REPROMPT ———
+        reprompt = (
+            system_prompt.replace("Don't give examples,", f"Retry attempt {attempt:02d} – produce real code,")
+            + "\n\n[Retry] Previous answer was '404'. "
+              "Generate executable pandas code that answers the question."
+        )
+        code_str = call_llm(reprompt, user_question, max_tokens=1200, temperature=0.0)
+        attempt += 1
+
+    # 3️⃣ Cache the last good code
+    cache_key_code = f"code_cache::{user_question.lower().strip()}"
+    if code_str.strip() != "404":
+        tool_cache[cache_key_code] = code_str
+    elif code_str.strip() == "404" and cache_key_code in tool_cache:
+        logging.info("Using cached code for identical question after 404 refusal")
+        code_str = tool_cache[cache_key_code]
+
+    # 4️⃣ Graceful final fallback
+    if code_str.strip() == "404":
+        return {
+            "result": "The data exists, but automatic code generation failed. Please try again later.",
+            "code": "",
+            "table_names": [],
+        }
+    if not code_str:
         return {"result": "No information", "code": "", "table_names": []}
 
     # Check references vs. user tier
@@ -679,7 +881,7 @@ Chat_history:
     table_names = []
     
     # Pattern 1: dataframes.get("filename")
-    pattern1 = re.compile(r'dataframes\.get\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+    pattern1 = re.compile(r'dataframes\.get\(\s*[\'\"]([^\'\"]+)[\'\"]\s*\)')
     matches1 = pattern1.findall(code_str)
     if matches1:
         for match in matches1:
@@ -687,7 +889,7 @@ Chat_history:
                 table_names.append(match)
     
     # Pattern 2: pd.read_excel("filename") or pd.read_csv("filename")
-    pattern2 = re.compile(r'pd\.read_(?:excel|csv)\(\s*[\'"]([^\'"]+)[\'"]\s*\)')
+    pattern2 = re.compile(r'pd\.read_(?:excel|csv)\(\s*[\'\"]([^\'\"]+)[\'\"]\s*\)')
     matches2 = pattern2.findall(code_str)
     if matches2:
         for match in matches2:
@@ -697,55 +899,149 @@ Chat_history:
     # Limit to max 3 table names, but keep file extensions
     table_names = table_names[:3]
 
-    execution_result = execute_generated_code(code_str)
+    #print(f"DEBUG: For question '{user_question[:50]}...'") # Identify which question run
+    #print(f"DEBUG: Generated code_str:\n---\n{code_str}\n---")
+    #print(f"DEBUG: Extracted table_names: {table_names}")
+    #This line was changed to include only the tables needed
+    execution_result = execute_generated_code(code_str, required_tables=table_names) # Pass table_names
     return {"result": execution_result, "code": code_str, "table_names": table_names}
 
-def execute_generated_code(code_str):
+def execute_generated_code(code_str, required_tables=None):
+    import re
+    from rapidfuzz import process, fuzz
+
+    def fuzzy_correct_code(code_str, dataframes):
+        corrected_code = code_str
+
+        # Match exact filters: df['col'] == 'val' or df.col == 'val'
+        exact_pattern = r"((\w+)(?:\[['\"]([^'\"]+)['\"]\]|\.(\w+))\s*(?:==|eq)\s*['\"]([^'\"]+)['\"])"
+        exact_matches = re.findall(exact_pattern, code_str)
+        print(f"[FUZZY DEBUG] Found {len(exact_matches)} exact-match filters.")
+
+        for match in exact_matches:
+            full_expr, df_prefix, col1, col2, val = match
+            col = col1 or col2
+            for fname, df in dataframes.items():
+                if col in df.columns and pd.api.types.is_string_dtype(df[col]):
+                    try:
+                        unique_vals = df[col].dropna().astype(str).unique().tolist()
+                        best_match = process.extractOne(val, unique_vals, scorer=fuzz.token_sort_ratio)
+                        if best_match and best_match[1] > 85:
+                            print(f"[FUZZY FIX - EXACT] '{val}' → '{best_match[0]}' in column '{col}' (score={best_match[1]})")
+                            corrected_expr = f"{df_prefix}['{col}'] == '{best_match[0]}'"
+                            corrected_code = corrected_code.replace(full_expr, corrected_expr)
+                    except Exception as e:
+                        print(f"[FUZZY ERROR] {e}")
+
+        # Match fuzzy filters like: df['col'].str.contains('val')
+        contains_pattern = r"((\w+)(?:\[['\"]([^'\"]+)['\"]\]|\.(\w+))\.str\.contains\(\s*['\"]([^'\"]+)['\"])"
+        try:
+            contains_matches = re.findall(contains_pattern, code_str)
+        except re.error as e:
+            print(f"[REGEX ERROR] Invalid contains pattern: {e}")
+            contains_matches = []
+
+        print(f"[FUZZY DEBUG] Found {len(contains_matches)} .str.contains filters.")
+
+        for match in contains_matches:
+            if len(match) >= 5:
+                full_expr, df_prefix, col1, col2, val = match
+                col = col1 or col2
+                for fname, df in dataframes.items():
+                    if col in df.columns and pd.api.types.is_string_dtype(df[col]):
+                        try:
+                            unique_vals = df[col].dropna().astype(str).unique().tolist()
+                            best_match = process.extractOne(val, unique_vals, scorer=fuzz.token_sort_ratio)
+                            if best_match and best_match[1] > 85:
+                                print(f"[FUZZY FIX - CONTAINS] '{val}' → '{best_match[0]}' in column '{col}' (score={best_match[1]})")
+                                corrected_code = corrected_code.replace(
+                                    f".str.contains('{val}'", f".str.contains('{best_match[0]}'"
+                                )
+                        except Exception as e:
+                            print(f"[FUZZY ERROR] {e}")
+            else:
+                print(f"[FUZZY WARN] Unexpected match shape: {match}")
+                continue
+
+        return corrected_code
+
+
     account_url = CONFIG["ACCOUNT_URL"]
     sas_token = CONFIG["SAS_TOKEN"]
     container_name = CONFIG["CONTAINER_NAME"]
     target_folder_path = CONFIG["TARGET_FOLDER_PATH"]
 
+    dataframes = {}
+
+    if required_tables:
+        try:
+            blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
+            container_client = blob_service_client.get_container_client(container_name)
+
+            for file_name in required_tables:
+                blob_name = os.path.join(target_folder_path, file_name).replace("\\", "/")
+
+                try:
+                    blob_client = container_client.get_blob_client(blob_name)
+                    blob_data = blob_client.download_blob().readall()
+
+                    if file_name.lower().endswith(('.xlsx', '.xls')):
+                        df = pd.read_excel(io.BytesIO(blob_data))
+                        dataframes[file_name] = df
+                    elif file_name.lower().endswith('.csv'):
+                        df = pd.read_csv(io.BytesIO(blob_data))
+                        dataframes[file_name] = df
+                except Exception as blob_error:
+                    err_msg = f"Error loading required table '{blob_name}': {blob_error}"
+                    print(err_msg)
+                    logging.error(err_msg)
+                    return err_msg
+
+        except Exception as service_error:
+            err_msg = f"Azure connection error during selective table loading: {service_error}"
+            print(err_msg)
+            logging.error(err_msg)
+            return err_msg
+    else:
+        if "dataframes.get(" in code_str or "pd.read_excel(" in code_str or "pd.read_csv(" in code_str:
+            logging.warning("Code execution might expect tables, but none were identified as required.")
+            return "Error: Code seems to require tables, but specific tables needed were not identified or provided."
+        else:
+            logging.info("No required tables specified, proceeding without loading data.")
+
+    if not dataframes and ("dataframes.get(" in code_str):
+         return "Error: Failed to load required tables before code execution."
+
+    code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
+    code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
+
+    # ✅ Add debug print BEFORE correction
+    print(f"\n[RAW LLM GENERATED CODE]\n{code_str}")
+
+    code_modified = fuzzy_correct_code(code_modified, dataframes)
+
+    # ✅ Add debug print AFTER correction
+    print(f"\n[CODE AFTER FUZZY FIX]\n{code_modified}")
+
+    output_buffer = StringIO()
     try:
-        blob_service_client = BlobServiceClient(account_url=account_url, credential=sas_token)
-        container_client = blob_service_client.get_container_client(container_name)
-
-        dataframes = {}
-        blobs = container_client.list_blobs(name_starts_with=target_folder_path)
-
-        for blob in blobs:
-            file_name = blob.name.split('/')[-1]
-            blob_client = container_client.get_blob_client(blob.name)
-            blob_data = blob_client.download_blob().readall()
-
-            if file_name.endswith('.xlsx') or file_name.endswith('.xls'):
-                df = pd.read_excel(io.BytesIO(blob_data))
-            elif file_name.endswith('.csv'):
-                df = pd.read_csv(io.BytesIO(blob_data))
-            else:
-                continue
-
-            dataframes[file_name] = df
-
-        code_modified = code_str.replace("pd.read_excel(", "dataframes.get(")
-        code_modified = code_modified.replace("pd.read_csv(", "dataframes.get(")
-
-        output_buffer = StringIO()
         with contextlib.redirect_stdout(output_buffer):
             local_vars = {
                 "dataframes": dataframes,
                 "pd": pd,
                 "datetime": datetime
             }
-            exec(code_modified, {}, local_vars)
+            exec(code_modified, {"pd": pd, "datetime": datetime}, local_vars)
 
         output = output_buffer.getvalue().strip()
         return output if output else "Execution completed with no output."
 
-    except Exception as e:
-        err_msg = f"An error occurred during code execution: {e}"
-        print(err_msg)            
-        return err_msg
+    except Exception as exec_error:
+        err_msg = f"An error occurred during code execution: {exec_error}"
+        print(err_msg)
+        logging.error(err_msg)
+        return f"{err_msg}\n--- Failing Code ---\n{code_modified}\n--- End Code ---"
+
 
 #######################################################################################
 #                              TOOL #3 - LLM Fallback
@@ -773,22 +1069,8 @@ def final_answer_llm(user_question, index_dict, python_dict):
 
     if index_top_k.lower() == "no information" and python_result.lower() == "no information":
         fallback_text = tool_3_llm_fallback(user_question)
-        # Format the fallback as JSON to match the expected format
-        try:
-            import json
-            json_response = {
-                "content": [
-                    {
-                        "type": "paragraph",
-                        "text": fallback_text
-                    }
-                ],
-                "source": "AI Generated"
-            }
-            yield json.dumps(json_response)
-        except:
-            # If JSON conversion fails, fall back to plaintext
-            yield f"AI Generated answer:\n{fallback_text}\nSource: Ai Generated"
+        # Just yield plain text (no JSON wrapper)
+        yield f"{fallback_text}\n\nSource: AI Generated"
         return
 
     combined_info = f"INDEX_DATA:\n{index_top_k}\n\nPYTHON_DATA:\n{python_result}"
@@ -801,69 +1083,82 @@ def final_answer_llm(user_question, index_dict, python_dict):
 You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
 1) Index data: (INDEX_DATA)
 2) Python data: (PYTHON_DATA)
-*) Always Prioritise The python result if the 2 are different.
+*) If the two sources conflict, ALWAYS prioritize the Python result.
 
-Your output must be formatted as a properly escaped JSON with the following structure:
-{{
-  "content": [
-    {{
-      "type": "heading",
-      "text": "Main answer heading/title here"
-    }},
-    {{
-      "type": "paragraph",
-      "text": "Normal paragraph text here"
-    }},
-    {{
-      "type": "bullet_list",
-      "items": [
-        "List item 1",
-        "List item 2",
-        "List item 3"
-      ]
-    }},
-    {{
-      "type": "numbered_list",
-      "items": [
-        "Numbered item 1",
-        "Numbered item 2"
-      ]
-    }}
-  ],
-  "source": "Source type (Index, Python, Index & Python, or AI Generated)"
-}}
+###################################################################################
+            OUTPUT FORMAT: MARKDOWN (FOR TEAMS OR CHAT UI)
 
-Important guidelines:
-1. Format your content appropriately based on the answer structure you want to convey
-2. Use "heading" for titles and subtitles
-3. Use "paragraph" for normal text blocks
-4. Use "bullet_list" for unordered lists
-5. Use "numbered_list" for ordered/numbered lists
-6. Use "code_block" for any code snippets
-7. Make sure the JSON is valid and properly escaped
-8. Every section must have a "type" and appropriate content fields
-9. If the user asks a two-part question requiring both Index and Python data, set source to "Index & Python"
-10. The "source" field must be one of: "Index", "Python", "Index & Python", or "AI Generated"
-11. When questions have multiple parts needing different sources, use "Index & Python" as the source
+Use these Markdown elements in your response:
+  - Headings:            # Main title, ## Subsection 
+  - Paragraphs:          Normal text for explanations
+  - Bullet lists:        - item
+  - Numbered lists:      1. item
+  - Tables:              Use Markdown syntax (see below)
+  - Code blocks:         ```python ... ```
+Always seperate the elements with a new line after each one.
 
-Use only these two sources to answer. If you find relevant info from both, answer using both. 
-If none is truly relevant, indicate that in the first paragraph and set source to "AI Generated".
+If you need to present data in tabular form (such as monthly stats, comparisons, etc),
+ALWAYS use Markdown table syntax as below:
 
-For multi-part questions, organize your response clearly with appropriate headings or sections 
-for each part of the answer. If one part comes from Index and another from Python, use both sources.
+  | Column 1 | Column 2 | Column 3 |
+  |----------|----------|----------|
+  | Value 1  | Value 2  | Value 3  |
+  | ...      | ...      | ...      |
 
-User question:
+Make sure every table has a header and a separator row (with dashes).
+
+###################################################################################
+                      GUIDELINES AND RULES
+
+1. Organize the answer using headings and sections for each subquestion, if relevant.
+2. **Your total answer should never exceed 1000 characters.**
+3. Summarize or merge repetitive/lengthy lists. Never include more than 12 items
+   in any bullet or numbered list.
+4. Prefer concise, direct answers—avoid excessive details.
+5. If you couldn't find relevant information, answer as best you can and use
+   "Source: AI Generated" at the end.
+6. If presenting data best shown in a table (such as numbers per month, by location,
+   or by category), use Markdown table syntax as shown above.
+7. Always end your answer with a single line showing the data source used, in this format:
+      - **Source:** Index
+      - **Source:** Python
+      - **Source:** Index & Python
+      - **Source:** AI Generated
+8. If both Index and Python data were used, use "Source: Index & Python".
+   If only Index, use "Source: Index". If only Python, use "Source: Python".
+9. For multi-part questions, organize the answer with subheadings or numbered steps.
+10. If the answer is a procedure/SOP, only list key actions (summarize—don't list every sub-step).
+
+###################################################################################
+                PROMPT INPUT DATA (Available for your answer)
+
+User Question:
 {user_question}
 
-INDEX_DATA:
+Index Data:
 {index_top_k}
 
-PYTHON_DATA:
+Python Data:
 {python_result}
 
-Chat_history:
+Chat history:
 {recent_history if recent_history else []}
+
+Todays date (dd/mm/yyyy): 
+{todays_date}
 """
+
+
+
+
+
+# 12. **If the relevant content is a long list of steps, summarize the list and only include the most important steps/items in your JSON output.**
+# 13. **If the answer is a procedure, select only the key actions (not every sub-step). If the document contains a list that is too long, summarize and mention there are details in the source.**
+# 14. **Never generate more than 12 items in any bullet_list or numbered_list.**
+# 15. **Prefer a concise answer. If the source content is repetitive, merge and summarize instead of listing.**
+# 16. **If the user asks for a detailed SOP, you may note in a paragraph: "For full details, see the official document."**
+# 17. **Your total answer should never exceed 2000 characters.**
+
 
     # ########################################################################
     # # ORIGINAL SYSTEM PROMPT - UNCOMMENT TO USE INSTEAD OF JSON FORMAT
@@ -899,7 +1194,7 @@ Chat_history:
     # """
 
     try:
-        final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.0)
+        final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.3)
 
         # Ensure we never yield an empty or error-laden string without a fallback
         if (not final_text.strip() 
@@ -919,28 +1214,30 @@ Chat_history:
 #######################################################################################
 #                          POST-PROCESS SOURCE  (adds file / table refs)
 #######################################################################################
-def post_process_source(final_text, index_dict, python_dict):
+def post_process_source(final_text, index_dict, python_dict, user_question=None):
     """
     • If the answer is valid JSON, inject file/table info into BOTH
         – response_json["source_details"]   (for your UI)
         – response_json["content"]          (visible paragraphs)
     • Otherwise fall back to the legacy plain-text logic.
+    • Optionally, always ensure the user's question is present as the first heading or paragraph.
     """
     import json, re
 
-    # ---------- helper to append visible reference paragraphs ----------
     def _inject_refs(resp, files=None, tables=None):
         if not isinstance(resp.get("content"), list):
             resp["content"] = []
         if files:
+            bullet_block = "Referenced:\n- " + "\n- ".join(files)
             resp["content"].append({
                 "type": "paragraph",
-                "text": f"Referenced: {', '.join(files)}"
+                "text": bullet_block
             })
         if tables:
+            bullet_block = "Calculated using:\n- " + "\n- ".join(tables)
             resp["content"].append({
                 "type": "paragraph",
-                "text": f"Calculated using: {', '.join(tables)}"
+                "text": bullet_block
             })
 
     # ---------- strip code-fence wrappers before JSON parse ----------
@@ -956,44 +1253,69 @@ def post_process_source(final_text, index_dict, python_dict):
     except Exception:
         response_json = None
 
-    if (
-        isinstance(response_json, dict)
-        and "content" in response_json
-        and "source"  in response_json
-    ):
-        # ---- normalise / override "source" field ----
+    # ---------- fallback if JSON parsing failed but it looks like an AI-generated JSON string ----------
+    if response_json is None:
+        lower_clean = cleaned.lower()
+        if '"content"' in lower_clean and '"source"' in lower_clean and 'ai generated' in lower_clean:
+            import re
+            text_blocks = re.findall(r'"text"\s*:\s*"([^"]+)"', cleaned)
+            if text_blocks:
+                markdown_answer = "\n\n".join(text_blocks).strip()
+            else:
+                markdown_answer = cleaned  # fallback to raw if regex failed
+            # Ensure Source line
+            if 'source:' not in markdown_answer.lower():
+                markdown_answer += "\n\nSource: AI Generated"
+            return markdown_answer
+
+    # ONLY treat it as "our" JSON if it has:
+    #  1) response_json is a dict
+    #  2) response_json["content"] is a _list_ of dicts, each having both "type" and "text"
+    #  3) response_json["source"] is a string
+    valid_structure = False
+    if isinstance(response_json, dict):
+        content_block = response_json.get("content")
+        source_block  = response_json.get("source")
+
+        if isinstance(content_block, list) and isinstance(source_block, str):
+            all_blocks_ok = True
+            for block in content_block:
+                if not (isinstance(block, dict)
+                        and "type" in block
+                        and "text" in block):
+                    all_blocks_ok = False
+                    break
+            if all_blocks_ok:
+                valid_structure = True
+
+    if valid_structure:
         idx_has  = index_dict .get("top_k" , "").strip().lower() not in ["", "no information"]
         py_has   = python_dict.get("result", "").strip().lower() not in ["", "no information"]
-
         src = response_json["source"].strip()
         if src == "Python" and idx_has:
             src = "Index & Python"
         elif src == "Index" and py_has:
             src = "Index & Python"
         response_json["source"] = src
-
-        # ---- attach source_details & visible refs ----
         if src == "Index & Python":
             files  = index_dict .get("file_names", [])
             tables = python_dict.get("table_names", [])
+            #print(f"DEBUG: [post_process_source] src='Index & Python'. Files List: {files}, Tables List: {tables}")
             response_json["source_details"] = {
-                "files"       : index_dict.get("top_k", "No information"),
-                "code"        : python_dict.get("code", ""),
+                "files"       : "", #index_dict.get("top_k", "No information"),
+                "code"        : "", #python_dict.get("code", ""),
                 "file_names"  : files,
                 "table_names" : tables
             }
             _inject_refs(response_json, files, tables)
-
         elif src == "Index":
             files = index_dict.get("file_names", [])
             response_json["source_details"] = {
-                "files"      : index_dict.get("top_k", "No information"),
+                "files"      : "",
                 "file_names" : files
             }
             _inject_refs(response_json, files=files)
-
         elif src == "Python":
-            # fallback extraction if table_names list is empty
             if not python_dict.get("table_names"):
                 python_dict["table_names"] = re.findall(
                     r'["\']([^"\']+\.(?:xlsx|xls|csv))["\']',
@@ -1002,12 +1324,63 @@ def post_process_source(final_text, index_dict, python_dict):
                 )
             tables = python_dict.get("table_names", [])
             response_json["source_details"] = {
-                "code"        : python_dict.get("code", ""),
+                "code"        : "",
                 "table_names" : tables
             }
             _inject_refs(response_json, tables=tables)
+        else:
+            response_json["source_details"] = {}
+                
+        # --- Ensure the user's question is present as first heading or paragraph ---
+        if user_question:
+            import difflib
+            def _is_similar(a, b, threshold=0.7):
+                a, b = a.strip().lower(), b.strip().lower()
+                seq_sim = difflib.SequenceMatcher(None, a, b).ratio()
+                a_tokens = set(a.split())
+                b_tokens = set(b.split())
+                if not a_tokens or not b_tokens:
+                    return False
+                overlap = len(a_tokens & b_tokens) / max(len(a_tokens), len(b_tokens))
+                return seq_sim > threshold or overlap > 0.7
 
-        # AI Generated or anything else → leave unchanged
+            uq_norm = user_question.strip().lower()
+            found = False
+            if isinstance(response_json.get("content"), list):
+                 for i, block in enumerate(response_json["content"]):
+                    # Check if block is a dict before accessing keys
+                    if isinstance(block, dict) and block.get("type") in ("heading", "paragraph"):
+                        block_text = block.get("text", "").strip().lower()
+                        if _is_similar(uq_norm, block_text):
+                            found = True
+                            break
+            else:
+                 # Initialize content as list if missing or not a list
+                 response_json["content"] = []
+
+            if not found:
+                response_json["content"].insert(0, {"type": "heading", "text": user_question})
+        # --- SPECIAL HANDLING FOR PURELY "AI Generated" ANSWERS ---
+        # If the only source is "AI Generated", we convert the structured JSON
+        # into a plain Markdown string so that the Teams client displays it
+        # like a normal text message instead of showing raw JSON. This preserves
+        # existing behaviour for Index/Python answers (which still rely on the
+        # JSON format for reference injection) while fixing the issue reported
+        # by the user where AI-generated answers were rendered as JSON.
+        if "ai generated" in src.lower():
+            md_lines = []
+            for block in response_json.get("content", []):
+                if isinstance(block, dict):
+                    text_val = block.get("text", "").strip()
+                    if text_val:
+                        md_lines.append(text_val)
+            markdown_answer = "\n\n".join(md_lines).strip()
+            if markdown_answer:
+                markdown_answer += "\n\nSource: AI Generated"
+            else:
+                markdown_answer = "Source: AI Generated"
+            return markdown_answer
+
         return json.dumps(response_json)
 
     # ---------- legacy plain-text branch (unchanged) ----------
@@ -1018,17 +1391,18 @@ def post_process_source(final_text, index_dict, python_dict):
         code_text   = python_dict.get("code"  , "")
         file_names  = index_dict .get("file_names" , [])
         table_names = python_dict.get("table_names", [])
-
+        
         src_idx = final_text.lower().find("source:")
         if src_idx >= 0:
             eol = final_text.find("\n", src_idx)
             if eol < 0: eol = len(final_text)
             prefix, suffix = final_text[:eol], final_text[eol:]
-            file_info  = f"\nReferenced: {', '.join(file_names)}"  if file_names  else ""
-            table_info = f"\nCalculated using: {', '.join(table_names)}" if table_names else ""
-            final_text = prefix + file_info + table_info + suffix
-
-        return f"{final_text}\n\nThe Files:\n{top_k_text}\n\nThe code:\n{code_text}"
+            file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
+            table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
+            # Remove any additional Source: lines from suffix
+            suffix = re.sub(r"(?i)\n*source:.*", "", suffix)
+            final_text = prefix + file_info + table_info + "\nSource: Index & Python"
+        return final_text
 
     elif "source: python" in text_lower:
         code_text   = python_dict.get("code", "")
@@ -1038,9 +1412,11 @@ def post_process_source(final_text, index_dict, python_dict):
             eol = final_text.find("\n", src_idx)
             if eol < 0: eol = len(final_text)
             prefix, suffix = final_text[:eol], final_text[eol:]
-            table_info = f"\nCalculated using: {', '.join(table_names)}" if table_names else ""
-            final_text = prefix + table_info + suffix
-        return f"{final_text}\n\nThe code:\n{code_text}"
+            table_info = ("\nCalculated using:\n- " + "\n- ".join(table_names)) if table_names else ""
+            # Remove any additional Source: lines from suffix
+            suffix = re.sub(r"(?i)\n*source:.*", "", suffix)
+            final_text = prefix + table_info + "\nSource: Python"
+        return final_text
 
     elif "source: index" in text_lower:
         top_k_text = index_dict.get("top_k", "No information")
@@ -1050,9 +1426,11 @@ def post_process_source(final_text, index_dict, python_dict):
             eol = final_text.find("\n", src_idx)
             if eol < 0: eol = len(final_text)
             prefix, suffix = final_text[:eol], final_text[eol:]
-            file_info = f"\nReferenced: {', '.join(file_names)}" if file_names else ""
-            final_text = prefix + file_info + suffix
-        return f"{final_text}\n\nThe Files:\n{top_k_text}"
+            file_info = ("\nReferenced:\n- " + "\n- ".join(file_names)) if file_names else ""
+            # Remove any additional Source: lines from suffix
+            suffix = re.sub(r"(?i)\n*source:.*", "", suffix)
+            final_text = prefix + file_info + "\nSource: Index"
+        return final_text
 
     return final_text
 
@@ -1112,6 +1490,11 @@ def Log_Interaction(
     else:
         answer_text = full_answer
         source = "AI Generated"
+
+    # --- Bulletproof: never log 'AI Generated' if fallback is off and static ---
+    if not USE_LLM_FALLBACK and source.lower() == "ai generated":
+        # Bulletproofing: static fallback should log as 'Unknown' not 'AI Generated'
+        source = "Unknown"
 
     # 2) source_material
     if source == "Index & Python":
@@ -1192,10 +1575,7 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
         tokens = re.findall(r"[A-Za-z]+", phrase.lower())
         if not tokens:
             return False
-        for t in tokens:
-            if t not in greet_words:
-                return False
-        return True
+        return all(t in greet_words for t in tokens)
 
     user_question_stripped = user_question.strip()
     if is_entirely_greeting_or_punc(user_question_stripped):
@@ -1205,32 +1585,125 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
             yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         return
 
-    # Check cache
     cache_key = user_question_stripped.lower()
     if cache_key in tool_cache:
-        _, _, cached_answer = tool_cache[cache_key]
-        yield cached_answer
+        logging.info(f"Cache hit for question: {user_question_stripped}")
+        yield tool_cache[cache_key][2]
         return
+    logging.info(f"Cache miss for question: {user_question_stripped}")
 
-    needs_tabular_data = references_tabular_data(user_question, TABLES)
-    index_dict = {"top_k": "No information"}
-    python_dict = {"result": "No information", "code": ""}
+    question_needs_tables = references_tabular_data(user_question, TABLES)
 
-    if needs_tabular_data:
-        python_dict = tool_2_code_run(user_question, user_tier=user_tier, recent_history=recent_history)
+    index_dict  = {"top_k": "No information", "file_names": []}
+    python_dict = {"result": "No information", "code": "", "table_names": []}
+    run_tool_1  = True
+    run_tool_2  = ALWAYS_RUN_TOOL2 or question_needs_tables
 
-    index_dict = tool_1_index_search(user_question, top_k=5, user_tier=user_tier)
+    # For Tool-1, always rephrase/expand the question using LLM and recent history
+    prepped_for_index = rephrase_question_with_history(user_question, recent_history)
+    prepped_for_python = user_question  # Don't change Tool-2 input!
+
+    tool2_future = None
+    if run_tool_2:
+        tool2_future = _run_tool2_async(prepped_for_python, user_tier, recent_history)
+
+    if run_tool_1:
+        logging.info("Running Tool 1 (Index Search)...")
+        index_dict = tool_1_index_search(
+            prepped_for_index,   # <--- PATCHED LINE!
+            top_k=5,
+            user_tier=user_tier,
+            question_primarily_tabular=question_needs_tables
+        )
+        if not question_needs_tables and index_dict["top_k"] == "No information":
+            logging.info("Index empty – re-running Tool 2 as a safety net.")
+    else:
+        logging.info("Tool 1 was skipped.")
+
+    if tool2_future:
+        try:
+            python_dict = tool2_future.result(timeout=None)
+        except Exception as e:
+            logging.error(f"Tool-2 execution error: {e}")
+            python_dict = {"result": "No information", "code": "", "table_names": []}
 
     raw_answer = ""
-    for token in final_answer_llm(user_question, index_dict, python_dict):
-        raw_answer += token
+    try:
+        for token in final_answer_llm(user_question, index_dict, python_dict):
+            raw_answer += token
+    except Exception as final_llm_error:
+        logging.error(f"Error during final_answer_llm generation: {final_llm_error}")
+        yield json.dumps({
+            "content": [{"type": "paragraph", "text": "Sorry, an error occurred while generating the final response."}],
+            "source": "Error",
+            "source_details": {"error": str(final_llm_error)}
+        })
+        return
 
-    # Now unify repeated text cleaning
-    raw_answer = clean_text(raw_answer)
+    try:
+        final_answer_with_source = post_process_source(
+            raw_answer, index_dict, python_dict, user_question=user_question
+        )
+        # --- Bulletproof block for static fallback ---
+        # Parse for dict if possible (JSON output)
+        if isinstance(final_answer_with_source, str):
+            try:
+                parsed_result = json.loads(final_answer_with_source)
+            except Exception:
+                parsed_result = {"source": "AI Generated"}
+        else:
+            parsed_result = final_answer_with_source
+    except Exception as post_process_error:
+        logging.error(f"Error during post_process_source: {post_process_error}")
+        yield json.dumps({
+            "content": [{"type": "paragraph", "text": "Sorry, an error occurred while processing the response."}],
+            "source": "Error",
+            "source_details": {"error": str(post_process_error), "raw_llm_output": raw_answer}
+        })
+        return
 
-    final_answer_with_source = post_process_source(raw_answer, index_dict, python_dict)
+    def tools_failed(tool1_output, tool2_output):
+        def is_empty(val):
+            if not val:
+                return True
+            val = str(val).strip().lower()
+            return val in {"", "no information", "404"} or "no output" in val or "execution completed" in val
+        return is_empty(tool1_output.get("top_k")) and is_empty(tool2_output.get("result"))
+
+    # ---- Bulletproof static fallback block ----
+    if not USE_LLM_FALLBACK:
+        # Try to extract the source type
+        parsed_source = None
+        if isinstance(final_answer_with_source, str):
+            try:
+                parsed_source = json.loads(final_answer_with_source).get("source", "")
+            except Exception:
+                parsed_source = ""
+        elif isinstance(final_answer_with_source, dict):
+            parsed_source = final_answer_with_source.get("source", "")
+
+        if (
+            (parsed_source and parsed_source.lower() == "ai generated")
+            or (isinstance(final_answer_with_source, str) and "ai generated" in final_answer_with_source.lower())
+            or tools_failed(index_dict, python_dict)
+        ):
+            static_message = {
+                "source": "Unknown",
+                "content": [{"type": "paragraph", "text": "No information available."}],
+                "source_details": {}
+            }
+            yield json.dumps(static_message)
+            return
+    # ---- End bulletproof block ----
+
     tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
     yield final_answer_with_source
+  
+        
+
+
+    
+
 
 #######################################################################################
 #                            get user tier
@@ -1239,7 +1712,7 @@ def get_user_tier(user_id):
     """
     Checks the user ID in the User_rbac.xlsx file.
     If user_id=0 => returns 0 (means forced fallback).
-    If not found => default to 1.
+    If not found => default to DEFAULT_USER_TIER.
     Otherwise returns the tier from the file.
     """
     user_id_str = str(user_id).strip().lower()
@@ -1249,17 +1722,17 @@ def get_user_tier(user_id):
         return 0
 
     if df_user.empty or ("User_ID" not in df_user.columns) or ("Tier" not in df_user.columns):
-        return 1
+        return DEFAULT_USER_TIER
 
     row = df_user.loc[df_user["User_ID"].astype(str).str.lower() == user_id_str]
     if row.empty:
-        return 1
+        return DEFAULT_USER_TIER
 
     try:
         tier_val = int(row["Tier"].values[0])
         return tier_val
     except:
-        return 1
+        return DEFAULT_USER_TIER
 
 
 #######################################################################################
@@ -1276,8 +1749,17 @@ def Ask_Question(question, user_id="anonymous"):
         
         # If user_tier==0 => immediate fallback
         if user_tier == 0:
-            fallback_raw = tool_3_llm_fallback(question)
-            fallback = f"AI Generated answer:\n{fallback_raw}\nSource: Ai Generated"
+            if USE_LLM_FALLBACK:
+                fallback_raw = tool_3_llm_fallback(question)
+                fallback = f"AI Generated answer:\n{fallback_raw}\nSource: Ai Generated"
+            else:
+                fallback = json.dumps({
+                    "source": "Unknown",  # <--- Enforce this!
+                    "content": [
+                        "No information available."  # Or your desired static text
+                    ],
+                    "source_details": {}
+                })
             chat_history.append(f"User: {question}")
             chat_history.append(f"Assistant: {fallback}")
             yield fallback
@@ -1313,7 +1795,7 @@ def Ask_Question(question, user_id="anonymous"):
                 return
 
         # Handle "restart chat" command
-        if question_lower == "restart chat":
+        if question_lower in ("restart", "restart chat", "restartchat", "chat restart", "chatrestart"):
             chat_history = []
             tool_cache.clear()
             recent_history = []
@@ -1322,13 +1804,17 @@ def Ask_Question(question, user_id="anonymous"):
 
         # Add user question to chat history
         chat_history.append(f"User: {question}")
-        recent_history = chat_history[-4:] if len(chat_history) >= 4 else chat_history.copy()
+        recent_history = chat_history[-6:] if len(chat_history) >= 6 else chat_history.copy()
 
         answer_collected = ""
         try:
             for token in agent_answer(question, user_tier=user_tier, recent_history=recent_history):
                 yield token
-                answer_collected += token
+                try:
+                    answer_collected += token if isinstance(token, str) else json.dumps(token)
+                except Exception as e:
+                    logging.warning(f"Token formatting issue: {e}")
+
         except Exception as e:
             err_msg = f"❌ Error occurred while generating the answer: {str(e)}"
             logging.error(err_msg)
@@ -1336,13 +1822,34 @@ def Ask_Question(question, user_id="anonymous"):
             return
 
         chat_history.append(f"Assistant: {answer_collected}")
-        recent_history = chat_history[-4:] if len(chat_history) >= 4 else chat_history.copy()
+        recent_history = chat_history[-6:] if len(chat_history) >= 6 else chat_history.copy()
 
         # Truncate history
-        number_of_messages = 10
-        max_pairs = number_of_messages // 2
-        max_entries = max_pairs * 2
-        chat_history = chat_history[-max_entries:]
+        # number_of_messages = 10
+        # max_pairs = number_of_messages // 2
+        # max_entries = max_pairs * 2
+        # chat_history = chat_history[-max_entries:]
+        # --- Replace above with answer-based truncation ---
+        # Only answers (Assistant:) count toward 2000 char limit, but keep Q/A pairs
+        total_chars = 0
+        new_history = []
+        # Go backwards, keep all questions, and only as many answers as fit
+        for entry in reversed(chat_history):
+            if entry.startswith("Assistant: "):
+                ans = entry[len("Assistant: "):]
+                if total_chars + len(ans) <= 2000:
+                    new_history.insert(0, entry)
+                    total_chars += len(ans)
+                else:
+                    # Truncate this answer if possible
+                    remaining = 2000 - total_chars
+                    if remaining > 0:
+                        new_history.insert(0, "Assistant: " + ans[:remaining])
+                        total_chars += remaining
+                    break
+            else:
+                new_history.insert(0, entry)
+        chat_history = new_history
 
         # Log Interaction
         cache_key = question_lower
@@ -1369,3 +1876,34 @@ def Ask_Question(question, user_id="anonymous"):
         yield error_msg
         logging.error(error_msg)
         yield error_msg
+
+# Step 1: Robust subquestion splitting
+
+def robust_split_question(user_question, use_semantic_parsing=True):
+    """
+    Run the LLM splitter. If it returns exactly one line matching `user_question`,
+    keep [user_question]. Otherwise, drop the combined form and return only
+    the distinct subquestions (deduplicated).
+    """
+    subqs = split_question_into_subquestions(user_question, use_semantic_parsing)
+    # If LLM returned only the original (no split), keep it as-is:
+    if len(subqs) == 1 and subqs[0].strip() == user_question.strip():
+        return [user_question]
+
+    # Otherwise, there are 2+ subquestions—drop the combined string, just return deduped list
+    seen = set()
+    result = []
+    for sq in subqs:
+        sq = sq.strip()
+        if not sq:
+            continue
+        if sq not in seen:
+            result.append(sq)
+            seen.add(sq)
+    return result
+
+_tool2_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+
+def _run_tool2_async(q, user_tier, rhist):
+    return _tool2_executor.submit(tool_2_code_run,
+                                  q, user_tier=user_tier, recent_history=rhist)
