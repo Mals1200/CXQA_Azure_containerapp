@@ -1,7 +1,7 @@
 # ------------------------------------------------------------------
 #  app.py  –  CX-QA Bot (version 12-g-full)
 #
-#  · Hides the “AI Generated” line when the inbound Teams message is
+#  · Hides the "AI Generated" line when the inbound Teams message is
 #    empty / whitespace (Teams system post at chat startup).
 #  · Adds Show/Hide-Source toggle in Adaptive Cards.
 #  · RENDER_MODE = "markdown" by default – flip at the top if you
@@ -126,13 +126,12 @@ def extract_source_info(user_msg: str, ask_func_module):
     file_names  = index_dict.get("file_names", []) or []
     table_names = python_dict.get("table_names", []) or []
 
-    # Decide the single-word label Teams users see:
-    if index_dict.get("top_k", "").strip().lower() not in ("", "no information") \
-       and python_dict.get("result", "").strip().lower() not in ("", "no information"):
+    # ✅ NEW — Fully accurate based on actual content retrieved
+    if file_names and table_names:
         source = "Index & Python"
-    elif index_dict.get("top_k", "").strip().lower() not in ("", "no information"):
+    elif file_names:
         source = "Index"
-    elif python_dict.get("result", "").strip().lower() not in ("", "no information"):
+    elif table_names:
         source = "Python"
     else:
         source = "AI Generated"
@@ -205,7 +204,7 @@ async def _bot_logic(turn_context: TurnContext):
     except Exception:
         user_id = turn_context.activity.from_property.id or "anonymous"
 
-    # Teams “typing…” indicator
+    # Teams "typing…" indicator
     await turn_context.send_activity(Activity(type="typing"))
 
     # ----- main Q&A call -----
@@ -215,7 +214,7 @@ async def _bot_logic(turn_context: TurnContext):
         state["history"] = ask_func.chat_history
         state["cache"]   = ask_func.tool_cache
 
-        # greet / restart / export? – send as-is (sans “Source:” footer)
+        # greet / restart / export? – send as-is (sans "Source:" footer)
         if is_special_response(answer_text):
             await turn_context.send_activity(strip_trailing_source(answer_text))
             return
@@ -258,7 +257,7 @@ async def _bot_logic(turn_context: TurnContext):
 
         card_body = []
 
-        # ---------- optional “Download file” button ----------
+        # ---------- optional "Download file" button ----------
         export_link = re.search(r"https?://[^\s)\]]+", main_answer)
         is_export   = main_answer.lower().startswith("here is your generated")
         if export_link and not is_export:
