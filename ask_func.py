@@ -1,7 +1,3 @@
-# V 28
-# Source always included python (python for python Qs), (Index & Python for index Qs and for Qs that use both ), (Python for Ai Generated Qs)
-
-
 import os
 import io
 import re
@@ -61,14 +57,14 @@ CONFIG = {
     "TARGET_FOLDER_PATH": "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
 }
 
-USE_LLM_FALLBACK = True  # ⬅ Set to False to disable fallback
+USE_LLM_FALLBACK = False  # ⬅ Set to False to disable fallback
 
 # ── Feature flag ──────────────────────────────────────────
 # If True  → Tool-2 (Python path) will ALWAYS be executed
 #            for every user question, in parallel with Tool-1.
 # If False → Behaviour reverts to the existing "smart classifier" logic.
 ALWAYS_RUN_TOOL2 = True      # ⬅ flip to False to disable
-DEFAULT_USER_TIER = 1        # ⬅ base tier for users not in User_rbac.xlsx
+DEFAULT_USER_TIER = 2        # ⬅ base tier for users not in User_rbac.xlsx
 
 #######################################################################################
 # (3) KSA DATE HELPER (cached, resets 12:01 AM KSA time)
@@ -719,32 +715,17 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_
             #print("DEBUG: [Tool 1] No documents remaining after RBAC/Relevance filtering.")
             return {"top_k": "No information", "file_names": []}
 
-        # ================================
-        # Document Ranking Behavior Toggle
-        # ================================
-        USE_WEIGHTED_RANKING = False  # Set to True to enable ranking by keywords like 'policy', 'report', etc.
-        
-        if USE_WEIGHTED_RANKING:
-            # -------------------------------
-            # 🔼 WEIGHTED RANKING (Enabled)
-            # -------------------------------
-            for doc in relevant_docs:
-                ttl = doc["title"].lower()
-                score = 0
-                if "policy" in ttl: score += 10
-                if "report" in ttl: score += 5
-                if "sop" in ttl: score += 3
-                doc["weight_score"] = score
-        
-            docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
-            docs_top_k = docs_sorted[:top_k]
-        else:
-            # -------------------------------
-            # 🔽 UNRANKED (Preserve Search Order)
-            # -------------------------------
-            docs_sorted = relevant_docs[:top_k]
-            docs_top_k = docs_sorted
+        # Weighted scoring (Keep as is)
+        for doc in relevant_docs:
+            ttl = doc["title"].lower()
+            score = 0
+            if "policy" in ttl: score += 10
+            if "report" in ttl: score += 5
+            if "sop" in ttl: score += 3
+            doc["weight_score"] = score
 
+        docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
+        docs_top_k = docs_sorted[:top_k]
 
         # Extract file names and texts separately - ensure no duplicates
         # Corrected this logic slightly from previous thought
@@ -1088,13 +1069,8 @@ def final_answer_llm(user_question, index_dict, python_dict):
 
     if index_top_k.lower() == "no information" and python_result.lower() == "no information":
         fallback_text = tool_3_llm_fallback(user_question)
-        final_response = fallback_text.strip() + "\n\nSource: AI Generated"
-        tool_cache[user_question.lower().strip()] = (
-            {"top_k": "No information", "file_names": []},
-            {"result": "No information", "code": "", "table_names": []},
-            final_response
-        )
-        yield final_response
+        # Just yield plain text (no JSON wrapper)
+        yield f"{fallback_text}\n\nSource: AI Generated"
         return
 
     combined_info = f"INDEX_DATA:\n{index_top_k}\n\nPYTHON_DATA:\n{python_result}"
@@ -1229,21 +1205,6 @@ Todays date (dd/mm/yyyy):
             yield fallback_text
             return
 
-        # --- Append accurate source line ---
-        source_label = None
-        if index_top_k.lower() != "no information" and python_result.lower() != "no information":
-            source_label = "Index & Python"
-        elif index_top_k.lower() != "no information":
-            source_label = "Index"
-        elif python_result.lower() != "no information":
-            source_label = "Python"
-        else:
-            source_label = "AI Generated"
-
-        # Make sure it's not already included (to prevent duplication)
-        if "source:" not in final_text.lower():
-            final_text = final_text.strip() + f"\n\nSource: {source_label}"
-
         yield final_text
     except Exception as e:
         logging.error(f"Error in final_answer_llm: {str(e)}")
@@ -1281,10 +1242,6 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
 
     # ---------- strip code-fence wrappers before JSON parse ----------
     cleaned = final_text.strip()
-    # Remove old Source lines (in case LLM already appended one)
-    cleaned = re.sub(r"(?i)\n*source\s*:\s*(index|python|index & python|ai generated)\s*", "", cleaned)
-    cleaned = re.sub(r"(?i)^source\s*:\s*(index|python|index & python|ai generated)\s*", "", cleaned)
-    cleaned = cleaned.strip()
     cleaned = re.sub(r"^```[a-zA-Z]*\s*", "", cleaned)   # remove ```json or ```
     cleaned = re.sub(r"^'''[a-zA-Z]*\s*", "", cleaned)   # remove '''json or '''
     cleaned = re.sub(r"\s*```$", "", cleaned)            # closing ```
@@ -1335,24 +1292,10 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
         idx_has  = index_dict .get("top_k" , "").strip().lower() not in ["", "no information"]
         py_has   = python_dict.get("result", "").strip().lower() not in ["", "no information"]
         src = response_json["source"].strip()
-        src_idx = index_dict.get("top_k", "").strip().lower()
-        src_py  = python_dict.get("result", "").strip().lower()
-
-        # Recompute the source in case LLM gave wrong label
-        if src.lower() not in ["index", "python", "index & python", "ai generated"]:
-            if src_idx != "no information" and src_py != "no information":
-                src = "Index & Python"
-            elif src_idx != "no information":
-                src = "Index"
-            elif src_py != "no information":
-                src = "Python"
-            else:
-                src = "AI Generated"
-        elif src == "Python" and idx_has:
+        if src == "Python" and idx_has:
             src = "Index & Python"
         elif src == "Index" and py_has:
             src = "Index & Python"
-        
         response_json["source"] = src
         if src == "Index & Python":
             files  = index_dict .get("file_names", [])
@@ -1637,15 +1580,9 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     user_question_stripped = user_question.strip()
     if is_entirely_greeting_or_punc(user_question_stripped):
         if len(chat_history) < 4:
-            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n"
-                  "- To reset the conversation type 'restart chat'.\n"
-                  "- To generate Slides, Charts or Document, type 'export followed by your requirements.\n"
-                  "- Please remember do not share any personal, secret, or top-secret information, during our conversation."
+            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         else:
-            yield "Hello! How may I assist you?\n"
-                  "- To reset the conversation type 'restart chat'.\n"
-                  "- To generate Slides, Charts or Document, type 'export followed by your requirements.\n"
-                  "- Please remember do not share any personal, secret, or top-secret information, during our conversation."
+            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         return
 
     cache_key = user_question_stripped.lower()
@@ -1864,7 +1801,6 @@ def Ask_Question(question, user_id="anonymous"):
             recent_history = []
             yield "The chat has been restarted."
             return
-
 
         # Add user question to chat history
         chat_history.append(f"User: {question}")
