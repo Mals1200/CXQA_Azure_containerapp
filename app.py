@@ -1,12 +1,5 @@
-# ------------------------------------------------------------------
-#  app.py  –  CX-QA Bot (version 12-g-full)
-#
-#  · Hides the "AI Generated" line when the inbound Teams message is
-#    empty / whitespace (Teams system post at chat startup).
-#  · Adds Show/Hide-Source toggle in Adaptive Cards.
-#  · RENDER_MODE = "markdown" by default – flip at the top if you
-#    prefer adaptive-card output.
-# ------------------------------------------------------------------
+# version13
+
 
 import os
 import re
