@@ -26,4 +26,4 @@ COPY . .
 EXPOSE 80
 
 #  Start Gunicorn on port 80
-CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:80", "--workers", "4"]
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:80", "--workers", "2"]
