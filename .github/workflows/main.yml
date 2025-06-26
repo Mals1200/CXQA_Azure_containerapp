@@ -33,7 +33,7 @@ jobs:
         run: |
           az containerapp registry set \
             --resource-group cxqa_resource_group \
-            --name cxqabotcontainerapp \
+            --name cxqacontainerapp \
             --server cxqacontaineracr.azurecr.io \
             --username ${{ secrets.ACR_USERNAME }} \
             --password ${{ secrets.ACR_PASSWORD }}
@@ -43,5 +43,5 @@ jobs:
         run: |
           az containerapp update \
             --resource-group cxqa_resource_group \
-            --name cxqabotcontainerapp \
+            --name cxqacontainerapp \
             --image cxqacontaineracr.azurecr.io/cxqacontainerapp:${{ github.sha }}
