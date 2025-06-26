@@ -1885,13 +1885,20 @@ def Ask_Question(question, user_id="anonymous"):
             try:
                 from Export_Agent import Call_Export
                 chat_history.append(f"User: {question}")
+               # Get the most recent assistant answer (not the user question)
+                latest_assistant_msg = next(
+                    (entry[len("Assistant: "):] for entry in reversed(chat_history) if entry.startswith("Assistant: ")),
+                    ""
+                )
+                
                 for message in Call_Export(
                     latest_question=question,
-                    latest_answer=chat_history[-1] if chat_history else "",
+                    latest_answer=latest_assistant_msg,
                     chat_history=chat_history,
                     instructions=question[6:].strip()
                 ):
                     yield message
+
                 return
             except Exception as e:
                 error_msg = f"Error in export processing: {str(e)}"
