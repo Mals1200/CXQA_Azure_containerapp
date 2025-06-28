@@ -1821,23 +1821,34 @@ def Ask_Question(question, user_id="anonymous"):
         question_lower = question.lower().strip()
 
         # Handle "export" command
+               # Handle "export" command
         if question_lower.startswith("export"):
             try:
                 from Export_Agent import Call_Export
                 chat_history.append(f"User: {question}")
-                for message in Call_Export(
+
+                # Call_Export may return either a single string or an iterable of strings.
+                result = Call_Export(
                     latest_question=question,
                     latest_answer=chat_history[-1] if chat_history else "",
                     chat_history=chat_history,
                     instructions=question[6:].strip()
-                ):
-                    yield message
+                )
+
+                # If it’s a plain string, yield it once; otherwise iterate.
+                if isinstance(result, str):
+                    yield result
+                else:
+                    for message in result:
+                        yield message
+
                 return
             except Exception as e:
                 error_msg = f"Error in export processing: {str(e)}"
                 logging.error(error_msg)
                 yield error_msg
                 return
+
 
         # Handle "restart chat" command
         if question_lower in ("restart", "restart chat", "restartchat", "chat restart", "chatrestart"):
