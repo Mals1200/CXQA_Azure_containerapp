@@ -143,6 +143,7 @@ logging.getLogger("azure").setLevel(logging.WARNING)
 chat_history = []
 recent_history = []
 tool_cache = {}
+last_assistant_answer = ""   # 👈 ADD THIS
 
 # Add retry decorator for Azure API calls
 def azure_retry(max_attempts=3, delay=2):
@@ -1787,6 +1788,7 @@ def Ask_Question(question, user_id="anonymous"):
     global chat_history
     global tool_cache
     global recent_history
+    global last_assistant_answer
 
     try:
         # Step 1: Determine user tier from the RBAC
@@ -1828,11 +1830,8 @@ def Ask_Question(question, user_id="anonymous"):
                 # 1. Add the user's export question to history
                 chat_history.append(f"User: {question}")
 
-                # 2. Get the last real Assistant message (NOT the export request)
-                latest_assistant_msg = next(
-                    (entry[len("Assistant: "):] for entry in reversed(chat_history) if entry.startswith("Assistant: ")),
-                    ""
-                )
+                # 2. Use the global last assistant answer
+                latest_assistant_msg = last_assistant_answer
 
                 # 3. Call the export function with correct info
                 for message in Call_Export(
@@ -1855,6 +1854,7 @@ def Ask_Question(question, user_id="anonymous"):
             chat_history = []
             tool_cache.clear()
             recent_history = []
+            last_assistant_answer = ""
             yield "The chat has been restarted."
             return
 
@@ -1878,6 +1878,7 @@ def Ask_Question(question, user_id="anonymous"):
             yield f"\n\n{err_msg}"
             return
 
+        last_assistant_answer = answer_collected  # 👈 ADD THIS LINE
         chat_history.append(f"Assistant: {answer_collected}")
         recent_history = chat_history[-6:] if len(chat_history) >= 6 else chat_history.copy()
 
