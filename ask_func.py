@@ -1825,9 +1825,14 @@ def Ask_Question(question, user_id="anonymous"):
             try:
                 from Export_Agent import Call_Export
                 chat_history.append(f"User: {question}")
+                # Find the last Assistant answer (before the export command)
+                prev_assistant_entries = [
+                    entry for entry in chat_history[:-1] if entry.startswith("Assistant: ")
+                ]
+                latest_answer = prev_assistant_entries[-1][len("Assistant: "):] if prev_assistant_entries else ""
                 for message in Call_Export(
                     latest_question=question,
-                    latest_answer=chat_history[-1] if chat_history else "",
+                    latest_answer=latest_answer,
                     chat_history=chat_history,
                     instructions=question[6:].strip()
                 ):
@@ -1839,13 +1844,6 @@ def Ask_Question(question, user_id="anonymous"):
                 yield error_msg
                 return
 
-        # Handle "restart chat" command
-        if question_lower in ("restart", "restart chat", "restartchat", "chat restart", "chatrestart"):
-            chat_history = []
-            tool_cache.clear()
-            recent_history = []
-            yield "The chat has been restarted."
-            return
 
 
         # Add user question to chat history
