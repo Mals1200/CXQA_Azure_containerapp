@@ -1854,6 +1854,14 @@ def Ask_Question(question, user_id="anonymous"):
                 return
 
 
+        # Handle "restart chat" command
+        if question_lower in ("restart", "restart chat", "restartchat", "chat restart", "chatrestart"):
+            chat_history = []
+            tool_cache.clear()
+            recent_history = []
+            yield "The chat has been restarted."
+            return
+
 
         # Add user question to chat history
         chat_history.append(f"User: {question}")
