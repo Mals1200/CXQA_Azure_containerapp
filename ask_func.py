@@ -1,32 +1,27 @@
-# V 27
-# Switch to Enable/Disable Doc ranking
-# Location: Tool_1
+# ==============================================================================
+# V28  (2024-07-01)
+# [Export Robustness Update: Universal Export Fix for Any Topic]
+# -------------------------------------------------------------------------------
+# This version fixes an issue where exporting (slides, docs, SOP, etc.) would fail
+# with "Insufficient information to generate..." unless the previous answer was
+# a full, real Assistant response—not just a placeholder or hardcoded text.
+#
+# **What was happening:** The export logic was sometimes using a summary, 
+# placeholder, or the wrong chat_history entry as the answer to export, 
+# causing the LLM to see "not enough info" and fail.
+#
+# **The fix:** The export handler now always searches for the last full 
+# "Assistant: ..." message (not the just-added User export command) and uses
+# that as the `latest_answer` parameter. If there is no such answer, or it’s 
+# too short (less than 40 chars), the system gives a friendly warning instead of failing.
+#
+# **This change makes export robust and universal:**
+# - Exports work for any Q/A topic, not just "lost child"
+# - Users get clear feedback if they try to export before asking a real question
+# - No hardcoding, no fragile test logic, fully production safe!
+#
+# -- Export handler change begins here --
 
-# ================================
-# Document Ranking Behavior Toggle
-# ================================
-# USE_WEIGHTED_RANKING = False  # Set to True to enable ranking by keywords like 'policy', 'report', etc.
-
-# if USE_WEIGHTED_RANKING:
-#     # -------------------------------
-#     # 🔼 WEIGHTED RANKING (Enabled)
-#     # -------------------------------
-#     for doc in relevant_docs:
-#         ttl = doc["title"].lower()
-#         score = 0
-#         if "policy" in ttl: score += 10
-#         if "report" in ttl: score += 5
-#         if "sop" in ttl: score += 3
-#         doc["weight_score"] = score
-
-#     docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
-#     docs_top_k = docs_sorted[:top_k]
-# else:
-#     # -------------------------------
-#     # 🔽 UNRANKED (Preserve Search Order)
-#     # -------------------------------
-#     docs_sorted = relevant_docs[:top_k]
-#     docs_top_k = docs_sorted
 
 import os
 import io
