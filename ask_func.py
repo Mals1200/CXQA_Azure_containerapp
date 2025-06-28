@@ -1138,7 +1138,7 @@ Use these Markdown elements in your response:
   - Paragraphs:          Normal text for explanations
   - Bullet lists:        - item
   - Numbered lists:      1. item
-  - Tables:              Use Markdown syntax (see below)
+  - Tables:              Use Markdown table syntax (see below)
   - Code blocks:         ```python ... ```
 Always seperate the elements with a new line after each one.
 
@@ -1820,38 +1820,35 @@ def Ask_Question(question, user_id="anonymous"):
 
         question_lower = question.lower().strip()
 
-        # Handle "export" command (single, non-streamed response)
+        # Handle "export" command
         if question_lower.startswith("export"):
             try:
                 from Export_Agent import Call_Export
-                # record user turn
+
+                # 1) capture the assistant's last reply (if any)
+                prev_answer = ""
+                if chat_history:
+                    # assume entries alternate "User:" / "Assistant:"
+                    last = chat_history[-1]
+                    if last.startswith("Assistant:"):
+                        prev_answer = last[len("Assistant: "):]
+
+                # 2) record the user's export request
                 chat_history.append(f"User: {question}")
 
-                # get the full export result (string or list)
+                # 3) call once and yield the entire result in one shot
                 result = Call_Export(
                     latest_question=question,
-                    latest_answer=chat_history[-1] if chat_history else "",
+                    latest_answer=prev_answer,
                     chat_history=chat_history,
                     instructions=question[6:].strip()
                 )
-
-                # normalize to a single string
-                if isinstance(result, str):
-                    output = result
-                else:
-                    output = "\n".join(result)
-
-                # record assistant turn
-                chat_history.append(f"Assistant: {output}")
-
-                # return the entire export in one go
-                yield output
+                yield result
                 return
 
             except Exception as e:
-                error_msg = f"Error in export processing: {str(e)}"
-                logging.error(error_msg)
-                yield error_msg
+                logging.error(f"Error in export processing: {e}", exc_info=True)
+                yield f"Error in export processing: {e}"
                 return
 
         # Handle "restart chat" command
