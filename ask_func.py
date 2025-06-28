@@ -1,77 +1,32 @@
+# V 27
+# Switch to Enable/Disable Doc ranking
+# Location: Tool_1
 
 # ================================
-# VERSION 28 CHANGES
+# Document Ranking Behavior Toggle
 # ================================
-# Greeting Detection & Source Inference Improvements
+# USE_WEIGHTED_RANKING = False  # Set to True to enable ranking by keywords like 'policy', 'report', etc.
 
-# 🔧 GREETING DETECTION FIX:
-# - Added regex-based greeting detection in Ask_Question() for user_tier==0
-# - Prevents greetings from being added to chat_history when using fallback
-# - Eliminates "Source: AI Generated" display issues for simple greetings
-# - Supports multiple languages: English, Arabic, French, German, Spanish, etc.
-# 
-# 🔧 SOURCE INFERENCE IMPROVEMENT:
-# - Added infer_final_source() helper function in post_process_source()
-# - Replaces complex string-based source detection with reliable boolean checks
-# - Uses index_dict.get("file_names") and python_dict.get("table_names") for accuracy
-# - Provides clear logic: Index & Python > Index > Python > AI Generated
-# 
-# 🎯 BENEFITS:
-# - Cleaner user experience for greetings (no unnecessary source attribution)
-# - More reliable source determination based on actual data presence
-# - Reduced false "AI Generated" labels when tools actually provided data
-# - Better debugging and logging accuracy
-# ================================
-# DETAILED TECHNICAL EXPLANATION
-# ================================
-# 🔍 GREETING DETECTION FIX DETAILS:
-# PROBLEM: When users with tier=0 sent greetings like "hi" or "hello", the system would:
-# 1. Generate a fallback AI response
-# 2. Add both the greeting and response to chat_history
-# 3. Log the interaction with "Source: AI Generated"
-# 4. Display "Source: AI Generated" to the user (confusing for simple greetings)
-#
-# SOLUTION: Added regex pattern detection before chat_history.append():
-#   is_greeting = bool(re.match(r"^(hi|hello|hey|greetings|good (morning|evening)|salam|assalam|what's up|yo|sup|bonjour|ciao|hallo|hola|namaste)\b", question.strip().lower()))
-#
-# TECHNICAL IMPLEMENTATION:
-# - Regex matches common greetings in multiple languages
-# - \b ensures word boundaries (prevents false matches like "history")
-# - Only affects user_tier==0 fallback path
-# - Greetings still get responses, but aren't logged or post-processed
-# - Eliminates unnecessary "Source: AI Generated" for simple interactions
-#
-# 🔍 SOURCE INFERENCE IMPROVEMENT DETAILS:
-#
-# PROBLEM: Previous source detection relied on string matching:
-# - Checked if "top_k" contained "No information" 
-# - Checked if "result" contained "No information"
-# - Complex logic prone to false positives/negatives
-# - Could show "AI Generated" even when tools provided actual data
-#
-# SOLUTION: Added infer_final_source() function with boolean logic:
-#   def infer_final_source(index_dict, python_dict):
-#       has_index  = bool(index_dict.get("file_names"))
-#       has_python = bool(python_dict.get("table_names"))
-#       if has_index and has_python: return "Index & Python"
-#       elif has_index: return "Index"
-#       elif has_python: return "Python"
-#       else: return "AI Generated"
-#
-# TECHNICAL IMPLEMENTATION:
-# - Uses .get() method for safe dictionary access
-# - bool() conversion ensures empty lists/tuples are False
-# - Clear precedence: Index & Python > Index > Python > AI Generated
-# - More reliable than string content analysis
-# - Reduces false "AI Generated" attributions
-#
-# IMPACT ON USER EXPERIENCE:
-# - Greetings no longer show confusing source attributions
-# - More accurate source labels for actual data queries
-# - Cleaner conversation flow for simple interactions
-# - Better debugging information for developers
+# if USE_WEIGHTED_RANKING:
+#     # -------------------------------
+#     # 🔼 WEIGHTED RANKING (Enabled)
+#     # -------------------------------
+#     for doc in relevant_docs:
+#         ttl = doc["title"].lower()
+#         score = 0
+#         if "policy" in ttl: score += 10
+#         if "report" in ttl: score += 5
+#         if "sop" in ttl: score += 3
+#         doc["weight_score"] = score
 
-
+#     docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
+#     docs_top_k = docs_sorted[:top_k]
+# else:
+#     # -------------------------------
+#     # 🔽 UNRANKED (Preserve Search Order)
+#     # -------------------------------
+#     docs_sorted = relevant_docs[:top_k]
+#     docs_top_k = docs_sorted
 
 import os
 import io
@@ -1183,7 +1138,7 @@ Use these Markdown elements in your response:
   - Paragraphs:          Normal text for explanations
   - Bullet lists:        - item
   - Numbered lists:      1. item
-  - Tables:              Use Markdown table syntax as below:
+  - Tables:              Use Markdown syntax (see below)
   - Code blocks:         ```python ... ```
 Always seperate the elements with a new line after each one.
 
@@ -1329,18 +1284,6 @@ def post_process_source(final_text, index_dict, python_dict, user_question=None)
                 "type": "paragraph",
                 "text": bullet_block
             })
-
-    def infer_final_source(index_dict, python_dict):
-        has_index  = bool(index_dict.get("file_names"))
-        has_python = bool(python_dict.get("table_names"))
-        if has_index and has_python:
-            return "Index & Python"
-        elif has_index:
-            return "Index"
-        elif has_python:
-            return "Python"
-        else:
-            return "AI Generated"
 
     # ---------- strip code-fence wrappers before JSON parse ----------
     cleaned = final_text.strip()
@@ -1862,11 +1805,8 @@ def Ask_Question(question, user_id="anonymous"):
                     ],
                     "source_details": {}
                 })
-            # Skip adding to chat history if it's a greeting
-            is_greeting = bool(re.match(r"^(hi|hello|hey|greetings|good (morning|evening)|salam|assalam|what's up|yo|sup|bonjour|ciao|hallo|hola|namaste)\b", question.strip().lower()))
-            if not is_greeting:
-                chat_history.append(f"User: {question}")
-                chat_history.append(f"Assistant: {fallback}")
+            chat_history.append(f"User: {question}")
+            chat_history.append(f"Assistant: {fallback}")
             yield fallback
             Log_Interaction(
                 question=question,
@@ -1885,20 +1825,13 @@ def Ask_Question(question, user_id="anonymous"):
             try:
                 from Export_Agent import Call_Export
                 chat_history.append(f"User: {question}")
-               # Get the most recent assistant answer (not the user question)
-                latest_assistant_msg = next(
-                    (entry[len("Assistant: "):] for entry in reversed(chat_history) if entry.startswith("Assistant: ")),
-                    ""
-                )
-                
                 for message in Call_Export(
                     latest_question=question,
-                    latest_answer=latest_assistant_msg,
+                    latest_answer=chat_history[-1] if chat_history else "",
                     chat_history=chat_history,
                     instructions=question[6:].strip()
                 ):
                     yield message
-
                 return
             except Exception as e:
                 error_msg = f"Error in export processing: {str(e)}"
