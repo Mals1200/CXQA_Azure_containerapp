@@ -1820,14 +1820,14 @@ def Ask_Question(question, user_id="anonymous"):
 
         question_lower = question.lower().strip()
 
-        # Handle "export" command
-               # Handle "export" command
+        # Handle "export" command (single, non-streamed response)
         if question_lower.startswith("export"):
             try:
                 from Export_Agent import Call_Export
+                # record user turn
                 chat_history.append(f"User: {question}")
 
-                # Call_Export may return either a single string or an iterable of strings.
+                # get the full export result (string or list)
                 result = Call_Export(
                     latest_question=question,
                     latest_answer=chat_history[-1] if chat_history else "",
@@ -1835,20 +1835,24 @@ def Ask_Question(question, user_id="anonymous"):
                     instructions=question[6:].strip()
                 )
 
-                # If it’s a plain string, yield it once; otherwise iterate.
+                # normalize to a single string
                 if isinstance(result, str):
-                    yield result
+                    output = result
                 else:
-                    for message in result:
-                        yield message
+                    output = "\n".join(result)
 
+                # record assistant turn
+                chat_history.append(f"Assistant: {output}")
+
+                # return the entire export in one go
+                yield output
                 return
+
             except Exception as e:
                 error_msg = f"Error in export processing: {str(e)}"
                 logging.error(error_msg)
                 yield error_msg
                 return
-
 
         # Handle "restart chat" command
         if question_lower in ("restart", "restart chat", "restartchat", "chat restart", "chatrestart"):
