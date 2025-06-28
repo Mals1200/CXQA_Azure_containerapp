@@ -1114,8 +1114,9 @@ def final_answer_llm(user_question, index_dict, python_dict):
 
     if index_top_k.lower() == "no information" and python_result.lower() == "no information":
         fallback_text = tool_3_llm_fallback(user_question)
-        # Just return plain text (no JSON wrapper)
-        return f"{fallback_text}\n\nSource: AI Generated"
+        # Just yield plain text (no JSON wrapper)
+        yield f"{fallback_text}\n\nSource: AI Generated"
+        return
 
     combined_info = f"INDEX_DATA:\n{index_top_k}\n\nPYTHON_DATA:\n{python_result}"
 
@@ -1240,19 +1241,20 @@ Todays date (dd/mm/yyyy):
     try:
         final_text = call_llm(system_prompt, user_question, max_tokens=1000, temperature=0.3)
 
-        # Ensure we never return an empty or error-laden string without a fallback
+        # Ensure we never yield an empty or error-laden string without a fallback
         if (not final_text.strip() 
             or final_text.startswith("LLM Error") 
             or final_text.startswith("No content from LLM") 
             or final_text.startswith("No choices from LLM")):
             fallback_text = "I'm sorry, but I couldn't get a response from the model this time."
-            return fallback_text
+            yield fallback_text
+            return
 
-        return final_text
+        yield final_text
     except Exception as e:
         logging.error(f"Error in final_answer_llm: {str(e)}")
         fallback_text = f"I'm sorry, but an error occurred: {str(e)}"
-        return fallback_text
+        yield fallback_text
 
 #######################################################################################
 #                          POST-PROCESS SOURCE  (adds file / table refs)
@@ -1606,7 +1608,7 @@ def Log_Interaction(
 #######################################################################################
 def agent_answer(user_question, user_tier=1, recent_history=None):
     if not user_question.strip():
-        return None
+        return
 
     def is_entirely_greeting_or_punc(phrase):
         greet_words = {
@@ -1623,14 +1625,16 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     user_question_stripped = user_question.strip()
     if is_entirely_greeting_or_punc(user_question_stripped):
         if len(chat_history) < 4:
-            return "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements.\n- Please remember do not share any personal, secret, or top-secret information, during our conversation."
+            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements.\n- Please remember do not share any personal, secret, or top-secret information, during our conversation."
         else:
-            return "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements.\n- Please remember do not share any personal, secret, or top-secret information, during our conversation."
+            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements.\n- Please remember do not share any personal, secret, or top-secret information, during our conversation."
+        return
 
     cache_key = user_question_stripped.lower()
     if cache_key in tool_cache:
         logging.info(f"Cache hit for question: {user_question_stripped}")
-        return tool_cache[cache_key][2]
+        yield tool_cache[cache_key][2]
+        return
     logging.info(f"Cache miss for question: {user_question_stripped}")
 
     question_needs_tables = references_tabular_data(user_question, TABLES)
@@ -1670,14 +1674,16 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
 
     raw_answer = ""
     try:
-        raw_answer = final_answer_llm(user_question, index_dict, python_dict)
+        for token in final_answer_llm(user_question, index_dict, python_dict):
+            raw_answer += token
     except Exception as final_llm_error:
         logging.error(f"Error during final_answer_llm generation: {final_llm_error}")
-        return json.dumps({
+        yield json.dumps({
             "content": [{"type": "paragraph", "text": "Sorry, an error occurred while generating the final response."}],
             "source": "Error",
             "source_details": {"error": str(final_llm_error)}
         })
+        return
 
     try:
         final_answer_with_source = post_process_source(
@@ -1694,11 +1700,12 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
             parsed_result = final_answer_with_source
     except Exception as post_process_error:
         logging.error(f"Error during post_process_source: {post_process_error}")
-        return json.dumps({
+        yield json.dumps({
             "content": [{"type": "paragraph", "text": "Sorry, an error occurred while processing the response."}],
             "source": "Error",
             "source_details": {"error": str(post_process_error), "raw_llm_output": raw_answer}
         })
+        return
 
     def tools_failed(tool1_output, tool2_output):
         def is_empty(val):
@@ -1730,11 +1737,17 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
                 "content": [{"type": "paragraph", "text": "No information available."}],
                 "source_details": {}
             }
-            return json.dumps(static_message)
+            yield json.dumps(static_message)
+            return
     # ---- End bulletproof block ----
 
     tool_cache[cache_key] = (index_dict, python_dict, final_answer_with_source)
-    return final_answer_with_source
+    yield final_answer_with_source
+  
+        
+
+
+    
 
 
 #######################################################################################
@@ -1794,6 +1807,7 @@ def Ask_Question(question, user_id="anonymous"):
                 })
             chat_history.append(f"User: {question}")
             chat_history.append(f"Assistant: {fallback}")
+            yield fallback
             Log_Interaction(
                 question=question,
                 full_answer=fallback,
@@ -1802,7 +1816,7 @@ def Ask_Question(question, user_id="anonymous"):
                 index_dict={},
                 python_dict={}
             )
-            return fallback
+            return
 
         question_lower = question.lower().strip()
 
@@ -1811,29 +1825,28 @@ def Ask_Question(question, user_id="anonymous"):
             try:
                 from Export_Agent import Call_Export
                 chat_history.append(f"User: {question}")
-                export_messages = []
                 for message in Call_Export(
                     latest_question=question,
                     latest_answer=chat_history[-1] if chat_history else "",
                     chat_history=chat_history,
                     instructions=question[6:].strip()
                 ):
-                    export_messages.append(message)
-                # ✔️ Return the list of chunks so your caller can stream each one
-                return export_messages if export_messages else ["Export completed."]
+                    yield message
+                return
             except Exception as e:
                 error_msg = f"Error in export processing: {str(e)}"
                 logging.error(error_msg)
-                return [error_msg]
-
-
+                yield error_msg
+                return
 
         # Handle "restart chat" command
         if question_lower in ("restart", "restart chat", "restartchat", "chat restart", "chatrestart"):
             chat_history = []
             tool_cache.clear()
             recent_history = []
-            return "The chat has been restarted."
+            yield "The chat has been restarted."
+            return
+
 
         # Add user question to chat history
         chat_history.append(f"User: {question}")
@@ -1841,14 +1854,18 @@ def Ask_Question(question, user_id="anonymous"):
 
         answer_collected = ""
         try:
-            answer_collected = agent_answer(question, user_tier=user_tier, recent_history=recent_history)
-            if answer_collected is None:
-                answer_collected = "No response generated."
+            for token in agent_answer(question, user_tier=user_tier, recent_history=recent_history):
+                yield token
+                try:
+                    answer_collected += token if isinstance(token, str) else json.dumps(token)
+                except Exception as e:
+                    logging.warning(f"Token formatting issue: {e}")
 
         except Exception as e:
             err_msg = f"❌ Error occurred while generating the answer: {str(e)}"
             logging.error(err_msg)
-            answer_collected = f"\n\n{err_msg}"
+            yield f"\n\n{err_msg}"
+            return
 
         chat_history.append(f"Assistant: {answer_collected}")
         recent_history = chat_history[-6:] if len(chat_history) >= 6 else chat_history.copy()
@@ -1899,12 +1916,12 @@ def Ask_Question(question, user_id="anonymous"):
         except Exception as e:
             logging.error(f"Error logging interaction: {str(e)}")
 
-        return answer_collected
-
     except Exception as e:
         error_msg = f"Critical error in Ask_Question: {str(e)}"
         logging.error(error_msg)
-        return error_msg
+        yield error_msg
+        logging.error(error_msg)
+        yield error_msg
 
 # Step 1: Robust subquestion splitting
 
