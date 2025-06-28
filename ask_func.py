@@ -1825,11 +1825,20 @@ def Ask_Question(question, user_id="anonymous"):
             try:
                 from Export_Agent import Call_Export
                 chat_history.append(f"User: {question}")
-                # Find the last Assistant answer (before the export command)
-                prev_assistant_entries = [
-                    entry for entry in chat_history[:-1] if entry.startswith("Assistant: ")
-                ]
-                latest_answer = prev_assistant_entries[-1][len("Assistant: "):] if prev_assistant_entries else ""
+        
+                # Robust: find the last Assistant answer (universally, not just for lost child)
+                prev_assistant_entries = [entry for entry in chat_history[:-1] if entry.startswith("Assistant: ")]
+                if not prev_assistant_entries:
+                    warning = "You need to ask a question and get an answer before you can export."
+                    yield warning
+                    return
+        
+                latest_answer = prev_assistant_entries[-1][len("Assistant: "):]
+                if len(latest_answer.strip()) < 40:  # Threshold: adjust as needed for your app
+                    warning = "Cannot export: there is not enough information in the last answer to generate a document or slides."
+                    yield warning
+                    return
+        
                 for message in Call_Export(
                     latest_question=question,
                     latest_answer=latest_answer,
