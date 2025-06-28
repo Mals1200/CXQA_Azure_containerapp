@@ -1824,15 +1824,26 @@ def Ask_Question(question, user_id="anonymous"):
         if question_lower.startswith("export"):
             try:
                 from Export_Agent import Call_Export
+
+                # 1. Add the user's export question to history
                 chat_history.append(f"User: {question}")
+
+                # 2. Get the last real Assistant message (NOT the export request)
+                latest_assistant_msg = next(
+                    (entry[len("Assistant: "):] for entry in reversed(chat_history) if entry.startswith("Assistant: ")),
+                    ""
+                )
+
+                # 3. Call the export function with correct info
                 for message in Call_Export(
                     latest_question=question,
-                    latest_answer=chat_history[-1] if chat_history else "",
+                    latest_answer=latest_assistant_msg,
                     chat_history=chat_history,
                     instructions=question[6:].strip()
                 ):
                     yield message
                 return
+
             except Exception as e:
                 error_msg = f"Error in export processing: {str(e)}"
                 logging.error(error_msg)
