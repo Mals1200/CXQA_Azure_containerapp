@@ -1138,7 +1138,7 @@ Use these Markdown elements in your response:
   - Paragraphs:          Normal text for explanations
   - Bullet lists:        - item
   - Numbered lists:      1. item
-  - Tables:              Use Markdown table syntax (see below)
+  - Tables:              Use Markdown syntax (see below)
   - Code blocks:         ```python ... ```
 Always seperate the elements with a new line after each one.
 
@@ -1822,34 +1822,30 @@ def Ask_Question(question, user_id="anonymous"):
 
         # Handle "export" command
         if question_lower.startswith("export"):
+            # 1) Find the *last* assistant reply (not the last history entry)
+            prev_answer = ""
+            for entry in reversed(chat_history):
+                if entry.startswith("Assistant: "):
+                    prev_answer = entry[len("Assistant: "):]
+                    break
+
+            # 2) Now record the export request
+            chat_history.append(f"User: {question}")
+
+            # 3) Call the exporter
             try:
-                from Export_Agent import Call_Export
-
-                # 1) capture the assistant's last reply (if any)
-                prev_answer = ""
-                if chat_history:
-                    # assume entries alternate "User:" / "Assistant:"
-                    last = chat_history[-1]
-                    if last.startswith("Assistant:"):
-                        prev_answer = last[len("Assistant: "):]
-
-                # 2) record the user's export request
-                chat_history.append(f"User: {question}")
-
-                # 3) call once and yield the entire result in one shot
-                result = Call_Export(
+                for message in Call_Export(
                     latest_question=question,
                     latest_answer=prev_answer,
                     chat_history=chat_history,
-                    instructions=question[6:].strip()
-                )
-                yield result
-                return
-
+                    instructions=question[6:].strip(),  # drop the leading "export"
+                ):
+                    yield message
             except Exception as e:
-                logging.error(f"Error in export processing: {e}", exc_info=True)
+                logging.error("Error in export processing: %s", e)
                 yield f"Error in export processing: {e}"
-                return
+            return
+
 
         # Handle "restart chat" command
         if question_lower in ("restart", "restart chat", "restartchat", "chat restart", "chatrestart"):
