@@ -1811,7 +1811,6 @@ def Ask_Question(question, user_id="anonymous"):
             try:
                 from Export_Agent import Call_Export
                 chat_history.append(f"User: {question}")
-                # Collect all messages from the export function
                 export_messages = []
                 for message in Call_Export(
                     latest_question=question,
@@ -1820,12 +1819,14 @@ def Ask_Question(question, user_id="anonymous"):
                     instructions=question[6:].strip()
                 ):
                     export_messages.append(message)
-                # Return the combined export response
-                return "\n".join(export_messages) if export_messages else "Export completed."
+                # ✔️ Return the list of chunks so your caller can stream each one
+                return export_messages if export_messages else ["Export completed."]
             except Exception as e:
                 error_msg = f"Error in export processing: {str(e)}"
                 logging.error(error_msg)
-                return error_msg
+                return [error_msg]
+
+
 
         # Handle "restart chat" command
         if question_lower in ("restart", "restart chat", "restartchat", "chat restart", "chatrestart"):
