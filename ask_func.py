@@ -1824,11 +1824,17 @@ def Ask_Question(question, user_id="anonymous"):
         if question_lower.startswith("export"):
             try:
                 from Export_Agent import Call_Export
+                # PRESERVE HISTORY STATE BEFORE APPENDING EXPORT COMMAND
+                export_history = chat_history.copy()  # Use pre-export history
+                
+                # Now append user's export command to main history
                 chat_history.append(f"User: {question}")
+                
+                # Pass preserved history to Call_Export
                 for message in Call_Export(
                     latest_question=question,
-                    latest_answer=chat_history[-1] if chat_history else "",
-                    chat_history=chat_history,
+                    latest_answer=export_history[-1] if export_history else "",
+                    chat_history=export_history,  # Use history WITHOUT export command
                     instructions=question[6:].strip()
                 ):
                     yield message
