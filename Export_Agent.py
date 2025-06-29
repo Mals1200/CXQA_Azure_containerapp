@@ -1,8 +1,16 @@
-# Version 4b
-# call SOP has more efficient prompt & has a better layout:
-    # The logo and art images are centered
-    # Can manipulate the art image using ratios and scalinf
-    # The prompt is more effiecient and uses less tokens.
+# Version 5
+# added the extract_latest_qa function at the top of your file with the other helper functions (after the Azure Blob upload helper). This function:
+        # Extracts the latest user question and assistant answer from chat_history
+        # Works with chat_history as a list of dictionaries (the standard format)
+        # Has a fallback for string format using regex
+        # Returns both latest_question and latest_answer
+
+# Updated the Call_Export function to:
+        # Extract the latest Q/A from chat_history just before processing
+        # Override the passed latest_question and latest_answer parameters with the extracted values
+        # This ensures that even if empty values are passed, the function will extract the actual latest conversation
+
+# Call PPT: fixed and oriented center (attempt)
 
 
 import re
@@ -97,6 +105,34 @@ def upload_to_azure_blob(blob_config, file_buffer, file_name_prefix):
 
     except Exception as e:
         raise Exception(f"Azure Blob Upload Error: {str(e)}")
+
+
+##################################################
+# HELPER: Extract Latest Q/A from Chat History
+##################################################
+def extract_latest_qa(chat_history):
+    """
+    Extract the latest user question and assistant answer from chat_history.
+    Works for chat_history as a list of dicts.
+    """
+    latest_question = ""
+    latest_answer = ""
+    if isinstance(chat_history, list):
+        for entry in reversed(chat_history):
+            if not latest_answer and entry.get("role") == "assistant" and entry.get("content", "").strip():
+                latest_answer = entry["content"].strip()
+            if not latest_question and entry.get("role") == "user" and entry.get("content", "").strip():
+                latest_question = entry["content"].strip()
+            if latest_question and latest_answer:
+                break
+    elif isinstance(chat_history, str):
+        # fallback, not recommended unless chat_history is a string
+        import re
+        user_matches = re.findall(r"User:\s*(.+?)(?=Assistant:|$)", chat_history, re.DOTALL | re.IGNORECASE)
+        assistant_matches = re.findall(r"Assistant:\s*(.+?)(?=User:|$)", chat_history, re.DOTALL | re.IGNORECASE)
+        latest_question = user_matches[-1].strip() if user_matches else ""
+        latest_answer = assistant_matches[-1].strip() if assistant_matches else ""
+    return latest_question, latest_answer
 
 
 ##################################################
@@ -1046,6 +1082,13 @@ User_description:
 ##################################################
 def Call_Export(latest_question, latest_answer, chat_history, instructions):
     import re
+
+    # Extract robustly from chat_history just before exporting!
+    latest_question, latest_answer = extract_latest_qa(chat_history)
+    
+    # Debug prints to help troubleshoot
+    print("DEBUG EXPORT: Q:", latest_question)
+    print("DEBUG EXPORT: A:", latest_answer)
 
     def generate_ppt():
         return Call_PPT(latest_question, latest_answer, chat_history, instructions)
