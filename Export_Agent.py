@@ -197,9 +197,9 @@ Data:
     ##################################################
     # (B) Centered Textbox Helper (BULLETPROOF)
     ##################################################
-    def add_centered_textbox(slide, text, font_size=36, bold=True, min_font_size=14, text_color=None):
-        SLIDE_WIDTH = slide.part.slide_width
-        SLIDE_HEIGHT = slide.part.slide_height
+    def add_centered_textbox(slide, text, font_size=36, bold=True, min_font_size=14, text_color=None, prs=None):
+        SLIDE_WIDTH = prs.slide_width
+        SLIDE_HEIGHT = prs.slide_height
 
         margin_x = Inches(0.7)
         margin_y = Inches(0.7)
@@ -282,7 +282,8 @@ Data:
                 font_size=36,
                 bold=True,
                 min_font_size=16,
-                text_color=TEXT_COLOR
+                text_color=TEXT_COLOR,
+                prs=prs
             )
 
             # Bullets (centered, robust)
@@ -293,7 +294,8 @@ Data:
                     font_size=24,
                     bold=False,
                     min_font_size=10,
-                    text_color=TEXT_COLOR
+                    text_color=TEXT_COLOR,
+                    prs=prs
                 )
 
         ##################################################
