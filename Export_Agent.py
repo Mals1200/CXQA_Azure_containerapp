@@ -113,20 +113,21 @@ def upload_to_azure_blob(blob_config, file_buffer, file_name_prefix):
 def extract_latest_qa(chat_history):
     """
     Extract the latest user question and assistant answer from chat_history.
-    Works for chat_history as a list of dicts.
+    Handles both list-of-dicts and string chat_history.
     """
     latest_question = ""
     latest_answer = ""
     if isinstance(chat_history, list):
         for entry in reversed(chat_history):
-            if not latest_answer and entry.get("role") == "assistant" and entry.get("content", "").strip():
-                latest_answer = entry["content"].strip()
-            if not latest_question and entry.get("role") == "user" and entry.get("content", "").strip():
-                latest_question = entry["content"].strip()
-            if latest_question and latest_answer:
-                break
+            # Make sure entry is a dict before using .get()
+            if isinstance(entry, dict):
+                if not latest_answer and entry.get("role") == "assistant" and entry.get("content", "").strip():
+                    latest_answer = entry["content"].strip()
+                if not latest_question and entry.get("role") == "user" and entry.get("content", "").strip():
+                    latest_question = entry["content"].strip()
+                if latest_question and latest_answer:
+                    break
     elif isinstance(chat_history, str):
-        # fallback, not recommended unless chat_history is a string
         import re
         user_matches = re.findall(r"User:\s*(.+?)(?=Assistant:|$)", chat_history, re.DOTALL | re.IGNORECASE)
         assistant_matches = re.findall(r"Assistant:\s*(.+?)(?=User:|$)", chat_history, re.DOTALL | re.IGNORECASE)
