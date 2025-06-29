@@ -1,16 +1,8 @@
-# Version 5
-# added the extract_latest_qa function at the top of your file with the other helper functions (after the Azure Blob upload helper). This function:
-        # Extracts the latest user question and assistant answer from chat_history
-        # Works with chat_history as a list of dictionaries (the standard format)
-        # Has a fallback for string format using regex
-        # Returns both latest_question and latest_answer
-
-# Updated the Call_Export function to:
-        # Extract the latest Q/A from chat_history just before processing
-        # Override the passed latest_question and latest_answer parameters with the extracted values
-        # This ensures that even if empty values are passed, the function will extract the actual latest conversation
-
-# Call PPT: fixed and oriented center (attempt)
+# Version 4b
+# call SOP has more efficient prompt & has a better layout:
+    # The logo and art images are centered
+    # Can manipulate the art image using ratios and scalinf
+    # The prompt is more effiecient and uses less tokens.
 
 
 import re
@@ -108,60 +100,27 @@ def upload_to_azure_blob(blob_config, file_buffer, file_name_prefix):
 
 
 ##################################################
-# HELPER: Extract Latest Q/A from Chat History
-##################################################
-def extract_latest_qa(chat_history):
-    """
-    Extract the latest user question and assistant answer from chat_history.
-    Handles both list-of-dicts and string chat_history.
-    """
-    latest_question = ""
-    latest_answer = ""
-    if isinstance(chat_history, list):
-        for entry in reversed(chat_history):
-            # Make sure entry is a dict before using .get()
-            if isinstance(entry, dict):
-                if not latest_answer and entry.get("role") == "assistant" and entry.get("content", "").strip():
-                    latest_answer = entry["content"].strip()
-                if not latest_question and entry.get("role") == "user" and entry.get("content", "").strip():
-                    latest_question = entry["content"].strip()
-                if latest_question and latest_answer:
-                    break
-    elif isinstance(chat_history, str):
-        import re
-        user_matches = re.findall(r"User:\s*(.+?)(?=Assistant:|$)", chat_history, re.DOTALL | re.IGNORECASE)
-        assistant_matches = re.findall(r"Assistant:\s*(.+?)(?=User:|$)", chat_history, re.DOTALL | re.IGNORECASE)
-        latest_question = user_matches[-1].strip() if user_matches else ""
-        latest_answer = assistant_matches[-1].strip() if assistant_matches else ""
-    return latest_question, latest_answer
-
-
-##################################################
 # Generate PowerPoint function
 ##################################################
 def Call_PPT(latest_question, latest_answer, chat_history, instructions):
+    # PowerPoint imports
     from pptx import Presentation
-    from pptx.util import Pt, Inches
+    from pptx.util import Pt
     from pptx.dml.color import RGBColor as PPTRGBColor
-    from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
-    import textwrap
-    import io
-    import threading
-    from datetime import datetime
-    from azure.storage.blob import BlobServiceClient
-
+    from pptx.enum.text import PP_ALIGN
+    
     ##################################################
-    # (A) GPT content generator (reuse your logic)
+    # (A) IMPROVED AZURE OPENAI CALL
     ##################################################
     def generate_slide_content():
         chat_history_str = str(chat_history)
-
+        
         ppt_prompt = f"""You are a PowerPoint presentation expert. Use this information to create slides:
 Rules:
 1. Use ONLY the provided information
 2. Output ready-to-use slide text
-3. Format: Slide Title\\n- Bullet 1\\n- Bullet 2
-4. Separate slides with \\n\\n
+3. Format: Slide Title\n- Bullet 1\n- Bullet 2
+4. Separate slides with \n\n
 5. If insufficient information, say: "NOT_ENOUGH_INFO"
 
 Data:
@@ -185,69 +144,20 @@ Data:
             "temperature": 0.3
         }
 
-        # Use your retry-enabled OpenAI call
+        # Use our retry-enabled helper
         result_json = openai_call_with_retry(endpoint, headers, payload, max_attempts=3, backoff=5, timeout=30)
         if "error" in result_json:
-            return result_json["error"]
+            return result_json["error"]  # e.g. "API_ERROR: <details>"
         try:
             return result_json['choices'][0]['message']['content'].strip()
         except Exception as e:
             return f"API_ERROR: {str(e)}"
 
     ##################################################
-    # (B) Centered Textbox Helper (BULLETPROOF)
-    ##################################################
-    def add_centered_textbox(slide, text, font_size=36, bold=True, min_font_size=14, text_color=None, prs=None):
-        SLIDE_WIDTH = prs.slide_width
-        SLIDE_HEIGHT = prs.slide_height
-
-        margin_x = Inches(0.7)
-        margin_y = Inches(0.7)
-        box_width = SLIDE_WIDTH - 2 * margin_x
-        box_height = SLIDE_HEIGHT - 2 * margin_y
-
-        box = slide.shapes.add_textbox(margin_x, margin_y, box_width, box_height)
-        frame = box.text_frame
-        frame.word_wrap = True
-        frame.vertical_anchor = MSO_ANCHOR.MIDDLE
-
-        p = frame.paragraphs[0]
-        p.text = text
-        p.alignment = PP_ALIGN.CENTER
-        run = p.runs[0]
-        run.font.size = Pt(font_size)
-        run.font.bold = bold
-        run.font.name = "Cairo"
-        if text_color:
-            run.font.color.rgb = text_color
-
-        # Shrink font if overflow is likely (approximate, since python-pptx can't measure directly)
-        import math
-        cur_font_size = font_size
-        lines = text.split('\n')
-        max_lines = math.floor(box_height.pt / (cur_font_size * 1.2))
-        while (len(lines) > max_lines or any(len(line) > 80 for line in lines)) and cur_font_size > min_font_size:
-            cur_font_size -= 2
-            run.font.size = Pt(cur_font_size)
-            max_lines = math.floor(box_height.pt / (cur_font_size * 1.2))
-            # re-wrap lines with textwrap
-            new_lines = []
-            for line in text.split('\n'):
-                wrapped = textwrap.wrap(line, width=int(box_width.pt / (cur_font_size * 0.45)))
-                new_lines.extend(wrapped)
-            lines = new_lines
-            p.text = "\n".join(lines)
-        if cur_font_size <= min_font_size and len(lines) > max_lines:
-            # truncate and add ellipsis
-            lines = lines[:max_lines-1] + ['...']
-            p.text = "\n".join(lines)
-            run.font.size = Pt(min_font_size)
-
-    ##################################################
-    # (C) MAIN PROCESSING LOGIC
+    # (B) ROBUST CONTENT HANDLING
     ##################################################
     slides_text = generate_slide_content()
-
+    
     # Handle error cases
     if slides_text.startswith("API_ERROR:"):
         return f"OpenAI API Error: {slides_text[10:]}"
@@ -256,14 +166,24 @@ Data:
     if len(slides_text) < 20:
         return "Error: Generated content too short or invalid"
 
+    ##################################################
+    # (C) SLIDE GENERATION WITH DESIGN
+    ##################################################
     try:
         prs = Presentation()
 
-        BG_COLOR = PPTRGBColor(234, 215, 194)   # #EAD7C2
-        TEXT_COLOR = PPTRGBColor(193, 114, 80)  # #C17250
+        BG_COLOR = PPTRGBColor(234, 215, 194)  # #EAD7C2
+        TEXT_COLOR = PPTRGBColor(193, 114, 80) # #C17250
         FONT_NAME = "Cairo"
 
-        for slide_content in slides_text.split('\n\n'):
+        # Check if slides_text is valid
+        if not slides_text or slides_text.startswith("API_ERROR:"):
+            return slides_text
+
+        # Split slides_text into individual slides
+        slides = slides_text.split('\n\n')
+
+        for slide_content in slides:
             lines = [line.strip() for line in slide_content.split('\n') if line.strip()]
             if not lines:
                 continue
@@ -272,31 +192,27 @@ Data:
             slide.background.fill.solid()
             slide.background.fill.fore_color.rgb = BG_COLOR
 
-            title_text = lines[0]
-            bullet_lines = [bullet.replace('- ', '').strip() for bullet in lines[1:]] if len(lines) > 1 else []
+            # Title
+            title_box = slide.shapes.add_textbox(Pt(50), Pt(50), prs.slide_width - Pt(100), Pt(60))
+            title_frame = title_box.text_frame
+            title_frame.text = lines[0]
+            for paragraph in title_frame.paragraphs:
+                paragraph.font.color.rgb = TEXT_COLOR
+                paragraph.font.name = FONT_NAME
+                paragraph.font.size = Pt(36)
+                paragraph.alignment = PP_ALIGN.CENTER
 
-            # Title (centered, robust)
-            add_centered_textbox(
-                slide,
-                title_text,
-                font_size=36,
-                bold=True,
-                min_font_size=16,
-                text_color=TEXT_COLOR,
-                prs=prs
-            )
-
-            # Bullets (centered, robust)
-            if bullet_lines:
-                add_centered_textbox(
-                    slide,
-                    "\n".join(bullet_lines),
-                    font_size=24,
-                    bold=False,
-                    min_font_size=10,
-                    text_color=TEXT_COLOR,
-                    prs=prs
-                )
+            # Bullets
+            if len(lines) > 1:
+                content_box = slide.shapes.add_textbox(Pt(100), Pt(150), prs.slide_width - Pt(200), prs.slide_height - Pt(250))
+                content_frame = content_box.text_frame
+                for bullet in lines[1:]:
+                    p = content_frame.add_paragraph()
+                    p.text = bullet.replace('- ', '').strip()
+                    p.font.color.rgb = TEXT_COLOR
+                    p.font.name = FONT_NAME
+                    p.font.size = Pt(24)
+                    p.space_after = Pt(12)
 
         ##################################################
         # (D) FILE UPLOAD
@@ -311,7 +227,11 @@ Data:
         prs.save(ppt_buffer)
         ppt_buffer.seek(0)
 
+        # Reuse our helper to upload
         file_name_prefix = f"presentation_{datetime.now().strftime('%Y%m%d%H%M%S')}.pptx"
+        # We'll just do the entire final name in the prefix to keep old naming style:
+        # Or we can simplify. Let's keep it exactly the same as before for compatibility.
+        # So we won't use a . in the prefix. We'll do the same logic as prior lines:
         blob_service = BlobServiceClient(
             account_url=blob_config["account_url"],
             credential=blob_config["sas_token"]
@@ -319,7 +239,7 @@ Data:
         blob_client = blob_service.get_container_client(
             blob_config["container"]
         ).get_blob_client(file_name_prefix)
-
+        
         blob_client.upload_blob(ppt_buffer, overwrite=True)
         download_url = (
             f"{blob_config['account_url']}/"
@@ -327,10 +247,13 @@ Data:
             f"{blob_client.blob_name}?"
             f"{blob_config['sas_token']}"
         )
-
+        
+        # Auto-delete after 5 minutes
         threading.Timer(300, blob_client.delete_blob).start()
 
-        return f"Here is your generated slides:\n{download_url}"
+        # SINGLE-LINE RETURN
+        export_type = "slides"
+        return f"Here is your generated {export_type}:\n{download_url}"
 
     except Exception as e:
         return f"Presentation Generation Error: {str(e)}"
@@ -1085,13 +1008,6 @@ User_description:
 ##################################################
 def Call_Export(latest_question, latest_answer, chat_history, instructions):
     import re
-
-    # Extract robustly from chat_history just before exporting!
-    latest_question, latest_answer = extract_latest_qa(chat_history)
-    
-    # Debug prints to help troubleshoot
-    print("DEBUG EXPORT: Q:", latest_question)
-    print("DEBUG EXPORT: A:", latest_answer)
 
     def generate_ppt():
         return Call_PPT(latest_question, latest_answer, chat_history, instructions)
