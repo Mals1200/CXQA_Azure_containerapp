@@ -2,7 +2,7 @@
 # call SOP has more efficient prompt & has a better layout:
     # The logo and art images are centered
     # Can manipulate the art image using ratios and scalinf
-    # The prompt is more effiecient and uses less tokens.
+    # The prompt is more effiecient and uses less tokens. 
 
 
 import re
@@ -119,8 +119,8 @@ def Call_PPT(latest_question, latest_answer, chat_history, instructions):
 Rules:
 1. Use ONLY the provided information
 2. Output ready-to-use slide text
-3. Format: Slide Title\n- Bullet 1\n- Bullet 2
-4. Separate slides with \n\n
+3. Format: Slide Title\\n- Bullet 1\\n- Bullet 2
+4. Separate slides with \\n\\n
 5. If insufficient information, say: "NOT_ENOUGH_INFO"
 
 Data:
@@ -129,10 +129,10 @@ Data:
 - Answer: {latest_answer}
 - History: {chat_history_str}"""
 
-        endpoint = "https://cxqaazureaihub2358016269.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview"
+        endpoint = "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/openai/deployments/gpt-4o-2/chat/completions?api-version=2025-01-01-preview"
         headers = {
             "Content-Type": "application/json",
-            "api-key": "Cv54PDKaIusK0dXkMvkBbSCgH982p1CjUwaTeKlir1NmB6tycSKMJQQJ99AKACYeBjFXJ3w3AAAAACOGllor"
+            "api-key": "5EgVev7KCYaO758NWn5yL7f2iyrS4U3FaSI5lQhTx7RlePQ7QMESJQQJ99AKACHYHv6XJ3w3AAAAACOGoSfb"
         }
 
         payload = {
@@ -175,23 +175,16 @@ Data:
         BG_COLOR = PPTRGBColor(234, 215, 194)  # #EAD7C2
         TEXT_COLOR = PPTRGBColor(193, 114, 80) # #C17250
         FONT_NAME = "Cairo"
-
-        # Check if slides_text is valid
-        if not slides_text or slides_text.startswith("API_ERROR:"):
-            return slides_text
-
-        # Split slides_text into individual slides
-        slides = slides_text.split('\n\n')
-
-        for slide_content in slides:
+        
+        for slide_content in slides_text.split('\n\n'):
             lines = [line.strip() for line in slide_content.split('\n') if line.strip()]
             if not lines:
                 continue
-
+                
             slide = prs.slides.add_slide(prs.slide_layouts[6])
             slide.background.fill.solid()
             slide.background.fill.fore_color.rgb = BG_COLOR
-
+            
             # Title
             title_box = slide.shapes.add_textbox(Pt(50), Pt(50), prs.slide_width - Pt(100), Pt(60))
             title_frame = title_box.text_frame
@@ -201,7 +194,7 @@ Data:
                 paragraph.font.name = FONT_NAME
                 paragraph.font.size = Pt(36)
                 paragraph.alignment = PP_ALIGN.CENTER
-
+                
             # Bullets
             if len(lines) > 1:
                 content_box = slide.shapes.add_textbox(Pt(100), Pt(150), prs.slide_width - Pt(200), prs.slide_height - Pt(250))
