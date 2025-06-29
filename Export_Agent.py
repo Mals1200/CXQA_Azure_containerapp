@@ -103,18 +103,22 @@ def upload_to_azure_blob(blob_config, file_buffer, file_name_prefix):
 # Generate PowerPoint function
 ##################################################
 def Call_PPT(latest_question, latest_answer, chat_history, instructions):
-    # PowerPoint imports
     from pptx import Presentation
-    from pptx.util import Pt
+    from pptx.util import Pt, Inches
     from pptx.dml.color import RGBColor as PPTRGBColor
-    from pptx.enum.text import PP_ALIGN
-    
+    from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+    import textwrap
+    import io
+    import threading
+    from datetime import datetime
+    from azure.storage.blob import BlobServiceClient
+
     ##################################################
-    # (A) IMPROVED AZURE OPENAI CALL
+    # (A) GPT content generator (reuse your logic)
     ##################################################
     def generate_slide_content():
         chat_history_str = str(chat_history)
-        
+
         ppt_prompt = f"""You are a PowerPoint presentation expert. Use this information to create slides:
 Rules:
 1. Use ONLY the provided information
@@ -144,20 +148,69 @@ Data:
             "temperature": 0.3
         }
 
-        # Use our retry-enabled helper
+        # Use your retry-enabled OpenAI call
         result_json = openai_call_with_retry(endpoint, headers, payload, max_attempts=3, backoff=5, timeout=30)
         if "error" in result_json:
-            return result_json["error"]  # e.g. "API_ERROR: <details>"
+            return result_json["error"]
         try:
             return result_json['choices'][0]['message']['content'].strip()
         except Exception as e:
             return f"API_ERROR: {str(e)}"
 
     ##################################################
-    # (B) ROBUST CONTENT HANDLING
+    # (B) Centered Textbox Helper (BULLETPROOF)
+    ##################################################
+    def add_centered_textbox(slide, text, font_size=36, bold=True, min_font_size=14, text_color=None):
+        SLIDE_WIDTH = slide.part.slide_width
+        SLIDE_HEIGHT = slide.part.slide_height
+
+        margin_x = Inches(0.7)
+        margin_y = Inches(0.7)
+        box_width = SLIDE_WIDTH - 2 * margin_x
+        box_height = SLIDE_HEIGHT - 2 * margin_y
+
+        box = slide.shapes.add_textbox(margin_x, margin_y, box_width, box_height)
+        frame = box.text_frame
+        frame.word_wrap = True
+        frame.vertical_anchor = MSO_ANCHOR.MIDDLE
+
+        p = frame.paragraphs[0]
+        p.text = text
+        p.alignment = PP_ALIGN.CENTER
+        run = p.runs[0]
+        run.font.size = Pt(font_size)
+        run.font.bold = bold
+        run.font.name = "Cairo"
+        if text_color:
+            run.font.color.rgb = text_color
+
+        # Shrink font if overflow is likely (approximate, since python-pptx can't measure directly)
+        import math
+        cur_font_size = font_size
+        lines = text.split('\n')
+        max_lines = math.floor(box_height.pt / (cur_font_size * 1.2))
+        while (len(lines) > max_lines or any(len(line) > 80 for line in lines)) and cur_font_size > min_font_size:
+            cur_font_size -= 2
+            run.font.size = Pt(cur_font_size)
+            max_lines = math.floor(box_height.pt / (cur_font_size * 1.2))
+            # re-wrap lines with textwrap
+            new_lines = []
+            for line in text.split('\n'):
+                wrapped = textwrap.wrap(line, width=int(box_width.pt / (cur_font_size * 0.45)))
+                new_lines.extend(wrapped)
+            lines = new_lines
+            p.text = "\n".join(lines)
+        if cur_font_size <= min_font_size and len(lines) > max_lines:
+            # truncate and add ellipsis
+            lines = lines[:max_lines-1] + ['...']
+            p.text = "\n".join(lines)
+            run.font.size = Pt(min_font_size)
+
+    ##################################################
+    # (C) MAIN PROCESSING LOGIC
     ##################################################
     slides_text = generate_slide_content()
-    
+
     # Handle error cases
     if slides_text.startswith("API_ERROR:"):
         return f"OpenAI API Error: {slides_text[10:]}"
@@ -166,46 +219,45 @@ Data:
     if len(slides_text) < 20:
         return "Error: Generated content too short or invalid"
 
-    ##################################################
-    # (C) SLIDE GENERATION WITH DESIGN
-    ##################################################
     try:
         prs = Presentation()
 
-        BG_COLOR = PPTRGBColor(234, 215, 194)  # #EAD7C2
-        TEXT_COLOR = PPTRGBColor(193, 114, 80) # #C17250
+        BG_COLOR = PPTRGBColor(234, 215, 194)   # #EAD7C2
+        TEXT_COLOR = PPTRGBColor(193, 114, 80)  # #C17250
         FONT_NAME = "Cairo"
-        
+
         for slide_content in slides_text.split('\n\n'):
             lines = [line.strip() for line in slide_content.split('\n') if line.strip()]
             if not lines:
                 continue
-                
+
             slide = prs.slides.add_slide(prs.slide_layouts[6])
             slide.background.fill.solid()
             slide.background.fill.fore_color.rgb = BG_COLOR
-            
-            # Title
-            title_box = slide.shapes.add_textbox(Pt(50), Pt(50), prs.slide_width - Pt(100), Pt(60))
-            title_frame = title_box.text_frame
-            title_frame.text = lines[0]
-            for paragraph in title_frame.paragraphs:
-                paragraph.font.color.rgb = TEXT_COLOR
-                paragraph.font.name = FONT_NAME
-                paragraph.font.size = Pt(36)
-                paragraph.alignment = PP_ALIGN.CENTER
-                
-            # Bullets
-            if len(lines) > 1:
-                content_box = slide.shapes.add_textbox(Pt(100), Pt(150), prs.slide_width - Pt(200), prs.slide_height - Pt(250))
-                content_frame = content_box.text_frame
-                for bullet in lines[1:]:
-                    p = content_frame.add_paragraph()
-                    p.text = bullet.replace('- ', '').strip()
-                    p.font.color.rgb = TEXT_COLOR
-                    p.font.name = FONT_NAME
-                    p.font.size = Pt(24)
-                    p.space_after = Pt(12)
+
+            title_text = lines[0]
+            bullet_lines = [bullet.replace('- ', '').strip() for bullet in lines[1:]] if len(lines) > 1 else []
+
+            # Title (centered, robust)
+            add_centered_textbox(
+                slide,
+                title_text,
+                font_size=36,
+                bold=True,
+                min_font_size=16,
+                text_color=TEXT_COLOR
+            )
+
+            # Bullets (centered, robust)
+            if bullet_lines:
+                add_centered_textbox(
+                    slide,
+                    "\n".join(bullet_lines),
+                    font_size=24,
+                    bold=False,
+                    min_font_size=10,
+                    text_color=TEXT_COLOR
+                )
 
         ##################################################
         # (D) FILE UPLOAD
@@ -220,11 +272,7 @@ Data:
         prs.save(ppt_buffer)
         ppt_buffer.seek(0)
 
-        # Reuse our helper to upload
         file_name_prefix = f"presentation_{datetime.now().strftime('%Y%m%d%H%M%S')}.pptx"
-        # We'll just do the entire final name in the prefix to keep old naming style:
-        # Or we can simplify. Let's keep it exactly the same as before for compatibility.
-        # So we won't use a . in the prefix. We'll do the same logic as prior lines:
         blob_service = BlobServiceClient(
             account_url=blob_config["account_url"],
             credential=blob_config["sas_token"]
@@ -232,7 +280,7 @@ Data:
         blob_client = blob_service.get_container_client(
             blob_config["container"]
         ).get_blob_client(file_name_prefix)
-        
+
         blob_client.upload_blob(ppt_buffer, overwrite=True)
         download_url = (
             f"{blob_config['account_url']}/"
@@ -240,13 +288,10 @@ Data:
             f"{blob_client.blob_name}?"
             f"{blob_config['sas_token']}"
         )
-        
-        # Auto-delete after 5 minutes
+
         threading.Timer(300, blob_client.delete_blob).start()
 
-        # SINGLE-LINE RETURN
-        export_type = "slides"
-        return f"Here is your generated {export_type}:\n{download_url}"
+        return f"Here is your generated slides:\n{download_url}"
 
     except Exception as e:
         return f"Presentation Generation Error: {str(e)}"
