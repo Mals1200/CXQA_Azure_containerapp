@@ -743,7 +743,7 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_
         # ================================
         # Document Ranking Behavior Toggle
         # ================================
-        USE_WEIGHTED_RANKING = False  # Set to True to enable ranking by keywords like 'policy', 'report', etc.
+        USE_WEIGHTED_RANKING = True  # Set to True to enable ranking by keywords like 'policy', 'report', etc.
         
         if USE_WEIGHTED_RANKING:
             # -------------------------------
