@@ -1580,9 +1580,9 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     user_question_stripped = user_question.strip()
     if is_entirely_greeting_or_punc(user_question_stripped):
         if len(chat_history) < 4:
-            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements.\n- Please remember do not share any personal, secret, or top-secret information, during our conversation."
         else:
-            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
+            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements.\n- Please remember do not share any personal, secret, or top-secret information, during our conversation."
         return
 
     cache_key = user_question_stripped.lower()
@@ -1780,9 +1780,23 @@ def Ask_Question(question, user_id="anonymous"):
             try:
                 from Export_Agent import Call_Export
                 chat_history.append(f"User: {question}")
+        
+                # Robust: find the last Assistant answer (universally, not just for lost child)
+                prev_assistant_entries = [entry for entry in chat_history[:-1] if entry.startswith("Assistant: ")]
+                if not prev_assistant_entries:
+                    warning = "You need to ask a question and get an answer before you can export."
+                    yield warning
+                    return
+        
+                latest_answer = prev_assistant_entries[-1][len("Assistant: "):]
+                if len(latest_answer.strip()) < 40:  # Threshold: adjust as needed for your app
+                    warning = "Cannot export: there is not enough information in the last answer to generate a document or slides."
+                    yield warning
+                    return
+        
                 for message in Call_Export(
                     latest_question=question,
-                    latest_answer=chat_history[-1] if chat_history else "",
+                    latest_answer=latest_answer,
                     chat_history=chat_history,
                     instructions=question[6:].strip()
                 ):
