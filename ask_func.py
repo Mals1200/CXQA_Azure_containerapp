@@ -1,28 +1,3 @@
-# ==============================================================================
-# V28  (2024-07-01)
-# [Export Robustness Update: Universal Export Fix for Any Topic]
-# -------------------------------------------------------------------------------
-# This version fixes an issue where exporting (slides, docs, SOP, etc.) would fail
-# with "Insufficient information to generate..." unless the previous answer was
-# a full, real Assistant response—not just a placeholder or hardcoded text.
-#
-# **What was happening:** The export logic was sometimes using a summary, 
-# placeholder, or the wrong chat_history entry as the answer to export, 
-# causing the LLM to see "not enough info" and fail.
-#
-# **The fix:** The export handler now always searches for the last full 
-# "Assistant: ..." message (not the just-added User export command) and uses
-# that as the `latest_answer` parameter. If there is no such answer, or it’s 
-# too short (less than 40 chars), the system gives a friendly warning instead of failing.
-#
-# **This change makes export robust and universal:**
-# - Exports work for any Q/A topic, not just "lost child"
-# - Users get clear feedback if they try to export before asking a real question
-# - No hardcoding, no fragile test logic, fully production safe!
-#
-# -- Export handler change begins here --
-
-
 import os
 import io
 import re
@@ -52,18 +27,18 @@ import concurrent.futures     # std-lib, already available
 #######################################################################################
 CONFIG = {
     # ── MAIN, high-capacity model (Tool-1 Index, Tool-2 Python, Tool-3 Fallback) ──
-    "LLM_ENDPOINT"     : "https://daimachinelear3527006377.cognitiveservices.azure.com/"
-                         "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
+    "LLM_ENDPOINT"     : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
+                         "openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview",
     # Add CODE LLM endpoint (same as main)
-    "LLM_ENDPOINT_CODE": "https://daimachinelear3527006377.cognitiveservices.azure.com/"
-                         "openai/deployments/gpt-4.1-2/chat/completions?api-version=2025-01-01-preview",
+    "LLM_ENDPOINT_CODE": "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
+                         "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
 
     # same key used for both deployments
-    "LLM_API_KEY"      : "2YhyHPE4stUM6xbyIC7oNpbHJ9pfKqRlYJZUntkXHl49jAjSW5seJQQJ99BAAC5RqLJXJ3w3AAAAACOGB8cO",
+    "LLM_API_KEY"      : "5EgVev7KCYaO758NWn5yL7f2iyrS4U3FaSI5lQhTx7RlePQ7QMESJQQJ99AKACHYHv6XJ3w3AAAAACOGoSfb",
 
     # ── AUXILIARY model (classifiers, splitters, etc.) ────────────────────────────
-    "LLM_ENDPOINT_AUX" : "https://daimachinelear3527006377.cognitiveservices.azure.com/"
-                         "openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview",
+    "LLM_ENDPOINT_AUX" : "https://malsa-m3q7mu95-eastus2.cognitiveservices.azure.com/"
+                         "openai/deployments/gpt-4.1/chat/completions?api-version=2025-01-01-preview",
 
     # (unchanged settings below) ───────────────────────────────────────────────────
     "SEARCH_SERVICE_NAME": "cxqa-azureai-search",
@@ -82,14 +57,14 @@ CONFIG = {
     "TARGET_FOLDER_PATH": "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
 }
 
-USE_LLM_FALLBACK = True  # ⬅ Set to False to disable fallback
+USE_LLM_FALLBACK = False  # ⬅ Set to False to disable fallback
 
 # ── Feature flag ──────────────────────────────────────────
 # If True  → Tool-2 (Python path) will ALWAYS be executed
 #            for every user question, in parallel with Tool-1.
 # If False → Behaviour reverts to the existing "smart classifier" logic.
-ALWAYS_RUN_TOOL2 = False      # ⬅ flip to False to disable
-DEFAULT_USER_TIER = 1        # ⬅ base tier for users not in User_rbac.xlsx
+ALWAYS_RUN_TOOL2 = True      # ⬅ flip to False to disable
+DEFAULT_USER_TIER = 2        # ⬅ base tier for users not in User_rbac.xlsx
 
 #######################################################################################
 # (3) KSA DATE HELPER (cached, resets 12:01 AM KSA time)
@@ -740,32 +715,17 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_
             #print("DEBUG: [Tool 1] No documents remaining after RBAC/Relevance filtering.")
             return {"top_k": "No information", "file_names": []}
 
-        # ================================
-        # Document Ranking Behavior Toggle
-        # ================================
-        USE_WEIGHTED_RANKING = False  # Set to True to enable ranking by keywords like 'policy', 'report', etc.
-        
-        if USE_WEIGHTED_RANKING:
-            # -------------------------------
-            # 🔼 WEIGHTED RANKING (Enabled)
-            # -------------------------------
-            for doc in relevant_docs:
-                ttl = doc["title"].lower()
-                score = 0
-                if "policy" in ttl: score += 10
-                if "report" in ttl: score += 5
-                if "sop" in ttl: score += 3
-                doc["weight_score"] = score
-        
-            docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
-            docs_top_k = docs_sorted[:top_k]
-        else:
-            # -------------------------------
-            # 🔽 UNRANKED (Preserve Search Order)
-            # -------------------------------
-            docs_sorted = relevant_docs[:top_k]
-            docs_top_k = docs_sorted
+        # Weighted scoring (Keep as is)
+        for doc in relevant_docs:
+            ttl = doc["title"].lower()
+            score = 0
+            if "policy" in ttl: score += 10
+            if "report" in ttl: score += 5
+            if "sop" in ttl: score += 3
+            doc["weight_score"] = score
 
+        docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
+        docs_top_k = docs_sorted[:top_k]
 
         # Extract file names and texts separately - ensure no duplicates
         # Corrected this logic slightly from previous thought
@@ -1620,9 +1580,9 @@ def agent_answer(user_question, user_tier=1, recent_history=None):
     user_question_stripped = user_question.strip()
     if is_entirely_greeting_or_punc(user_question_stripped):
         if len(chat_history) < 4:
-            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements.\n- Please remember do not share any personal, secret, or top-secret information, during our conversation."
+            yield "Hello! I'm The CXQA AI Assistant. I'm here to help you. What would you like to know today?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         else:
-            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements.\n- Please remember do not share any personal, secret, or top-secret information, during our conversation."
+            yield "Hello! How may I assist you?\n- To reset the conversation type 'restart chat'.\n- To generate Slides, Charts or Document, type 'export followed by your requirements."
         return
 
     cache_key = user_question_stripped.lower()
@@ -1820,23 +1780,9 @@ def Ask_Question(question, user_id="anonymous"):
             try:
                 from Export_Agent import Call_Export
                 chat_history.append(f"User: {question}")
-        
-                # Robust: find the last Assistant answer (universally, not just for lost child)
-                prev_assistant_entries = [entry for entry in chat_history[:-1] if entry.startswith("Assistant: ")]
-                if not prev_assistant_entries:
-                    warning = "You need to ask a question and get an answer before you can export."
-                    yield warning
-                    return
-        
-                latest_answer = prev_assistant_entries[-1][len("Assistant: "):]
-                if len(latest_answer.strip()) < 40:  # Threshold: adjust as needed for your app
-                    warning = "Cannot export: there is not enough information in the last answer to generate a document or slides."
-                    yield warning
-                    return
-        
                 for message in Call_Export(
                     latest_question=question,
-                    latest_answer=latest_answer,
+                    latest_answer=chat_history[-1] if chat_history else "",
                     chat_history=chat_history,
                     instructions=question[6:].strip()
                 ):
@@ -1848,7 +1794,6 @@ def Ask_Question(question, user_id="anonymous"):
                 yield error_msg
                 return
 
-
         # Handle "restart chat" command
         if question_lower in ("restart", "restart chat", "restartchat", "chat restart", "chatrestart"):
             chat_history = []
@@ -1856,7 +1801,6 @@ def Ask_Question(question, user_id="anonymous"):
             recent_history = []
             yield "The chat has been restarted."
             return
-
 
         # Add user question to chat history
         chat_history.append(f"User: {question}")
