@@ -88,7 +88,7 @@ USE_LLM_FALLBACK = True  # ⬅ Set to False to disable fallback
 # If True  → Tool-2 (Python path) will ALWAYS be executed
 #            for every user question, in parallel with Tool-1.
 # If False → Behaviour reverts to the existing "smart classifier" logic.
-ALWAYS_RUN_TOOL2 = True      # ⬅ flip to False to disable
+ALWAYS_RUN_TOOL2 = False      # ⬅ flip to False to disable
 DEFAULT_USER_TIER = 1        # ⬅ base tier for users not in User_rbac.xlsx
 
 #######################################################################################
