@@ -251,6 +251,7 @@ Data:
     except Exception as e:
         return f"Presentation Generation Error: {str(e)}"
 
+
 ##################################################
 # Generate Charts function
 ##################################################
