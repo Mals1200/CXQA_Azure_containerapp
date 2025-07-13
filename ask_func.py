@@ -57,14 +57,14 @@ CONFIG = {
     "TARGET_FOLDER_PATH": "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
 }
 
-USE_LLM_FALLBACK = False  # ⬅ Set to False to disable fallback
+USE_LLM_FALLBACK = True  # ⬅ Set to False to disable fallback
 
 # ── Feature flag ──────────────────────────────────────────
 # If True  → Tool-2 (Python path) will ALWAYS be executed
 #            for every user question, in parallel with Tool-1.
 # If False → Behaviour reverts to the existing "smart classifier" logic.
 ALWAYS_RUN_TOOL2 = True      # ⬅ flip to False to disable
-DEFAULT_USER_TIER = 2        # ⬅ base tier for users not in User_rbac.xlsx
+DEFAULT_USER_TIER = 1        # ⬅ base tier for users not in User_rbac.xlsx
 
 #######################################################################################
 # (3) KSA DATE HELPER (cached, resets 12:01 AM KSA time)
