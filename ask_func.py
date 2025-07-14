@@ -842,7 +842,7 @@ Take aggregation/analysis step by step and always double check that you captured
 Don't give examples, only provide the actual code. If you can't provide the code, say "404" as a string.
 
 **General Rules**:
-1. Only use columns that actually exist as per the schemas. Do NOT invent columns or table names.
+1. Only use columns that actually exist as per the schemas. Do NOT invent columns or table names. You can use symantic reasoning to select the column.
 2. Use semantic reasoning to handle synonyms, minor typos or punctuation for table/column names if they reasonably map to the provided schemas.
 3. Don't rely on sample rows for data content; the real dataset can have more/different data. Always reference columns as shown in the schemas.
 4. Return pure Python code that can run as-is, including necessary imports (like `import pandas as pd`).
