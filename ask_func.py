@@ -835,73 +835,50 @@ def tool_2_code_run(user_question, user_tier=1, recent_history=None):
     # Centralize fallback logic for chat history
     rhistory = recent_history if recent_history else []
 
-    # 👇 Injected before the system_prompt is constructed
-    schema_dict = {col: dt for fn, info in _metadata.items() for col, dt in info["schema"].items()}
-    semantic_mappings = map_terms_to_columns(user_question, schema_dict)
-
-    # Build context string from mappings
-    semantic_hint_text = ""
-    for semantic_key, column_name in semantic_mappings.items():
-        if semantic_key == "log_date_column":
-            semantic_hint_text += f"\n- Treat '{column_name}' as the log date column based on the user's intent."
-        elif semantic_key == "incident_column":
-            semantic_hint_text += f"\n- '{column_name}' is likely the incident identifier column."
-        elif semantic_key == "date_column":
-            semantic_hint_text += f"\n- Use '{column_name}' as the date reference."
-
-    # Append this to your system_prompt later
-
     system_prompt = f"""
-    You are a python expert. Use the User Question along with the Chat_history to make the python code that will get the answer from the provided Dataframes schemas and samples.
-    Only provide the python code and nothing else, without any markdown fences like ```python or ```.
-    Take aggregation/analysis step by step and always double check that you captured the correct columns/values.
-    Don't give examples, only provide the actual code. If you can't provide the code, say "404" as a string.
+You are a python expert. Use the User Question along with the Chat_history to make the python code that will get the answer from the provided Dataframes schemas and samples.
+Only provide the python code and nothing else, without any markdown fences like ```python or ```.
+Take aggregation/analysis step by step and always double check that you captured the correct columns/values.
+Don't give examples, only provide the actual code. If you can't provide the code, say "404" as a string.
 
-    **General Rules**:
-    1. Only use columns that actually exist as per the schemas. Do NOT invent columns or table names.
-    2. Use semantic reasoning to handle synonyms, minor typos or punctuation for table/column names if they reasonably map to the provided schemas.
-    3. Don't rely on sample rows for data content; the real dataset can have more/different data. Always reference columns as shown in the schemas.
-    4. Return pure Python code that can run as-is, including necessary imports (like `import pandas as pd`).
-    5. The code must produce a final `print()` statement with the answer. If multiple pieces of information are requested, print them clearly labeled.
-    6. If a user references a column/table that does not exist in the schemas, return "404".
-    7. Do NOT use manually defined data. Load data into dataframes. Do not use pd.DataFrame(data={...}).
-    7. Do not use Chat_history information directly within the generated code logic or print statements, but use it for context if needed to understand the user's question.
+**General Rules**:
+1. Only use columns that actually exist as per the schemas. Do NOT invent columns or table names.
+2. Use semantic reasoning to handle synonyms, minor typos or punctuation for table/column names if they reasonably map to the provided schemas.
+3. Don't rely on sample rows for data content; the real dataset can have more/different data. Always reference columns as shown in the schemas.
+4. Return pure Python code that can run as-is, including necessary imports (like `import pandas as pd`).
+5. The code must produce a final `print()` statement with the answer. If multiple pieces of information are requested, print them clearly labeled.
+6. If a user references a column/table that does not exist in the schemas, return "404".
+7. Do NOT use manually defined data. Load data into dataframes. Do not use pd.DataFrame(data={...}).
+7. Do not use Chat_history information directly within the generated code logic or print statements, but use it for context if needed to understand the user's question.
 
-    **Data Handling Rules for Pandas Code**:
-    A. **Numeric Conversion:** When a column is expected to be numeric for calculations (e.g., for .sum(), .mean(), comparisons):
-       - First, replace common non-numeric placeholders (like '-', 'N/A', or strings containing only spaces) with `pd.NA` or `numpy.nan`. For example: `df['column_name'] = df['column_name'].replace(['-', 'N/A', ' ', '  '], pd.NA)`
-       - Then, explicitly convert the column to a numeric type using `pd.to_numeric(df['column_name'], errors='coerce')`. This will turn any remaining unparseable values into `NaN`.
-    B. **Handle NaN Values:** Before performing aggregate functions (like `.sum()`, `.mean()`) or arithmetic operations on numeric columns, ensure `NaN` values are handled, e.g., by using `skipna=True` (which is default for many aggregations like `.sum()`) or by explicitly filling them (e.g., `df['numeric_column'].fillna(0).sum()`).
-    C. **Date Columns:** If the question involves dates:
-       - Convert date-like columns to datetime objects using `pd.to_datetime(df['Date_column'], errors='coerce')`.
-       - When comparing or merging data based on dates across multiple dataframes, ensure date columns are of a consistent datetime type and format. Be careful with operations that require aligned date indexes.
-    D. **Complex Lookups:** For questions requiring data from multiple tables (e.g., "find X in table A on the date of max Y in table B"):
-       - First, determine the intermediate value (e.g., the date of max Y).
-       - Then, use that value to filter/query the second table.
-       - Ensure data types are compatible for lookups or merges.
-    E. **Error Avoidance:** Generate code that is robust. If a filtering step might result in an empty DataFrame or Series, check for this (e.g., `if not df_filtered.empty:`) before trying to access elements by index (e.g., `.iloc[0]`) or perform calculations that would fail on empty data. If data is not found after filtering, print a message like "No data available for the specified criteria." 
+**Data Handling Rules for Pandas Code**:
+A. **Numeric Conversion:** When a column is expected to be numeric for calculations (e.g., for .sum(), .mean(), comparisons):
+   - First, replace common non-numeric placeholders (like '-', 'N/A', or strings containing only spaces) with `pd.NA` or `numpy.nan`. For example: `df['column_name'] = df['column_name'].replace(['-', 'N/A', ' ', '  '], pd.NA)`
+   - Then, explicitly convert the column to a numeric type using `pd.to_numeric(df['column_name'], errors='coerce')`. This will turn any remaining unparseable values into `NaN`.
+B. **Handle NaN Values:** Before performing aggregate functions (like `.sum()`, `.mean()`) or arithmetic operations on numeric columns, ensure `NaN` values are handled, e.g., by using `skipna=True` (which is default for many aggregations like `.sum()`) or by explicitly filling them (e.g., `df['numeric_column'].fillna(0).sum()`).
+C. **Date Columns:** If the question involves dates:
+   - Convert date-like columns to datetime objects using `pd.to_datetime(df['Date_column'], errors='coerce')`.
+   - When comparing or merging data based on dates across multiple dataframes, ensure date columns are of a consistent datetime type and format. Be careful with operations that require aligned date indexes.
+D. **Complex Lookups:** For questions requiring data from multiple tables (e.g., "find X in table A on the date of max Y in table B"):
+   - First, determine the intermediate value (e.g., the date of max Y).
+   - Then, use that value to filter/query the second table.
+   - Ensure data types are compatible for lookups or merges.
+E. **Error Avoidance:** Generate code that is robust. If a filtering step might result in an empty DataFrame or Series, check for this (e.g., `if not df_filtered.empty:`) before trying to access elements by index (e.g., `.iloc[0]`) or perform calculations that would fail on empty data. If data is not found after filtering, print a message like "No data available for the specified criteria." 
 
-    User question:
-    {user_question}
+User question:
+{user_question}
 
-    Dataframes schemas and sample:
-    {SCHEMA_TEXT}
+Dataframes schemas and sample:
+{SCHEMA_TEXT}
 
-    Chat_history:
-    {rhistory}
+Chat_history:
+{rhistory}
 
-    Todays date (dd/mm/yyyy): 
-    {todays_date}
-    """
-    system_prompt += f"\n\n# Additional Semantic Mapping Hints:{semantic_hint_text}"
+Todays date (dd/mm/yyyy): 
+{todays_date}
+"""
 
-    # Add a constraint to enforce variable definitions
-    system_prompt += "\n8. You MUST define all variables (like `logged_dates`) before using them. Do NOT assume their existence. Avoid using undefined variables."
-
-    # Optional Debugging Output (for devs)
-    print("[Semantic Mapping Debug]")
-    for k, v in semantic_mappings.items():
-        print(f"  {k} → {v}")
+    system_prompt += f"\n\n# Additional Semantic Mapping Hints:\n{semantic_hint_text}"
 
     code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.0)
 
@@ -1989,28 +1966,40 @@ def _run_tool2_async(q, user_tier, rhist):
     return _tool2_executor.submit(tool_2_code_run,
                                   q, user_tier=user_tier, recent_history=rhist)
 
-def map_terms_to_columns(user_question, schema_dict):
+def map_terms_to_columns(user_question: str, schema_dict: dict):
     """
-    Maps vague user terms like 'logs' or 'incidents' to real column names in schema_dict.
-    Returns a dict with named keys like 'log_date_column', 'incident_column'.
+    Maps vague user terms like 'logs', 'incidents', etc. to actual column names from the schema.
+    Uses fuzzy matching to find closest matches.
     """
     from rapidfuzz import process, fuzz
-
     mappings = {}
-    uq_lower = user_question.lower()
-    candidate_terms = {
-        "log_date_column": ["log", "logs", "logging", "entry", "record", "report"],
-        "incident_column": ["incident", "case", "issue", "report"],
-        "date_column": ["date", "day", "timestamp"],
+    uq = user_question.lower()
+
+    term_map = {
+        "log_date_column": ["log", "logs", "entry", "record", "logged", "tracking"],
+        "incident_column": ["incident", "issue", "case", "problem", "failure"],
+        "date_column": ["date", "timestamp", "time", "day"]
     }
 
-    for map_key, keywords in candidate_terms.items():
-        for word in keywords:
-            if word in uq_lower:
-                # Find the best matching schema column for this keyword
-                best_match = process.extractOne(word, schema_dict.keys(), scorer=fuzz.partial_ratio)
-                if best_match and best_match[1] > 70:
-                    mappings[map_key] = best_match[0]
-                    break  # Stop after first good match
+    for alias, keywords in term_map.items():
+        for keyword in keywords:
+            if keyword in uq:
+                match = process.extractOne(keyword, schema_dict.keys(), scorer=fuzz.partial_ratio)
+                if match and match[1] > 70:
+                    mappings[alias] = match[0]
+                    break
 
     return mappings
+
+# Build schema dictionary (flattened from _metadata)
+schema_dict = {col: dt for _, info in _metadata.items() for col, dt in info["schema"].items()}
+semantic_mappings = map_terms_to_columns(user_question, schema_dict)
+
+semantic_hint_text = ""
+for key, column in semantic_mappings.items():
+    if key == "log_date_column":
+        semantic_hint_text += f"\n- Treat '{column}' as the log date column based on the question context."
+    elif key == "incident_column":
+        semantic_hint_text += f"\n- '{column}' is the likely incident identifier column."
+    elif key == "date_column":
+        semantic_hint_text += f"\n- Use '{column}' as the date reference column."
