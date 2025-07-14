@@ -12,7 +12,7 @@
 #
 # **The fix:** The export handler now always searches for the last full 
 # "Assistant: ..." message (not the just-added User export command) and uses
-# that as the `latest_answer` parameter. If there is no such answer, or it's 
+# that as the `latest_answer` parameter. If there is no such answer, or it’s 
 # too short (less than 40 chars), the system gives a friendly warning instead of failing.
 #
 # **This change makes export robust and universal:**
@@ -878,8 +878,6 @@ Todays date (dd/mm/yyyy):
 {todays_date}
 """
 
-    system_prompt += f"\n\n# Additional Semantic Mapping Hints:\n{semantic_hint_text}"
-
     code_str = call_llm(system_prompt, user_question, max_tokens=1200, temperature=0.0)
 
     # 1️⃣ Treat "404" as a retry-able error
@@ -1135,7 +1133,7 @@ Use these Markdown elements in your response:
   - Paragraphs:          Normal text for explanations
   - Bullet lists:        - item
   - Numbered lists:      1. item
-  - Tables:              Use Markdown table syntax (see below)
+  - Tables:              Use Markdown syntax (see below)
   - Code blocks:         ```python ... ```
 Always seperate the elements with a new line after each one.
 
@@ -1965,41 +1963,3 @@ _tool2_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 def _run_tool2_async(q, user_tier, rhist):
     return _tool2_executor.submit(tool_2_code_run,
                                   q, user_tier=user_tier, recent_history=rhist)
-
-def map_terms_to_columns(user_question: str, schema_dict: dict):
-    """
-    Maps vague user terms like 'logs', 'incidents', etc. to actual column names from the schema.
-    Uses fuzzy matching to find closest matches.
-    """
-    from rapidfuzz import process, fuzz
-    mappings = {}
-    uq = user_question.lower()
-
-    term_map = {
-        "log_date_column": ["log", "logs", "entry", "record", "logged", "tracking"],
-        "incident_column": ["incident", "issue", "case", "problem", "failure"],
-        "date_column": ["date", "timestamp", "time", "day"]
-    }
-
-    for alias, keywords in term_map.items():
-        for keyword in keywords:
-            if keyword in uq:
-                match = process.extractOne(keyword, schema_dict.keys(), scorer=fuzz.partial_ratio)
-                if match and match[1] > 70:
-                    mappings[alias] = match[0]
-                    break
-
-    return mappings
-
-# Build schema dictionary (flattened from _metadata)
-schema_dict = {col: dt for _, info in _metadata.items() for col, dt in info["schema"].items()}
-semantic_mappings = map_terms_to_columns(user_question, schema_dict)
-
-semantic_hint_text = ""
-for key, column in semantic_mappings.items():
-    if key == "log_date_column":
-        semantic_hint_text += f"\n- Treat '{column}' as the log date column based on the question context."
-    elif key == "incident_column":
-        semantic_hint_text += f"\n- '{column}' is the likely incident identifier column."
-    elif key == "date_column":
-        semantic_hint_text += f"\n- Use '{column}' as the date reference column."
