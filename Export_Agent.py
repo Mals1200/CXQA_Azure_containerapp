@@ -1,8 +1,4 @@
-# Version 4b
-# call SOP has more efficient prompt & has a better layout:
-    # The logo and art images are centered
-    # Can manipulate the art image using ratios and scalinf
-    # The prompt is more effiecient and uses less tokens. 
+# Version 5
 
 
 import re
@@ -199,6 +195,12 @@ Data:
             if len(lines) > 1:
                 content_box = slide.shapes.add_textbox(Pt(100), Pt(150), prs.slide_width - Pt(200), prs.slide_height - Pt(250))
                 content_frame = content_box.text_frame
+                # Add these 4 lines for better text control
+                content_frame.word_wrap = True
+                content_frame.auto_size = False
+                content_frame.margin_left = Pt(5)
+                content_frame.margin_right = Pt(5)
+                
                 for bullet in lines[1:]:
                     p = content_frame.add_paragraph()
                     p.text = bullet.replace('- ', '').strip()
@@ -513,6 +515,11 @@ Data:
         except Exception as e:
             return f"API_ERROR: {str(e)}"
 
+    def clean_text(text):
+        """Simple text cleaning for Teams compatibility"""
+        import unicodedata
+        return ''.join(c for c in unicodedata.normalize("NFKD", text) if c.isprintable())
+
     # Get the doc text
     doc_text = generate_doc_content()
     if doc_text.startswith("API_ERROR:"):
@@ -550,7 +557,7 @@ Data:
 
             heading = doc.add_heading(level=1)
             heading.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-            heading_run = heading.add_run(lines[0])
+            heading_run = heading.add_run(clean_text(lines[0]))
             heading_run.font.color.rgb = TITLE_COLOR
             heading_run.font.size = TITLE_SIZE
             heading_run.bold = True
@@ -824,17 +831,10 @@ User_description:
             )
             
         if art_img:
-            original_width, original_height = art_img.getSize()  
-            ratio = 0.8
-            # double the original size
-            # ratio = 1.0  # original size
-            # ratio = 0.5  # half size, etc.
-    
-            # 3) Compute scaled dimensions.
+            original_width, original_height = art_img.getSize()
+            ratio = 0.8  # Adjust this ratio to control image size
             scaled_width = original_width * ratio
             scaled_height = original_height * ratio
-            
-            # 4) Compute X/Y so it's centered horizontally, for example at Y=0.
             x_pos = (page_width - scaled_width) / 2
             y_pos = 0
             
@@ -844,7 +844,7 @@ User_description:
                 y=y_pos,
                 width=scaled_width,
                 height=scaled_height,
-                preserveAspectRatio=False,  # you can set False now because we did the math
+                preserveAspectRatio=True,  # Maintain aspect ratio for Teams
                 mask='auto'
             )
 
@@ -883,16 +883,23 @@ User_description:
 
         # MAIN SECTIONS
         # We'll do a function to add each chunk
+        try:
+            # Try to detect Teams environment
+            import os
+            TEAMS_MODE = "microsoft teams" in os.environ.get("HTTP_USER_AGENT", "").lower()
+        except:
+            TEAMS_MODE = False
+
         style_heading = ParagraphStyle(
             'heading',
-            fontName='Helvetica-Bold',
+            fontName='Arial-Bold' if TEAMS_MODE else 'Helvetica-Bold',
             fontSize=12,
             textColor=colors.HexColor("#C17250"),
             spaceAfter=6
         )
         style_text = ParagraphStyle(
             'text',
-            fontName='Helvetica',
+            fontName='Arial' if TEAMS_MODE else 'Helvetica',
             fontSize=10,
             leading=14,
             spaceAfter=10
