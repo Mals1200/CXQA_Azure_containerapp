@@ -202,18 +202,28 @@ async def _bot_logic(turn_context: TurnContext):
 
     # ----- main Q&A call -----
     try:
-        answer_text = "".join(Ask_Question(user_message, user_id=user_id))
+        # Collect all output from Ask_Question
+        raw_chunks = list(Ask_Question(user_message, user_id=user_id))
+        answer_text = "".join(raw_chunks).strip()
+        
+        # Final fallback sanitization — prevent any raw tracebacks from leaking to user
+        def is_broken(text):
+            text = text.lower()
+            return any(err in text for err in [
+                "traceback", "undefined variable", "execution error",
+                "failing code", "llm error", "keyerror", "attributeerror"
+            ])
+        
+        if not answer_text or is_broken(answer_text):
+            answer_text = "No information available.\n\nSource: Unknown"
+        
+        # Send directly to Teams as plain markdown — notebook-style
+        await turn_context.send_activity(answer_text)
+        return
+
         # persist history/cache for next turn
         state["history"] = ask_func.chat_history
         state["cache"]   = ask_func.tool_cache
-
-        # greet / restart / export? – send as-is (sans "Source:" footer)
-        if is_special_response(answer_text):
-            await turn_context.send_activity(strip_trailing_source(answer_text))
-            return
-
-        files, tables, source_label = extract_source_info(user_message, ask_func)
-        main_answer = clean_main_answer(answer_text)
 
         # ==============================================================
         # 1. MARKDOWN mode  (simple text message)
