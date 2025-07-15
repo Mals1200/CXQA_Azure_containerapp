@@ -82,13 +82,13 @@ CONFIG = {
     "TARGET_FOLDER_PATH": "UI/2024-11-20_142337_UTC/cxqa_data/tabular/"
 }
 
-USE_LLM_FALLBACK = True  # ⬅ Set to False to disable fallback
+USE_LLM_FALLBACK = False  # ⬅ Set to False to disable fallback
 
 # ── Feature flag ──────────────────────────────────────────
 # If True  → Tool-2 (Python path) will ALWAYS be executed
 #            for every user question, in parallel with Tool-1.
 # If False → Behaviour reverts to the existing "smart classifier" logic.
-ALWAYS_RUN_TOOL2 = True      # ⬅ flip to False to disable
+ALWAYS_RUN_TOOL2 = False      # ⬅ flip to False to disable
 DEFAULT_USER_TIER = 1        # ⬅ base tier for users not in User_rbac.xlsx
 
 #######################################################################################
@@ -743,7 +743,7 @@ def tool_1_index_search(user_question, top_k=5, user_tier=1, question_primarily_
         # ================================
         # Document Ranking Behavior Toggle
         # ================================
-        USE_WEIGHTED_RANKING = False  # Set to True to enable ranking by keywords like 'policy', 'report', etc.
+        USE_WEIGHTED_RANKING = True  # Set to True to enable ranking by keywords like 'policy', 'report', etc.
         
         if USE_WEIGHTED_RANKING:
             # -------------------------------
