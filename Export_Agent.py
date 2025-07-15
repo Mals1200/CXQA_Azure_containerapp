@@ -149,6 +149,15 @@ Data:
 # ──────────────────────────────────────────────────────────────
 def Call_Export(latest_question, latest_answer, chat_history, instructions):
     instructions_lower = instructions.lower()
-    if re.search(r"\b(document|report|docx|white\s?paper|summary|contract|memo|manual)\b", instructions_lower):
-        return Call_DOC(latest_question, latest_answer, chat_history, instructions)
-    return "Not enough Information to perform export."
+
+    # If it's clearly a chart, sop, or ppt — you can extend here
+    if re.search(r"\b(presentation|slides|ppt|deck)\b", instructions_lower):
+        return "PPT export not yet implemented"
+    if re.search(r"\b(chart|graph)\b", instructions_lower):
+        return "Chart export not yet implemented"
+    if re.search(r"\b(sop|standard operating procedure)\b", instructions_lower):
+        return "SOP export not yet implemented"
+
+    # Default = DOC
+    return Call_DOC(latest_question, latest_answer, chat_history, instructions)
+
