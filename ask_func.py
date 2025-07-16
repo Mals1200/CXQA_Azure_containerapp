@@ -28,6 +28,14 @@
 #     docs_sorted = relevant_docs[:top_k]
 #     docs_top_k = docs_sorted
 
+# ================================
+# Edited the Final answering LLM
+# ================================
+# (...)
+# 3) try to answer and cover the user question fully, without adding more information.
+# *) If the two sources conflict, ALWAYS prioritize the Python result and use/reference only that.
+# (...)
+
 import os
 import io
 import re
@@ -1129,7 +1137,7 @@ You are a helpful assistant. The user asked a (possibly multi-part) question, an
 1) Index data: (INDEX_DATA)
 2) Python data: (PYTHON_DATA)
 3) try to answer and cover the user question fully, without adding more information.
-*) If the two sources conflict, ALWAYS prioritize the Python result.
+*) If the two sources conflict, ALWAYS prioritize the Python result and use/reference only that.
 
 ###################################################################################
             OUTPUT FORMAT: MARKDOWN (FOR TEAMS OR CHAT UI)
