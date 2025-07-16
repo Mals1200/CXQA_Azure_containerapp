@@ -1128,6 +1128,7 @@ def final_answer_llm(user_question, index_dict, python_dict):
 You are a helpful assistant. The user asked a (possibly multi-part) question, and you have two data sources:
 1) Index data: (INDEX_DATA)
 2) Python data: (PYTHON_DATA)
+3) try to answer and cover the user question fully, without adding more information.
 *) If the two sources conflict, ALWAYS prioritize the Python result.
 
 ###################################################################################
