@@ -105,18 +105,13 @@ def upload_to_azure_blob(blob_config, file_buffer, file_name_prefix):
 # Generate PowerPoint function
 ##################################################
 def Call_PPT(latest_question, latest_answer, chat_history, instructions):
-    # PowerPoint imports
     from pptx import Presentation
     from pptx.util import Pt
     from pptx.dml.color import RGBColor as PPTRGBColor
-    from pptx.enum.text import PP_ALIGN
-    
-    ##################################################
-    # (A) IMPROVED AZURE OPENAI CALL
-    ##################################################
+    from pptx.enum.text import PP_ALIGN, MSO_AUTO_SIZE  # ✅ Fixed: Added MSO_AUTO_SIZE
+
     def generate_slide_content():
         chat_history_str = str(chat_history)
-        
         ppt_prompt = f"""You are a PowerPoint presentation expert. Use this information to create slides:
 Rules:
 1. Use ONLY the provided information
@@ -136,7 +131,6 @@ Data:
             "Content-Type": "application/json",
             "api-key": "5EgVev7KCYaO758NWn5yL7f2iyrS4U3FaSI5lQhTx7RlePQ7QMESJQQJ99AKACHYHv6XJ3w3AAAAACOGoSfb"
         }
-
         payload = {
             "messages": [
                 {"role": "system", "content": "Generate structured PowerPoint content"},
@@ -146,21 +140,15 @@ Data:
             "temperature": 0.3
         }
 
-        # Use our retry-enabled helper
-        result_json = openai_call_with_retry(endpoint, headers, payload, max_attempts=3, backoff=5, timeout=30)
+        result_json = openai_call_with_retry(endpoint, headers, payload)
         if "error" in result_json:
-            return result_json["error"]  # e.g. "API_ERROR: <details>"
+            return result_json["error"]
         try:
-            return result_json['choices'][0]['message']['content'].strip()
+            return result_json["choices"][0]["message"]["content"].strip()
         except Exception as e:
             return f"API_ERROR: {str(e)}"
 
-    ##################################################
-    # (B) ROBUST CONTENT HANDLING
-    ##################################################
     slides_text = generate_slide_content()
-    
-    # Handle error cases
     if slides_text.startswith("API_ERROR:"):
         return f"OpenAI API Error: {slides_text[10:]}"
     if "NOT_ENOUGH_INFO" in slides_text:
@@ -168,26 +156,21 @@ Data:
     if len(slides_text) < 20:
         return "Error: Generated content too short or invalid"
 
-    ##################################################
-    # (C) SLIDE GENERATION WITH DESIGN
-    ##################################################
     try:
         prs = Presentation()
-
-        BG_COLOR = PPTRGBColor(234, 215, 194)  # #EAD7C2
-        TEXT_COLOR = PPTRGBColor(193, 114, 80) # #C17250
+        BG_COLOR = PPTRGBColor(234, 215, 194)
+        TEXT_COLOR = PPTRGBColor(193, 114, 80)
         FONT_NAME = "Cairo"
-        
-        for slide_content in slides_text.split('\n\n'):
-            lines = [line.strip() for line in slide_content.split('\n') if line.strip()]
+
+        for slide_content in slides_text.split("\n\n"):
+            lines = [line.strip() for line in slide_content.split("\n") if line.strip()]
             if not lines:
                 continue
-                
+
             slide = prs.slides.add_slide(prs.slide_layouts[6])
             slide.background.fill.solid()
             slide.background.fill.fore_color.rgb = BG_COLOR
-            
-            # Title
+
             title_box = slide.shapes.add_textbox(Pt(50), Pt(50), prs.slide_width - Pt(100), Pt(60))
             title_frame = title_box.text_frame
             title_frame.text = lines[0]
@@ -196,66 +179,48 @@ Data:
                 paragraph.font.name = FONT_NAME
                 paragraph.font.size = Pt(36)
                 paragraph.alignment = PP_ALIGN.CENTER
-                
-            # Bullets
+
             if len(lines) > 1:
                 content_box = slide.shapes.add_textbox(Pt(100), Pt(150), prs.slide_width - Pt(200), prs.slide_height - Pt(250))
                 content_frame = content_box.text_frame
                 content_frame.word_wrap = True
-                content_frame.auto_size = False  # prevent it from resizing out of bounds
+                content_frame.auto_size = MSO_AUTO_SIZE.NONE  # ✅ FIXED
                 content_frame.margin_left = Pt(5)
                 content_frame.margin_right = Pt(5)
 
                 for bullet in lines[1:]:
                     p = content_frame.add_paragraph()
-                    p.text = bullet.replace('- ', '').strip()
+                    p.text = bullet.replace("- ", "").strip()
                     p.font.color.rgb = TEXT_COLOR
                     p.font.name = FONT_NAME
                     p.font.size = Pt(24)
                     p.space_after = Pt(12)
-                    p.alignment = PP_ALIGN.CENTER  # Center the bullet text
+                    p.alignment = PP_ALIGN.CENTER
 
-
-        ##################################################
-        # (D) FILE UPLOAD
-        ##################################################
+        # Upload to Blob
         blob_config = {
             "account_url": "https://cxqaazureaihub8779474245.blob.core.windows.net",
             "sas_token": "sv=2022-11-02&ss=bfqt&srt=sco&sp=rwdlacupiytfx&se=2030-11-21T02:02:26Z&st=2024-11-20T18:02:26Z&spr=https&sig=YfZEUMeqiuBiG7le2JfaaZf%2FW6t8ZW75yCsFM6nUmUw%3D",
             "container": "5d74a98c-1fc6-4567-8545-2632b489bd0b-azureml-blobstore"
         }
-
         ppt_buffer = io.BytesIO()
         prs.save(ppt_buffer)
         ppt_buffer.seek(0)
 
-        # Reuse our helper to upload
-        file_name_prefix = f"presentation_{datetime.now().strftime('%Y%m%d%H%M%S')}.pptx"
-        # We'll just do the entire final name in the prefix to keep old naming style:
-        # Or we can simplify. Let's keep it exactly the same as before for compatibility.
-        # So we won't use a . in the prefix. We'll do the same logic as prior lines:
-        blob_service = BlobServiceClient(
-            account_url=blob_config["account_url"],
-            credential=blob_config["sas_token"]
+        blob_service = BlobServiceClient(account_url=blob_config["account_url"], credential=blob_config["sas_token"])
+        blob_client = blob_service.get_container_client(blob_config["container"]).get_blob_client(
+            f"presentation_{datetime.now().strftime('%Y%m%d%H%M%S')}.pptx"
         )
-        blob_client = blob_service.get_container_client(
-            blob_config["container"]
-        ).get_blob_client(file_name_prefix)
-        
         blob_client.upload_blob(ppt_buffer, overwrite=True)
+
         download_url = (
             f"{blob_config['account_url']}/"
             f"{blob_config['container']}/"
             f"{blob_client.blob_name}?"
             f"{blob_config['sas_token']}"
         )
-        
-        # Auto-delete after 5 minutes
         threading.Timer(300, blob_client.delete_blob).start()
-
-        # SINGLE-LINE RETURN
-        export_type = "slides"
-        return f"Here is your generated {export_type}:\n{download_url}"
+        return f"Here is your generated slides:\n{download_url}"
 
     except Exception as e:
         return f"Presentation Generation Error: {str(e)}"
