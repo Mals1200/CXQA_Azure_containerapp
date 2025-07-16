@@ -1,9 +1,5 @@
-# Version 4b
-# call SOP has more efficient prompt & has a better layout:
-    # The logo and art images are centered
-    # Can manipulate the art image using ratios and scalinf
-    # The prompt is more effiecient and uses less tokens. 
-
+# Version 5
+# fixed SOP & PPT Layouts:
 
 import re
 import requests
@@ -1056,6 +1052,11 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
         return generate_doc()
     elif re.search(r"\b(standard operating procedure document|standard operating procedure|sop\.?)\b", instructions_lower, re.IGNORECASE):
         return Call_SOP(latest_question, latest_answer, chat_history, instructions)
+
+
+
+    # Fallback
+    return "Not enough Information to perform export."
 
 
 
