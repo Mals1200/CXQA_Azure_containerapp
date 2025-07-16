@@ -1,9 +1,7 @@
 # Version 5
 # fixed SOP & PPT Layouts:
 
-
 import re
-from matplotlib import text
 import requests
 import json
 import io
@@ -197,11 +195,6 @@ Data:
             if len(lines) > 1:
                 content_box = slide.shapes.add_textbox(Pt(100), Pt(150), prs.slide_width - Pt(200), prs.slide_height - Pt(250))
                 content_frame = content_box.text_frame
-                content_frame.word_wrap = True
-                content_frame.auto_size = False  # prevent it from resizing out of bounds
-                content_frame.margin_left = Pt(5)
-                content_frame.margin_right = Pt(5)
-
                 for bullet in lines[1:]:
                     p = content_frame.add_paragraph()
                     p.text = bullet.replace('- ', '').strip()
@@ -209,8 +202,6 @@ Data:
                     p.font.name = FONT_NAME
                     p.font.size = Pt(24)
                     p.space_after = Pt(12)
-                    p.alignment = PP_ALIGN.CENTER  # Center the bullet text
-
 
         ##################################################
         # (D) FILE UPLOAD
@@ -476,11 +467,6 @@ def Call_DOC(latest_question, latest_answer, chat_history, instructions_doc):
     from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
     from docx.oxml.ns import nsdecls
     from docx.oxml import parse_xml
-    
-    def clean_text(text):
-        import unicodedata
-        return ''.join(c for c in unicodedata.normalize("NFKD", text) if c.isprintable())
-
 
     def generate_doc_content():
         chat_history_str = str(chat_history)
@@ -560,17 +546,7 @@ Data:
 
             heading = doc.add_heading(level=1)
             heading.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-            
-            import unicodedata
-
-            def clean_text(text):
-                return ''.join(c for c in unicodedata.normalize("NFKD", text) if c.isprintable())
-
-            ...
-
-            heading_text = clean_text(lines[0])
-            heading_run = heading.add_run(heading_text)
-
+            heading_run = heading.add_run(lines[0])
             heading_run.font.color.rgb = TITLE_COLOR
             heading_run.font.size = TITLE_SIZE
             heading_run.bold = True
@@ -1076,6 +1052,11 @@ def Call_Export(latest_question, latest_answer, chat_history, instructions):
         return generate_doc()
     elif re.search(r"\b(standard operating procedure document|standard operating procedure|sop\.?)\b", instructions_lower, re.IGNORECASE):
         return Call_SOP(latest_question, latest_answer, chat_history, instructions)
+
+
+
+    # Fallback
+    return "Not enough Information to perform export."
 
 
 
