@@ -1196,6 +1196,7 @@ Python Data:
 {python_result}
 
 Chat history:
+The history importance is recent has more weight of importance that the one before. and so on.
 {recent_history if recent_history else []}
 
 Todays date (dd/mm/yyyy): 
