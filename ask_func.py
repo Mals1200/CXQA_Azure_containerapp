@@ -1,28 +1,40 @@
-# V 28
-# ================================================================================
-# PATCH: Rephrase Question Logic Improvement
-# -------------------------------------------------------------------------------
-# This patch improves how follow-up questions like "and in November?" are 
-# rephrased into standalone questions using chat history.
-#
-# ✅ What was changed:
-# - Rephrase now prioritizes the most recent Q&A pair (last user+assistant exchange).
-# - Falls back safely to the original user question if LLM fails.
-# - Prevents context bleed from older unrelated topics (e.g. misattributing "November"
-#   to an earlier topic like "visits" instead of the last question about "logs").
-#
-# ✅ Why it's better:
-# - Fixes misinterpretation issues in chained user questions.
-# - Reduces hallucination from unrelated older context.
-# - Improves overall accuracy of Index search queries.
-#
-# ✅ Compatibility:
-# - Fully backward compatible.
-# - Does not affect Tool 2 (Python) or fallback logic.
-# - No changes to interface or behavior when the question is already standalone.
-# ================================================================================
+# V 27
+# Switch to Enable/Disable Doc ranking
+# Location: Tool_1
 
+# ================================
+# Document Ranking Behavior Toggle
+# ================================
+# USE_WEIGHTED_RANKING = False  # Set to True to enable ranking by keywords like 'policy', 'report', etc.
 
+# if USE_WEIGHTED_RANKING:
+#     # -------------------------------
+#     # 🔼 WEIGHTED RANKING (Enabled)
+#     # -------------------------------
+#     for doc in relevant_docs:
+#         ttl = doc["title"].lower()
+#         score = 0
+#         if "policy" in ttl: score += 10
+#         if "report" in ttl: score += 5
+#         if "sop" in ttl: score += 3
+#         doc["weight_score"] = score
+
+#     docs_sorted = sorted(relevant_docs, key=lambda x: x["weight_score"], reverse=True)
+#     docs_top_k = docs_sorted[:top_k]
+# else:
+#     # -------------------------------
+#     # 🔽 UNRANKED (Preserve Search Order)
+#     # -------------------------------
+#     docs_sorted = relevant_docs[:top_k]
+#     docs_top_k = docs_sorted
+
+# ================================
+# Edited the Final answering LLM
+# ================================
+# (...)
+# 3) try to answer and cover the user question fully, without adding more information.
+# *) If the two sources conflict, ALWAYS prioritize the Python result and use/reference only that.
+# (...)
 
 import os
 import io
@@ -414,58 +426,32 @@ def call_llm_aux(system_prompt, user_prompt, max_tokens=300, temperature=0.0):
 
 def rephrase_question_with_history(user_question, recent_history):
     """
-    Rewrites vague or follow-up questions into standalone questions using recent history.
-    Prioritizes the immediate previous exchange to ensure accurate context.
+    Calls the small LLM to rephrase/expand the user question using last 3 exchanges.
+    Returns a single improved question string.
     """
-    if not user_question.strip():
-        return ""
-
-    # Capture up to the last 3 Q/A pairs, prioritize most recent exchange
-    recent_qas = []
-    user_question_found = False
-
-    # Traverse backwards, and only collect 3 Q/A pairs
+    # Compose the last 3 Q/A pairs as context (if available)
+    last_qas = []
     for entry in reversed(recent_history or []):
         if entry.startswith("User: ") or entry.startswith("Assistant: "):
-            recent_qas.insert(0, entry)
-        if len(recent_qas) >= 6:  # 3 Q/A pairs
+            last_qas.insert(0, entry)
+        if len(last_qas) >= 6:  # 3 Q/A pairs = 6 entries
             break
-
-    # Ensure we always include at least the most recent Q/A pair
-    if len(recent_qas) < 2 and len(recent_history) >= 2:
-        last_two = recent_history[-2:]
-        recent_qas = last_two if all(x.startswith(("User:", "Assistant:")) for x in last_two) else recent_qas
-
-    context = "\n".join(recent_qas)
-
+    context = "\n".join(last_qas)
+    
     system_prompt = (
-        "You are a smart assistant that rewrites vague or follow-up questions into complete standalone questions.\n"
-        "Use only the most recent Q&A context to infer missing information.\n"
-        "If the user's question is already self-contained, repeat it as-is.\n"
-        "Return ONLY the rewritten question. No explanations."
+        "You are an expert at rewriting user questions for search. "
+        "Given the recent conversation, rewrite the latest user question as a complete, unambiguous question. "
+        "If the latest message is already standalone, just repeat it. "
+        "Return ONLY the rewritten question. Do NOT include any explanations or extra words."
     )
-
-    user_prompt = f"""
-Recent Q&A History:
-{context}
-
-Latest user message:
-{user_question}
-
-Standalone rewritten version:
-""".strip()
-
-    rewritten = call_llm_aux(
-        system_prompt,
-        user_prompt,
-        max_tokens=100,
-        temperature=0.0
+    user_prompt = (
+        f"Recent history:\n{context}\n\n"
+        f"Latest user question:\n{user_question}\n\n"
+        "Rewritten standalone question:"
     )
-
-    # Sanitize and return first line only
-    final = rewritten.strip().split("\n")[0]
-    return final if final else user_question
-
+    rewritten = call_llm_aux(system_prompt, user_prompt, max_tokens=100, temperature=0.0)
+    # Clean up, return as a single string (no list, no bullets)
+    return rewritten.strip().split("\n")[0]
 
 #######################################################################################
 #                   COMBINED TEXT CLEANING (Point #2 Optimization)
@@ -1210,6 +1196,7 @@ Python Data:
 {python_result}
 
 Chat history:
+The history importance is recent has more weight of importance that the one before. and so on.
 {recent_history if recent_history else []}
 
 Todays date (dd/mm/yyyy): 
